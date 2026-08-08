@@ -15,6 +15,8 @@ run.py — единый запуск для хостинга (Render).
 import os
 import threading
 
+from waitress import serve     # «боевой» веб-сервер (вместо встроенного в Flask)
+
 import bot                      # регистрирует обработчики (polling не стартует при импорте)
 from server import app         # Flask-приложение Mini App
 
@@ -24,7 +26,8 @@ def main():
     threading.Thread(target=bot.run, daemon=True).start()
     # Веб-сервер — на порту, который даёт хостинг (или 5000 локально).
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    print(f"Веб-сервер запущен на порту {port}")
+    serve(app, host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
