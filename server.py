@@ -28,7 +28,7 @@ from flask import Flask, jsonify, request, Response, send_from_directory
 
 import db
 import notifications
-from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, CONFIRM_MINUTES
+from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, CONFIRM_MINUTES, is_admin, CITIES, CATEGORIES
 
 db.init_db()
 
@@ -77,6 +77,14 @@ def get_user(init_data):
     return user
 
 
+def get_admin(init_data):
+    """Возвращает пользователя, ТОЛЬКО если он админ. Иначе None (доступ запрещён)."""
+    user = get_user(init_data)
+    if not user or not user.get("id") or not is_admin(int(user["id"])):
+        return None
+    return user
+
+
 # ============================================================
 #  СТРАНИЦА
 # ============================================================
@@ -96,7 +104,8 @@ def api_me():
     user = get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
-    return jsonify({"ok": True, "age_ok": db.is_age_ok(int(user["id"]))})
+    uid = int(user["id"])
+    return jsonify({"ok": True, "age_ok": db.is_age_ok(uid), "is_admin": is_admin(uid)})
 
 
 @app.route("/api/age", methods=["POST"])
@@ -243,6 +252,107 @@ def api_receipt():
         return jsonify({"ok": True})
 
     return jsonify({"ok": False, "error": "send_failed"}), 500
+
+
+# ============================================================
+#  АДМИН-API (только для тех, кто в ADMIN_IDS)
+# ============================================================
+
+@app.route("/api/admin/product", methods=["POST"])
+def api_admin_add():
+    """Добавить товар из приложения."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    city = data.get("city")
+    category = data.get("category")
+    name = (data.get("name") or "").strip()
+    if city not in CITIES or category not in CATEGORIES or not name:
+        return jsonify({"ok": False, "error": "bad_data"}), 400
+    try:
+        price = float(str(data.get("price")).replace(",", "."))
+        stock = int(data.get("stock"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_number"}), 400
+
+    is_hit = 1 if data.get("is_hit") else 0
+    desc = (data.get("description") or "").strip()
+    pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc)
+    return jsonify({"ok": True, "id": pid})
+
+
+@app.route("/api/admin/product/update", methods=["POST"])
+def api_admin_update():
+    """Изменить одно поле товара (price / stock / name / description / is_hit)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    try:
+        pid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+
+    field = data.get("field")
+    raw = data.get("value")
+    try:
+        if field == "price":
+            value = max(0.0, float(str(raw).replace(",", ".")))
+        elif field == "stock":
+            value = max(0, int(raw))
+        elif field in ("name", "description"):
+            value = str(raw).strip()
+        elif field == "is_hit":
+            value = 1 if raw else 0
+        else:
+            return jsonify({"ok": False, "error": "bad_field"}), 400
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_value"}), 400
+
+    db.update_field(pid, field, value)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/product/delete", methods=["POST"])
+def api_admin_delete():
+    """Удалить товар."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        pid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    db.delete_product(pid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/photo", methods=["POST"])
+def api_admin_photo():
+    """Загрузить фото товара. Отправляем картинку админу (тихо), чтобы получить file_id."""
+    init_data = request.form.get("initData", "")
+    user = get_admin(init_data)
+    if not user:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        pid = int(request.form.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"ok": False, "error": "no_file"}), 400
+
+    try:
+        msg = tg.send_photo(int(user["id"]), file.read(),
+                            caption="🖼 Фото товара сохранено", disable_notification=True)
+        file_id = msg.photo[-1].file_id
+    except Exception as e:
+        print(f"Не смог обработать фото товара: {e}")
+        return jsonify({"ok": False, "error": "send_failed"}), 500
+
+    db.update_field(pid, "photo", file_id)
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

@@ -125,6 +125,24 @@
     .view p { color: var(--hint); font-size: 14px; line-height: 1.5; text-align: center; margin: 4px 0; }
     .req { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 16px; margin: 16px 0; font-size: 15px; white-space: pre-line; line-height: 1.6; }
     .spacer { flex: 1; }
+
+    /* Форма админа */
+    .viewhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .viewhead h2 { margin: 0; text-align: left; font-size: 20px; }
+    .form label { display: block; font-size: 13px; color: var(--hint); margin: 12px 0 5px; }
+    .form input, .form select { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 15px; }
+    .form .rowf { display: flex; gap: 10px; }
+    .form .rowf > div { flex: 1; }
+    .chk { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+    .chk input { width: auto; }
+    .card-block { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 14px; margin-bottom: 16px; }
+    .admrow { display: flex; align-items: center; gap: 8px; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow); padding: 10px; margin-bottom: 8px; }
+    .admrow .an { flex: 1; font-weight: 600; font-size: 13px; line-height: 1.3; }
+    .admrow .an small { color: var(--hint); font-weight: 400; display: block; }
+    .admrow input { width: 58px; padding: 8px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 13px; text-align: center; }
+    .iconbtn { border: none; background: var(--surface-2); color: var(--text); width: 38px; height: 38px; border-radius: 10px; font-size: 16px; flex: 0 0 auto; }
+    .iconbtn.danger { color: var(--danger); }
+    .iconbtn.ok { background: var(--accent); color: var(--on-accent); }
   </style>
 </head>
 <body>
@@ -192,6 +210,30 @@
     <div class="spacer"></div><div class="icon">✅</div>
     <h2>Спасибо!</h2><p id="doneText"></p><div class="spacer"></div>
     <button class="bigbtn" id="doneBtn">Готово</button>
+  </div>
+
+  <!-- Админка: управление товарами -->
+  <div class="view" id="adminView">
+    <div class="viewhead"><h2>🛠 Товары</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="adminClose">Закрыть</button></div>
+
+    <div class="card-block form">
+      <div style="font-weight:800;margin-bottom:4px">➕ Новый товар</div>
+      <label>Точка (город)</label><select id="afCity"></select>
+      <label>Категория</label><select id="afCat"></select>
+      <label>Название</label><input id="afName" placeholder="Например: Elf Bar 1500 Манго">
+      <div class="rowf">
+        <div><label>Цена (Br)</label><input id="afPrice" inputmode="decimal" placeholder="18.5"></div>
+        <div><label>Остаток (шт.)</label><input id="afStock" inputmode="numeric" placeholder="10"></div>
+      </div>
+      <label>Описание (необязательно)</label><input id="afDesc" placeholder="Коротко">
+      <div class="chk"><input type="checkbox" id="afHit"><label for="afHit" style="margin:0">🔥 Отметить как «Хит»</label></div>
+      <label>Фото (необязательно)</label><input type="file" id="afPhoto" accept="image/*">
+      <button class="bigbtn" id="afAdd" style="margin-top:16px">Добавить товар</button>
+    </div>
+
+    <div style="font-weight:800;margin:4px 0 10px">Список товаров</div>
+    <div id="adminList"></div>
   </div>
 
   <script>
@@ -271,15 +313,23 @@
     };
     $("ageNo").onclick = () => { if (tg) tg.close(); };
 
-    async function loadCatalog() {
+    async function fetchProducts() {
       const r = await fetch("/api/products");
       allProducts = await r.json();
+    }
+    function recomputeCities() {
       const order = ["minsk", "slutsk", "turov"];
       cityList = order.filter(c => allProducts.some(p => p.city === c));
       if (!cityList.length) cityList = [...new Set(allProducts.map(p => p.city))];
-      city = cityList[0] || null;
+      if (!cityList.includes(city)) city = cityList[0] || null;
       $("pointName").textContent = city ? (CITY_NAMES[city] || city) : "Выбери точку";
-      renderChips(); renderGrid();
+    }
+    async function loadCatalog() {
+      await fetchProducts(); recomputeCities(); renderChips(); renderGrid();
+    }
+    async function refreshProducts() {
+      await fetchProducts(); recomputeCities(); renderChips(); renderGrid(); renderNav();
+      if ($("adminView").classList.contains("show")) renderAdminList();
     }
 
     function renderChips() {
@@ -374,12 +424,14 @@
           <div><div class="pn">${esc(name)}</div><div class="pid">ID: ${(tgUser && tgUser.id) || "—"}</div></div>
           <div class="coins"><b>0</b><small>VAPECOINS</small></div></div>
         <div class="plist">
+          ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление товарами</span><span>›</span></div>` : ""}
           <div class="prow"><span>${dark ? "🌙" : "☀️"} Тёмная тема</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
           <div class="prow">📦 Заказы — история покупок</div>
           <div class="prow">💬 Менеджер</div>
           <div class="prow">❓ Помощь</div>
         </div></div>`;
       $("themeSwitch").onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark");
+      if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
     }
 
     $("pickupClose").onclick = () => $("pickupOverlay").classList.remove("show");
@@ -422,6 +474,76 @@
       finally { $("uploadBtn").disabled = false; $("uploadBtn").textContent = "📷 Загрузить чек"; }
     };
     $("doneBtn").onclick = () => { showTab("catalog"); $("doneView").classList.remove("show"); };
+
+    // ---------- Админка (только для админов) ----------
+    const CITY_OPTS = [["minsk", "Минск"], ["slutsk", "Слуцк"], ["turov", "Туров"]];
+    const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
+
+    function openAdmin() {
+      $("afCity").innerHTML = CITY_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+      $("afCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+      renderAdminList();
+      $("adminView").classList.add("show");
+    }
+    $("adminClose").onclick = () => $("adminView").classList.remove("show");
+
+    $("afAdd").onclick = async () => {
+      const body = {
+        initData, city: $("afCity").value, category: $("afCat").value,
+        name: $("afName").value.trim(), price: $("afPrice").value, stock: $("afStock").value,
+        description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
+      };
+      if (!body.name || body.price === "" || body.stock === "") { alertMsg("Заполните название, цену и остаток."); return; }
+      $("afAdd").disabled = true; $("afAdd").textContent = "Добавляю…";
+      try {
+        const r = await fetch("/api/admin/product", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось добавить — проверьте поля."); return; }
+        const f = $("afPhoto").files[0];
+        if (f) {
+          const fd = new FormData(); fd.append("initData", initData); fd.append("id", d.id); fd.append("file", f);
+          await fetch("/api/admin/photo", { method: "POST", body: fd });
+        }
+        $("afName").value = ""; $("afPrice").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
+        await refreshProducts();
+        alertMsg("Товар добавлен ✅");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("afAdd").disabled = false; $("afAdd").textContent = "Добавить товар"; }
+    };
+
+    function renderAdminList() {
+      if (!allProducts.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
+      $("adminList").innerHTML = allProducts.map(p => {
+        const cityN = CITY_NAMES[p.city] || p.city;
+        return `<div class="admrow">
+          <div class="an">${esc(p.name)}<small>${cityN} · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small></div>
+          <input class="ap" type="text" inputmode="decimal" value="${p.price}">
+          <input class="as" type="text" inputmode="numeric" value="${p.stock}">
+          <button class="iconbtn ok" data-save="${p.id}">💾</button>
+          <button class="iconbtn danger" data-del="${p.id}">🗑</button>
+        </div>`;
+      }).join("");
+      $("adminList").querySelectorAll("[data-save]").forEach(b => b.onclick = () => saveAdminRow(+b.dataset.save, b));
+      $("adminList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => delAdminRow(+b.dataset.del));
+    }
+
+    async function saveAdminRow(id, btn) {
+      const row = btn.closest(".admrow");
+      const price = row.querySelector(".ap").value, stock = row.querySelector(".as").value;
+      const upd = (field, value) => fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, field, value }) });
+      try {
+        await upd("price", price); await upd("stock", stock);
+        await refreshProducts(); alertMsg("Сохранено ✅");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+
+    async function delAdminRow(id) {
+      if (!confirm("Удалить товар?")) return;
+      try {
+        await fetch("/api/admin/product/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
+        await refreshProducts();
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
 
     start();
   </script>
