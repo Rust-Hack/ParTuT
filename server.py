@@ -42,6 +42,7 @@ DEV_MODE = os.environ.get("DEV_MODE") == "1"
 DEV_USER_ID = next(iter(ADMIN_IDS), 0)
 
 _file_path_cache = {}      # кэш путей к файлам Telegram (чтобы не звать get_file каждый раз)
+_photo_cache = {}          # кэш самих картинок в памяти: file_id -> (bytes, content_type)
 
 
 # ============================================================
@@ -94,6 +95,12 @@ def index():
     return send_from_directory("webapp", "index.html")
 
 
+@app.route("/health")
+def health():
+    """Лёгкий адрес для пинга — держит сервис «разбуженным» (без обращения к базе)."""
+    return "ok"
+
+
 # ============================================================
 #  18+
 # ============================================================
@@ -144,6 +151,13 @@ def api_photo():
     file_id = request.args.get("file_id", "")
     if not file_id:
         return Response("no file_id", status=404)
+
+    # 1. Если картинка уже скачивалась — отдаём из памяти (мгновенно).
+    cached = _photo_cache.get(file_id)
+    if cached:
+        return _photo_response(cached[0], cached[1])
+
+    # 2. Иначе тянем из Telegram один раз и запоминаем.
     try:
         path = _file_path_cache.get(file_id)
         if not path:
@@ -151,10 +165,20 @@ def api_photo():
             _file_path_cache[file_id] = path
         url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}"
         r = requests.get(url, timeout=15)
-        return Response(r.content, content_type=r.headers.get("Content-Type", "image/jpeg"))
+        ctype = r.headers.get("Content-Type", "image/jpeg")
+        if len(_photo_cache) < 200:              # простой предохранитель по размеру
+            _photo_cache[file_id] = (r.content, ctype)
+        return _photo_response(r.content, ctype)
     except Exception as e:
         print(f"Ошибка отдачи фото {file_id}: {e}")
         return Response("photo error", status=404)
+
+
+def _photo_response(content, ctype):
+    """Ответ с картинкой + заголовок кэша, чтобы браузер/Telegram не запрашивали её повторно."""
+    resp = Response(content, content_type=ctype)
+    resp.headers["Cache-Control"] = "public, max-age=86400"   # кэш на сутки
+    return resp
 
 
 # ============================================================
