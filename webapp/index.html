@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Vape App</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    /* ============================================================
+       ТЕМЫ. Все цвета — через переменные. Светлая по умолчанию,
+       тёмная включается атрибутом <html data-theme="dark">.
+       Меняя значения здесь, вы меняете весь дизайн разом.
+       ============================================================ */
+    :root {
+      --page:#f3f4f6; --surface:#ffffff; --surface-2:#f4f5f7; --img-bg:#ffffff;
+      --text:#14161a; --hint:#8b909a; --line:#eceef1;
+      --accent:#2f80ed; --on-accent:#ffffff; --accent-soft:#eaf2fe;
+      --danger:#ef5350; --warn:#ff9800; --shadow:0 2px 10px rgba(20,22,26,.06);
+      --header-h:58px; --nav-h:66px;
+    }
+    html[data-theme="dark"] {
+      --page:#0f1115; --surface:#1b1e24; --surface-2:#242830; --img-bg:#ffffff;
+      --text:#eef0f3; --hint:#8b909a; --line:#2a2e36;
+      --accent:#4a9eff; --on-accent:#ffffff; --accent-soft:#14304d;
+      --danger:#ef5350; --warn:#ffb020; --shadow:0 2px 10px rgba(0,0,0,.35);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; background: var(--page); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+    button { font-family: inherit; cursor: pointer; }
+
+    .header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-h); z-index: 20;
+      background: var(--surface); border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+    .brand { font-size: 19px; font-weight: 800; }
+    .point { display: flex; align-items: center; gap: 6px; background: var(--surface-2); color: var(--text);
+      border: none; border-radius: 999px; padding: 9px 14px; font-size: 14px; font-weight: 600; }
+
+    .content { padding-top: var(--header-h); padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom)); min-height: 100vh; }
+    .tab { display: none; } .tab.show { display: block; }
+
+    .searchrow { display: flex; gap: 10px; padding: 12px 16px 6px; }
+    .search { flex: 1; display: flex; align-items: center; gap: 8px; background: var(--surface);
+      border: 1px solid var(--line); border-radius: 14px; padding: 11px 14px; box-shadow: var(--shadow); }
+    .search input { border: none; outline: none; width: 100%; font-size: 15px; background: transparent; color: var(--text); }
+    .search svg { color: var(--hint); flex: 0 0 auto; }
+
+    .chips { display: flex; gap: 9px; overflow-x: auto; padding: 8px 16px 12px; scrollbar-width: none; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chip { flex: 0 0 auto; padding: 9px 16px; border-radius: 999px; background: var(--surface); color: var(--text);
+      border: 1px solid var(--line); font-size: 14px; white-space: nowrap; font-weight: 600; }
+    .chip.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+
+    .grid { padding: 4px 12px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .card { background: var(--surface); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; position: relative; display: flex; flex-direction: column; }
+    .imgwrap { position: relative; width: 100%; aspect-ratio: 1/1; background: var(--img-bg); display: flex; align-items: center; justify-content: center; }
+    .imgwrap img { width: 100%; height: 100%; object-fit: contain; padding: 10px; }
+    .imgwrap .ph { font-size: 46px; }
+    .tagbadge { position: absolute; top: 10px; right: 10px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+    .tagbadge.warn { background: var(--warn); }
+    .fav { position: absolute; top: 8px; left: 8px; width: 34px; height: 34px; border-radius: 50%; background: var(--surface);
+      border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--hint); font-size: 17px; box-shadow: var(--shadow); }
+    .fav.on { color: var(--danger); }
+    .cbody { padding: 10px 12px 12px; display: flex; flex-direction: column; flex: 1; }
+    .cname { font-size: 14px; font-weight: 700; line-height: 1.25; margin: 0 0 8px; }
+    .crow { margin-top: auto; display: flex; align-items: center; justify-content: space-between; }
+    .cprice { color: var(--accent); font-size: 17px; font-weight: 800; }
+    .plus { width: 36px; height: 36px; border-radius: 12px; border: none; background: var(--accent); color: var(--on-accent); font-size: 22px; line-height: 1; }
+    .plus:disabled { opacity: .4; }
+    .mini { display: flex; align-items: center; gap: 8px; }
+    .mini button { width: 30px; height: 30px; border-radius: 9px; border: none; background: var(--accent); color: var(--on-accent); font-size: 17px; line-height: 1; }
+    .mini span { font-weight: 800; min-width: 14px; text-align: center; }
+
+    .empty { text-align: center; padding: 70px 24px; color: var(--text); }
+    .empty .circ { width: 96px; height: 96px; border-radius: 50%; background: var(--surface-2); display: flex; align-items: center; justify-content: center; margin: 0 auto 18px; font-size: 40px; }
+    .empty h3 { margin: 0 0 6px; font-size: 18px; }
+    .empty p { margin: 0; color: var(--hint); font-size: 14px; }
+
+    .clist { padding: 12px 16px; }
+    .citem { display: flex; gap: 12px; align-items: center; background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 10px; margin-bottom: 10px; }
+    .citem .thumb { width: 56px; height: 56px; border-radius: 12px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; overflow: hidden; flex: 0 0 auto; font-size: 26px; }
+    .citem .thumb img { width: 100%; height: 100%; object-fit: contain; }
+    .citem .ci-name { font-weight: 700; font-size: 14px; }
+    .citem .ci-price { color: var(--accent); font-weight: 700; font-size: 14px; margin-top: 2px; }
+    .checkoutbar { padding: 8px 16px 16px; }
+    .bigbtn { width: 100%; border: none; background: var(--accent); color: var(--on-accent); padding: 16px; border-radius: 16px;
+      font-size: 16px; font-weight: 800; display: flex; justify-content: center; gap: 10px; align-items: center; }
+    .bigbtn:disabled { opacity: .6; }
+
+    .prof { padding: 16px; }
+    .profcard { background: var(--surface); border-radius: 18px; box-shadow: var(--shadow); padding: 16px; display: flex; align-items: center; gap: 14px; }
+    .avatar { width: 60px; height: 60px; border-radius: 50%; background: #b06fe6; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 700; }
+    .profcard .pn { font-weight: 800; font-size: 17px; }
+    .profcard .pid { color: var(--hint); font-size: 13px; margin-top: 2px; }
+    .coins { margin-left: auto; text-align: center; background: var(--surface-2); border-radius: 14px; padding: 10px 14px; }
+    .coins b { font-size: 18px; } .coins small { color: var(--hint); font-size: 11px; display: block; }
+    .plist { margin-top: 12px; }
+    .prow { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 15px 16px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
+    .switch { width: 46px; height: 27px; border-radius: 999px; background: var(--surface-2); position: relative; transition: background .2s; flex: 0 0 auto; }
+    .switch.on { background: var(--accent); }
+    .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 21px; height: 21px; border-radius: 50%; background: #fff; transition: transform .2s; }
+    .switch.on::after { transform: translateX(19px); }
+
+    .nav { position: fixed; left: 0; right: 0; bottom: 0; height: calc(var(--nav-h) + env(safe-area-inset-bottom));
+      padding-bottom: env(safe-area-inset-bottom); background: var(--surface); border-top: 1px solid var(--line); display: flex; z-index: 20; }
+    .navwrap { position: relative; flex: 1; }
+    .navbtn { width: 100%; height: 100%; border: none; background: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--hint); font-size: 11px; }
+    .navbtn.active { color: var(--accent); }
+    .navbtn svg { width: 24px; height: 24px; }
+    .badge-count { position: absolute; top: 8px; right: calc(50% - 22px); background: var(--danger); color: #fff; font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 5px; }
+
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: flex-end; z-index: 40; }
+    .overlay.show { display: flex; }
+    .sheet { background: var(--surface); width: 100%; border-radius: 22px 22px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); }
+    .sheet h2 { margin: 0 0 14px; font-size: 18px; }
+    .opt { width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: none; padding: 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
+    .opt.active { background: var(--accent-soft); color: var(--accent); }
+    .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
+
+    .view { position: fixed; inset: 0; background: var(--page); z-index: 50; display: none; flex-direction: column; padding: 26px 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; }
+    .view.show { display: flex; }
+    .view .icon { font-size: 54px; text-align: center; margin: 10px 0; }
+    .view h2 { font-size: 21px; margin: 0 0 8px; text-align: center; }
+    .view p { color: var(--hint); font-size: 14px; line-height: 1.5; text-align: center; margin: 4px 0; }
+    .req { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 16px; margin: 16px 0; font-size: 15px; white-space: pre-line; line-height: 1.6; }
+    .spacer { flex: 1; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">Vape App</div>
+    <button class="point" id="pointBtn">📍 <span id="pointName">Выбери точку</span> ▾</button>
+  </div>
+
+  <div class="content">
+    <section class="tab show" id="tab-catalog">
+      <div class="searchrow">
+        <div class="search">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+          <input id="searchInput" placeholder="Поиск товаров...">
+        </div>
+      </div>
+      <div class="chips" id="chips"></div>
+      <div class="grid" id="grid"></div>
+      <div id="catEmpty"></div>
+    </section>
+
+    <section class="tab" id="tab-cart"></section>
+    <section class="tab" id="tab-fav"></section>
+    <section class="tab" id="tab-bonus">
+      <div class="empty"><div class="circ">🎁</div><h3>Бонусы скоро</h3>
+        <p>Колесо фортуны, розыгрыши и рефералы появятся здесь.</p></div>
+    </section>
+    <section class="tab" id="tab-profile"></section>
+  </div>
+
+  <nav class="nav" id="nav"></nav>
+
+  <div class="overlay" id="pointOverlay">
+    <div class="sheet"><h2>📍 Выбери точку</h2><div id="pointList"></div>
+      <button class="closebtn" id="pointClose">Закрыть</button></div>
+  </div>
+
+  <div class="overlay" id="pickupOverlay">
+    <div class="sheet"><h2>⏰ Когда заберёте?</h2>
+      <button class="opt" data-t="через 30 минут">Через 30 минут</button>
+      <button class="opt" data-t="через 1 час">Через 1 час</button>
+      <button class="opt" data-t="через 2 часа">Через 2 часа</button>
+      <button class="opt" data-t="как можно скорее">Как можно скорее</button>
+      <button class="closebtn" id="pickupClose">Отмена</button></div>
+  </div>
+
+  <div class="view" id="ageView">
+    <div class="spacer"></div><div class="icon">🔞</div>
+    <h2>Вам есть 18 лет?</h2><p>Наши товары — только для совершеннолетних.</p>
+    <div class="spacer"></div>
+    <button class="bigbtn" id="ageYes">Да, мне есть 18</button>
+    <button class="closebtn" id="ageNo">Нет</button>
+  </div>
+
+  <div class="view" id="payView">
+    <div class="icon">💳</div><h2 id="payTitle">Оплата заказа</h2>
+    <p>Переведите сумму по реквизитам, затем загрузите фото чека.</p>
+    <div class="req" id="payReq"></div><div class="spacer"></div>
+    <button class="bigbtn" id="uploadBtn">📷 Загрузить чек</button>
+    <input type="file" id="receiptFile" accept="image/*" style="display:none">
+    <button class="closebtn" id="payCancel">Отмена</button>
+  </div>
+
+  <div class="view" id="doneView">
+    <div class="spacer"></div><div class="icon">✅</div>
+    <h2>Спасибо!</h2><p id="doneText"></p><div class="spacer"></div>
+    <button class="bigbtn" id="doneBtn">Готово</button>
+  </div>
+
+  <script>
+    const tg = window.Telegram ? window.Telegram.WebApp : null;
+    if (tg) { tg.ready(); tg.expand(); }
+    const initData = tg ? tg.initData : "";
+    const tgUser = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
+
+    // ---------- Тема ----------
+    function applyTheme(t) {
+      document.documentElement.setAttribute("data-theme", t);
+      localStorage.setItem("theme", t);
+      try { if (tg && tg.setHeaderColor) tg.setHeaderColor(t === "dark" ? "#1b1e24" : "#ffffff"); } catch (e) {}
+      if (activeTab === "profile") renderProfile();
+    }
+    function initTheme() {
+      const saved = localStorage.getItem("theme");
+      const sys = (tg && tg.colorScheme) || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      applyTheme(saved || sys);
+    }
+    const currentTheme = () => document.documentElement.getAttribute("data-theme") || "light";
+
+    const CATS = { "": "Все товары", liquid: "Жидкости", podsystem: "Подсистемы", disposable: "Одноразки" };
+    const CAT_EMOJI = { disposable: "🔋", liquid: "💧", podsystem: "🧩" };
+    const CITY_NAMES = { minsk: "Минск", slutsk: "Слуцк", turov: "Туров" };
+    const CUR = "Br";
+
+    let allProducts = [], cityList = [], city = null, cat = "", search = "";
+    const cart = {};
+    let favs = JSON.parse(localStorage.getItem("favs") || "[]");
+    let currentOrder = null, me = null, activeTab = "catalog";
+
+    const $ = (id) => document.getElementById(id);
+    const alertMsg = (m) => (tg ? tg.showAlert(m) : alert(m));
+    const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+    const NAV = [
+      { id: "catalog", label: "Ассортимент", icon: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/>' },
+      { id: "bonus", label: "Бонусы", icon: '<rect x="3" y="8" width="18" height="13" rx="1"/><path d="M3 12h18M12 8v13"/><path d="M12 8S9 3 6.5 4.5 9 8 12 8zM12 8s3-5 5.5-3.5S15 8 12 8z"/>' },
+      { id: "cart", label: "Корзина", icon: '<circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.4 12.4a2 2 0 002 1.6h8.7a2 2 0 002-1.6L23 6H6"/>' },
+      { id: "fav", label: "Избранное", icon: '<path d="M20.8 5.6a5 5 0 00-7.1 0L12 7.3l-1.7-1.7a5 5 0 10-7.1 7.1L12 21l8.8-8.3a5 5 0 000-7.1z"/>' },
+      { id: "profile", label: "Профиль", icon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>' },
+    ];
+    function renderNav() {
+      $("nav").innerHTML = NAV.map(n => {
+        const cnt = n.id === "cart" ? cartCount() : 0;
+        return `<div class="navwrap"><button class="navbtn ${n.id===activeTab?'active':''}" data-tab="${n.id}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${n.icon}</svg>
+          ${n.label}</button>${cnt?`<span class="badge-count">${cnt}</span>`:''}</div>`;
+      }).join("");
+      $("nav").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+    }
+    function showTab(id) {
+      activeTab = id;
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("show"));
+      $("tab-" + id).classList.add("show");
+      renderNav();
+      if (id === "cart") renderCart();
+      if (id === "fav") renderFav();
+      if (id === "profile") renderProfile();
+      window.scrollTo(0, 0);
+    }
+
+    async function start() {
+      initTheme();
+      try {
+        const r = await fetch("/api/me", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        me = await r.json();
+        if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
+        renderNav();
+        if (me.age_ok) loadCatalog(); else $("ageView").classList.add("show");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+    $("ageYes").onclick = async () => {
+      await fetch("/api/age", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+      $("ageView").classList.remove("show"); loadCatalog();
+    };
+    $("ageNo").onclick = () => { if (tg) tg.close(); };
+
+    async function loadCatalog() {
+      const r = await fetch("/api/products");
+      allProducts = await r.json();
+      const order = ["minsk", "slutsk", "turov"];
+      cityList = order.filter(c => allProducts.some(p => p.city === c));
+      if (!cityList.length) cityList = [...new Set(allProducts.map(p => p.city))];
+      city = cityList[0] || null;
+      $("pointName").textContent = city ? (CITY_NAMES[city] || city) : "Выбери точку";
+      renderChips(); renderGrid();
+    }
+
+    function renderChips() {
+      $("chips").innerHTML = Object.entries(CATS).map(([code, t]) =>
+        `<button class="chip ${code===cat?'active':''}" data-c="${code}">${t}</button>`).join("");
+      $("chips").querySelectorAll("[data-c]").forEach(b => b.onclick = () => { cat = b.dataset.c; renderChips(); renderGrid(); });
+    }
+    function visibleProducts() {
+      const s = search.trim().toLowerCase();
+      return allProducts.filter(p => p.city === city && (!cat || p.category === cat) && (!s || p.name.toLowerCase().includes(s)));
+    }
+    function cardHtml(p) {
+      const photo = p.photo_url ? `<img src="${p.photo_url}" alt="">` : `<div class="ph">${CAT_EMOJI[p.category] || "🛒"}</div>`;
+      let badge = "";
+      if (p.is_hit) badge = `<span class="tagbadge">🔥 Хит</span>`;
+      else if (p.stock > 0 && p.stock <= 3) badge = `<span class="tagbadge warn">Мало</span>`;
+      const isFav = favs.includes(p.id), qty = cart[p.id] || 0;
+      const ctrl = p.stock <= 0 ? `<button class="plus" disabled>×</button>`
+        : (qty > 0 ? `<div class="mini"><button data-dec="${p.id}">−</button><span>${qty}</span><button data-inc="${p.id}">+</button></div>`
+                   : `<button class="plus" data-inc="${p.id}">+</button>`);
+      return `<div class="card"><div class="imgwrap">${photo}${badge}
+          <button class="fav ${isFav?'on':''}" data-fav="${p.id}">${isFav?'♥':'♡'}</button></div>
+        <div class="cbody"><p class="cname">${esc(p.name)}</p>
+          <div class="crow"><span class="cprice">${p.price.toFixed(2)} ${CUR}</span>${ctrl}</div></div></div>`;
+    }
+    function renderGrid() {
+      const list = visibleProducts();
+      $("grid").innerHTML = list.map(cardHtml).join("");
+      $("catEmpty").innerHTML = list.length ? "" : `<div class="empty"><div class="circ">🔎</div><h3>Ничего не найдено</h3><p>Другая категория или точка.</p></div>`;
+      bindCardButtons($("grid"));
+    }
+    function bindCardButtons(root) {
+      root.querySelectorAll("[data-inc]").forEach(b => b.onclick = () => changeQty(+b.dataset.inc, +1));
+      root.querySelectorAll("[data-dec]").forEach(b => b.onclick = () => changeQty(+b.dataset.dec, -1));
+      root.querySelectorAll("[data-fav]").forEach(b => b.onclick = () => toggleFav(+b.dataset.fav));
+    }
+    function changeQty(id, delta) {
+      const p = allProducts.find(x => x.id === id); if (!p) return;
+      const next = (cart[id] || 0) + delta;
+      if (next <= 0) delete cart[id]; else cart[id] = Math.min(next, p.stock);
+      renderGrid(); renderNav(); if (activeTab === "cart") renderCart();
+    }
+    function toggleFav(id) {
+      const i = favs.indexOf(id); if (i >= 0) favs.splice(i, 1); else favs.push(id);
+      localStorage.setItem("favs", JSON.stringify(favs));
+      renderGrid(); if (activeTab === "fav") renderFav();
+    }
+    $("searchInput").oninput = (e) => { search = e.target.value; renderGrid(); };
+
+    $("pointBtn").onclick = () => {
+      $("pointList").innerHTML = cityList.map(c => `<button class="opt ${c===city?'active':''}" data-city="${c}">${CITY_NAMES[c] || c}</button>`).join("");
+      $("pointList").querySelectorAll("[data-city]").forEach(b => b.onclick = () => {
+        if (b.dataset.city !== city && Object.keys(cart).length && !confirm("Сменить точку? Корзина очистится.")) return;
+        if (b.dataset.city !== city) { for (const k in cart) delete cart[k]; }
+        city = b.dataset.city; $("pointName").textContent = CITY_NAMES[city] || city;
+        $("pointOverlay").classList.remove("show"); renderGrid(); renderNav();
+      });
+      $("pointOverlay").classList.add("show");
+    };
+    $("pointClose").onclick = () => $("pointOverlay").classList.remove("show");
+
+    const cartCount = () => Object.values(cart).reduce((s, q) => s + q, 0);
+    const cartTotal = () => Object.keys(cart).reduce((s, id) => { const p = allProducts.find(x => x.id === +id); return s + (p ? p.price * cart[id] : 0); }, 0);
+    function renderCart() {
+      const ids = Object.keys(cart);
+      if (!ids.length) { $("tab-cart").innerHTML = `<div class="empty"><div class="circ">🛒</div><h3>Корзина пуста</h3><p>Добавьте товары из ассортимента.</p></div>`; return; }
+      const rows = ids.map(id => {
+        const p = allProducts.find(x => x.id === +id); if (!p) return "";
+        const thumb = p.photo_url ? `<img src="${p.photo_url}">` : (CAT_EMOJI[p.category] || "🛒");
+        return `<div class="citem"><div class="thumb">${thumb}</div>
+          <div style="flex:1"><div class="ci-name">${esc(p.name)}</div><div class="ci-price">${(p.price*cart[id]).toFixed(2)} ${CUR}</div></div>
+          <div class="mini"><button data-dec="${p.id}">−</button><span>${cart[id]}</span><button data-inc="${p.id}">+</button></div></div>`;
+      }).join("");
+      $("tab-cart").innerHTML = `<div class="clist">${rows}</div><div class="checkoutbar"><button class="bigbtn" id="checkout">Оформить · ${cartTotal().toFixed(2)} ${CUR}</button></div>`;
+      bindCardButtons($("tab-cart"));
+      $("checkout").onclick = () => $("pickupOverlay").classList.add("show");
+    }
+
+    function renderFav() {
+      const list = allProducts.filter(p => favs.includes(p.id));
+      if (!list.length) { $("tab-fav").innerHTML = `<div class="empty"><div class="circ">♡</div><h3>Нет избранных товаров</h3><p>Добавьте товары, нажав на сердечко.</p></div>`; return; }
+      $("tab-fav").innerHTML = `<div class="grid">${list.map(cardHtml).join("")}</div>`;
+      bindCardButtons($("tab-fav"));
+    }
+
+    function renderProfile() {
+      const name = (tgUser && tgUser.first_name) || "Гость";
+      const letter = (name[0] || "Г").toUpperCase();
+      const dark = currentTheme() === "dark";
+      $("tab-profile").innerHTML = `<div class="prof">
+        <div class="profcard"><div class="avatar">${esc(letter)}</div>
+          <div><div class="pn">${esc(name)}</div><div class="pid">ID: ${(tgUser && tgUser.id) || "—"}</div></div>
+          <div class="coins"><b>0</b><small>VAPECOINS</small></div></div>
+        <div class="plist">
+          <div class="prow"><span>${dark ? "🌙" : "☀️"} Тёмная тема</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
+          <div class="prow">📦 Заказы — история покупок</div>
+          <div class="prow">💬 Менеджер</div>
+          <div class="prow">❓ Помощь</div>
+        </div></div>`;
+      $("themeSwitch").onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark");
+    }
+
+    $("pickupClose").onclick = () => $("pickupOverlay").classList.remove("show");
+    document.querySelectorAll("#pickupOverlay .opt").forEach(b => b.onclick = () => submitOrder(b.dataset.t));
+    async function submitOrder(pickup) {
+      const items = Object.keys(cart).map(id => ({ id: +id, qty: cart[id] }));
+      if (!items.length) return;
+      $("pickupOverlay").classList.remove("show");
+      try {
+        const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, city, items, pickup_time: pickup }) });
+        const d = await r.json();
+        if (d.ok) {
+          currentOrder = d;
+          $("payTitle").textContent = `Оплата заказа #${d.order_id}`;
+          $("payReq").textContent = `К оплате: ${d.total.toFixed(2)} ${CUR}\n\n${d.payment_info}`;
+          $("payView").classList.add("show");
+        } else {
+          const errs = { auth: "Откройте магазин из бота.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек." };
+          alertMsg(errs[d.error] || "Ошибка оформления.");
+        }
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+    $("uploadBtn").onclick = () => $("receiptFile").click();
+    $("payCancel").onclick = () => $("payView").classList.remove("show");
+    $("receiptFile").onchange = async (e) => {
+      const file = e.target.files[0]; if (!file || !currentOrder) return;
+      $("uploadBtn").disabled = true; $("uploadBtn").textContent = "Отправляю…";
+      try {
+        const fd = new FormData();
+        fd.append("initData", initData); fd.append("order_id", currentOrder.order_id); fd.append("file", file);
+        const r = await fetch("/api/receipt", { method: "POST", body: fd });
+        const d = await r.json();
+        if (d.ok) {
+          $("payView").classList.remove("show");
+          $("doneText").textContent = `Чек по заказу #${currentOrder.order_id} получен. Продавец подтвердит за ~${currentOrder.confirm_minutes} минут.`;
+          $("doneView").classList.add("show");
+          for (const k in cart) delete cart[k]; renderNav();
+        } else alertMsg("Не удалось отправить чек. Попробуйте ещё раз.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("uploadBtn").disabled = false; $("uploadBtn").textContent = "📷 Загрузить чек"; }
+    };
+    $("doneBtn").onclick = () => { showTab("catalog"); $("doneView").classList.remove("show"); };
+
+    start();
+  </script>
+</body>
+</html>
