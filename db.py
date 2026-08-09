@@ -71,7 +71,11 @@ def init_db():
             stock       INTEGER NOT NULL DEFAULT 0,
             is_hit      INTEGER NOT NULL DEFAULT 0,
             photo       TEXT,
-            description TEXT
+            description TEXT,
+            brand       TEXT,
+            flavor      TEXT,
+            strength    TEXT,
+            volume      TEXT
         )
     """)
 
@@ -108,7 +112,29 @@ def init_db():
 
     conn.commit()
     conn.close()
-    seed_locations()      # добавит стартовые точки, если таблица пустая
+    _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
+    seed_locations()            # добавит стартовые точки, если таблица пустая
+
+
+def _table_columns(cur, table):
+    """Возвращает множество имён колонок таблицы (для аккуратной миграции)."""
+    if USE_PG:
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s", (table,))
+        return {r["column_name"] for r in cur.fetchall()}
+    cur.execute(f"PRAGMA table_info({table})")
+    return {r["name"] for r in cur.fetchall()}
+
+
+def _ensure_product_columns():
+    """Добавляет новые колонки товара, если их ещё нет (работает и в SQLite, и в Postgres)."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "products")
+    for c in ("brand", "flavor", "strength", "volume"):
+        if c not in cols:
+            cur.execute(f"ALTER TABLE products ADD COLUMN {c} TEXT")
+    conn.commit()
+    conn.close()
 
 
 def seed_locations():
@@ -186,14 +212,17 @@ def get_all_products():
 
 # ---------- Админка: добавить / изменить / удалить ----------
 
-def add_product(city, category, name, price, stock, is_hit=0, description=""):
+def add_product(city, category, name, price, stock, is_hit=0, description="",
+                brand="", flavor="", strength="", volume=""):
     conn = connect()
     cur = conn.cursor()
     new_id = _insert_id(
         cur,
-        """INSERT INTO products (city, category, name, price, stock, is_hit, description)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-        (city, category, name, price, stock, is_hit, description),
+        """INSERT INTO products (city, category, name, price, stock, is_hit, description,
+                                 brand, flavor, strength, volume)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (city, category, name, price, stock, is_hit, description,
+         brand, flavor, strength, volume),
     )
     conn.commit()
     conn.close()
@@ -201,7 +230,8 @@ def add_product(city, category, name, price, stock, is_hit=0, description=""):
 
 
 # Какие колонки разрешено менять (защита: имя колонки нельзя подставить параметром).
-_EDITABLE = {"name", "price", "stock", "is_hit", "description", "photo"}
+_EDITABLE = {"name", "price", "stock", "is_hit", "description", "photo",
+             "brand", "flavor", "strength", "volume"}
 
 
 def update_field(product_id, field, value):

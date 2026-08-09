@@ -150,6 +150,8 @@ def api_products():
             "stock": p["stock"], "is_hit": p["is_hit"],
             "category": p["category"], "city": p["city"],
             "description": p["description"] or "",
+            "brand": p["brand"] or "", "flavor": p["flavor"] or "",
+            "strength": p["strength"] or "", "volume": p["volume"] or "",
             "photo_url": (f"/api/photo?file_id={p['photo']}" if p["photo"] else None),
         })
     return jsonify(out)
@@ -311,7 +313,12 @@ def api_admin_add():
 
     is_hit = 1 if data.get("is_hit") else 0
     desc = (data.get("description") or "").strip()
-    pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc)
+    brand = (data.get("brand") or "").strip()
+    flavor = (data.get("flavor") or "").strip()
+    strength = (data.get("strength") or "").strip()
+    volume = (data.get("volume") or "").strip()
+    pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc,
+                         brand=brand, flavor=flavor, strength=strength, volume=volume)
     return jsonify({"ok": True, "id": pid})
 
 

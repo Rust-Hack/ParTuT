@@ -65,8 +65,15 @@
     .imgwrap { position: relative; width: 100%; aspect-ratio: 1/1; background: var(--img-bg); display: flex; align-items: center; justify-content: center; }
     .imgwrap img { width: 100%; height: 100%; object-fit: contain; padding: 10px; }
     .imgwrap .ph { font-size: 46px; }
-    .tagbadge { position: absolute; top: 10px; right: 10px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
-    .tagbadge.warn { background: var(--warn); }
+    .tagbadge { background: var(--accent); color: var(--on-accent); font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+    .tagbadge.warn { background: var(--warn); color: #fff; }
+    .tagbadge.hit { background: #ff8c1a; color: #fff; }
+    .tagbadge.alt { background: var(--surface-2); color: var(--text); }
+    .badges-tr { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; z-index: 1; }
+    .csub { font-size: 11.5px; color: var(--hint); margin: -4px 0 8px; }
+    .pd-info { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+    .pd-info span { color: var(--hint); }
+    .pd-info-wrap { margin: 14px 0 4px; }
     .fav { position: absolute; top: 8px; left: 8px; width: 34px; height: 34px; border-radius: 50%; background: var(--surface);
       border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--hint); font-size: 17px; box-shadow: var(--shadow); }
     .fav.on { color: var(--danger); }
@@ -267,6 +274,14 @@
         <div><label>Цена (Br)</label><input id="afPrice" inputmode="decimal" placeholder="18.5"></div>
         <div><label>Остаток (шт.)</label><input id="afStock" inputmode="numeric" placeholder="10"></div>
       </div>
+      <div class="rowf">
+        <div><label>Бренд</label><input id="afBrand" placeholder="Elf Bar"></div>
+        <div><label>Вкус</label><input id="afFlavor" placeholder="Манго"></div>
+      </div>
+      <div class="rowf">
+        <div><label>Крепость</label><input id="afStrength" placeholder="20 мг"></div>
+        <div><label>Объём / затяжки</label><input id="afVolume" placeholder="30 мл / 20000"></div>
+      </div>
       <label>Описание (необязательно)</label><input id="afDesc" placeholder="Коротко">
       <div class="chk"><input type="checkbox" id="afHit"><label for="afHit" style="margin:0">🔥 Отметить как «Хит»</label></div>
       <label>Фото (необязательно)</label><input type="file" id="afPhoto" accept="image/*">
@@ -386,18 +401,25 @@
       const s = search.trim().toLowerCase();
       return allProducts.filter(p => p.city === city && (!cat || p.category === cat) && (!s || p.name.toLowerCase().includes(s)));
     }
+    function productBadges(p) {
+      const b = [];
+      if (p.strength) b.push(`<span class="tagbadge">${esc(p.strength)}</span>`);
+      if (p.volume) b.push(`<span class="tagbadge alt">${esc(p.volume)}</span>`);
+      if (p.is_hit) b.push(`<span class="tagbadge hit">🔥 Хит</span>`);
+      else if (p.stock > 0 && p.stock <= 3) b.push(`<span class="tagbadge warn">Мало</span>`);
+      return b.length ? `<div class="badges-tr">${b.join("")}</div>` : "";
+    }
     function cardHtml(p) {
       const photo = p.photo_url ? `<img src="${p.photo_url}" alt="" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
-      let badge = "";
-      if (p.is_hit) badge = `<span class="tagbadge">🔥 Хит</span>`;
-      else if (p.stock > 0 && p.stock <= 3) badge = `<span class="tagbadge warn">Мало</span>`;
       const isFav = favs.includes(p.id), qty = cart[p.id] || 0;
+      const sub = [p.brand, p.flavor].filter(Boolean).join(" · ");
       const ctrl = p.stock <= 0 ? `<button class="plus" disabled>×</button>`
         : (qty > 0 ? `<div class="mini"><button data-dec="${p.id}">−</button><span>${qty}</span><button data-inc="${p.id}">+</button></div>`
                    : `<button class="plus" data-inc="${p.id}">+</button>`);
-      return `<div class="card"><div class="imgwrap">${photo}${badge}
+      return `<div class="card"><div class="imgwrap">${photo}${productBadges(p)}
           <button class="fav ${isFav?'on':''}" data-fav="${p.id}">${isFav?'♥':'♡'}</button></div>
         <div class="cbody"><p class="cname" data-open="${p.id}">${esc(p.name)}</p>
+          ${sub ? `<div class="csub">${esc(sub)}</div>` : ""}
           <div class="crow"><span class="cprice">${p.price.toFixed(2)} ${CUR}</span>${ctrl}</div></div></div>`;
     }
     function renderGrid() {
@@ -530,13 +552,17 @@
       const p = allProducts.find(x => x.id === currentProductId);
       if (!p) { $("productView").classList.remove("show"); return; }
       const photo = p.photo_url ? `<img src="${p.photo_url}" alt="">` : `<div class="ph">${CAT_EMOJI[p.category] || "🛒"}</div>`;
-      let badge = "";
-      if (p.is_hit) badge = `<span class="tagbadge">🔥 Хит</span>`;
-      else if (p.stock > 0 && p.stock <= 3) badge = `<span class="tagbadge warn">Мало</span>`;
-      else if (p.stock <= 0) badge = `<span class="tagbadge" style="background:var(--danger)">Нет в наличии</span>`;
-      $("prodBody").innerHTML = `<div class="pd-img">${photo}${badge}</div>
+      const info = [];
+      if (p.brand) info.push(["Бренд", p.brand]);
+      if (p.flavor) info.push(["Вкус", p.flavor]);
+      if (p.strength) info.push(["Крепость", p.strength]);
+      if (p.volume) info.push(["Объём / затяжки", p.volume]);
+      const infoHtml = info.length
+        ? `<div class="pd-info-wrap">${info.map(([k, v]) => `<div class="pd-info"><span>${k}</span><b>${esc(v)}</b></div>`).join("")}</div>` : "";
+      $("prodBody").innerHTML = `<div class="pd-img">${photo}${productBadges(p)}</div>
         <h2 class="pd-name">${esc(p.name)}</h2>
         <div class="pd-price">${p.price.toFixed(2)} ${CUR}</div>
+        ${infoHtml}
         ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}`;
 
       const qty = cart[p.id] || 0;
@@ -606,6 +632,8 @@
         initData, city: $("afCity").value, category: $("afCat").value,
         name: $("afName").value.trim(), price: $("afPrice").value, stock: $("afStock").value,
         description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
+        brand: $("afBrand").value.trim(), flavor: $("afFlavor").value.trim(),
+        strength: $("afStrength").value.trim(), volume: $("afVolume").value.trim(),
       };
       if (!body.name || body.price === "" || body.stock === "") { alertMsg("Заполните название, цену и остаток."); return; }
       $("afAdd").disabled = true; $("afAdd").textContent = "Добавляю…";
@@ -619,6 +647,7 @@
           await fetch("/api/admin/photo", { method: "POST", body: fd });
         }
         $("afName").value = ""; $("afPrice").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
+        $("afBrand").value = ""; $("afFlavor").value = ""; $("afStrength").value = ""; $("afVolume").value = "";
         await refreshProducts();
         alertMsg("Товар добавлен ✅");
       } catch (e) { alertMsg("Сеть недоступна."); }
