@@ -126,6 +126,15 @@ def api_age():
 
 
 # ============================================================
+#  ЛОКАЦИИ (точки продаж)
+# ============================================================
+
+@app.route("/api/locations")
+def api_locations():
+    return jsonify([{"id": r["id"], "name": r["name"]} for r in db.get_locations()])
+
+
+# ============================================================
 #  ТОВАРЫ
 # ============================================================
 
@@ -292,7 +301,7 @@ def api_admin_add():
     city = data.get("city")
     category = data.get("category")
     name = (data.get("name") or "").strip()
-    if city not in CITIES or category not in CATEGORIES or not name:
+    if city not in db.location_names() or category not in CATEGORIES or not name:
         return jsonify({"ok": False, "error": "bad_data"}), 400
     try:
         price = float(str(data.get("price")).replace(",", "."))
@@ -376,6 +385,38 @@ def api_admin_photo():
         return jsonify({"ok": False, "error": "send_failed"}), 500
 
     db.update_field(pid, "photo", file_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/location", methods=["POST"])
+def api_admin_location_add():
+    """Добавить локацию (точку продаж)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "error": "bad_name"}), 400
+    lid = db.add_location(name)
+    return jsonify({"ok": True, "id": lid})
+
+
+@app.route("/api/admin/location/delete", methods=["POST"])
+def api_admin_location_delete():
+    """Удалить локацию. Нельзя, если в ней есть товары."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        lid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    loc = db.get_location(lid)
+    if not loc:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    if db.count_products_in_location(loc["name"]) > 0:
+        return jsonify({"ok": False, "error": "has_products"}), 400
+    db.delete_location(lid)
     return jsonify({"ok": True})
 
 

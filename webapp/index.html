@@ -235,8 +235,17 @@
 
   <!-- Админка: управление товарами -->
   <div class="view" id="adminView">
-    <div class="viewhead"><h2>🛠 Товары</h2>
+    <div class="viewhead"><h2>🛠 Управление</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="adminClose">Закрыть</button></div>
+
+    <div class="card-block form">
+      <div style="font-weight:800;margin-bottom:4px">📍 Локации (точки продаж)</div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <input id="locName" placeholder="Например: Пинск" style="flex:1">
+        <button class="iconbtn ok" id="locAdd" style="width:auto;padding:0 16px">Добавить</button>
+      </div>
+      <div id="locList" style="margin-top:12px"></div>
+    </div>
 
     <div class="card-block form">
       <div style="font-weight:800;margin-bottom:4px">➕ Новый товар</div>
@@ -279,7 +288,7 @@
 
     const CATS = { "": "Все товары", liquid: "Жидкости", podsystem: "Подсистемы", disposable: "Одноразки" };
     const CAT_EMOJI = { disposable: "🔋", liquid: "💧", podsystem: "🧩" };
-    const CITY_NAMES = { minsk: "Минск", slutsk: "Слуцк", turov: "Туров" };
+    let locations = [];   // [{id, name}] — точки продаж, приходят из базы
     const CUR = "Br";
 
     let allProducts = [], cityList = [], city = null, cat = "", search = "";
@@ -338,19 +347,23 @@
       const r = await fetch("/api/products");
       allProducts = await r.json();
     }
+    async function fetchLocations() {
+      const r = await fetch("/api/locations");
+      locations = await r.json();
+    }
     function recomputeCities() {
-      const order = ["minsk", "slutsk", "turov"];
-      cityList = order.filter(c => allProducts.some(p => p.city === c));
-      if (!cityList.length) cityList = [...new Set(allProducts.map(p => p.city))];
+      cityList = locations.map(l => l.name);   // точки берём из базы (даже пустые)
       if (!cityList.includes(city)) city = cityList[0] || null;
-      $("pointName").textContent = city ? (CITY_NAMES[city] || city) : "Выбери точку";
+      $("pointName").textContent = city || "Выбери точку";
     }
     async function loadCatalog() {
-      await fetchProducts(); recomputeCities(); renderChips(); renderGrid();
+      await Promise.all([fetchLocations(), fetchProducts()]);
+      recomputeCities(); renderChips(); renderGrid();
     }
     async function refreshProducts() {
-      await fetchProducts(); recomputeCities(); renderChips(); renderGrid(); renderNav();
-      if ($("adminView").classList.contains("show")) renderAdminList();
+      await Promise.all([fetchLocations(), fetchProducts()]);
+      recomputeCities(); renderChips(); renderGrid(); renderNav();
+      if ($("adminView").classList.contains("show")) { renderAdminList(); renderLocList(); }
     }
 
     function renderChips() {
@@ -402,11 +415,11 @@
     $("searchInput").oninput = (e) => { search = e.target.value; renderGrid(); };
 
     $("pointBtn").onclick = () => {
-      $("pointList").innerHTML = cityList.map(c => `<button class="opt ${c===city?'active':''}" data-city="${c}">${CITY_NAMES[c] || c}</button>`).join("");
+      $("pointList").innerHTML = cityList.map(c => `<button class="opt ${c===city?'active':''}" data-city="${esc(c)}">${esc(c)}</button>`).join("");
       $("pointList").querySelectorAll("[data-city]").forEach(b => b.onclick = () => {
         if (b.dataset.city !== city && Object.keys(cart).length && !confirm("Сменить точку? Корзина очистится.")) return;
         if (b.dataset.city !== city) { for (const k in cart) delete cart[k]; }
-        city = b.dataset.city; $("pointName").textContent = CITY_NAMES[city] || city;
+        city = b.dataset.city; $("pointName").textContent = city;
         $("pointOverlay").classList.remove("show"); renderGrid(); renderNav();
       });
       $("pointOverlay").classList.add("show");
@@ -532,16 +545,50 @@
     function prodQty(delta) { changeQty(currentProductId, delta); renderProduct(); }
 
     // ---------- Админка (только для админов) ----------
-    const CITY_OPTS = [["minsk", "Минск"], ["slutsk", "Слуцк"], ["turov", "Туров"]];
     const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
 
     function openAdmin() {
-      $("afCity").innerHTML = CITY_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+      $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
       $("afCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+      renderLocList();
       renderAdminList();
       $("adminView").classList.add("show");
     }
     $("adminClose").onclick = () => $("adminView").classList.remove("show");
+
+    // Управление локациями
+    function renderLocList() {
+      $("locList").innerHTML = locations.map(l =>
+        `<div class="admrow"><div class="an">${esc(l.name)}</div>
+          <button class="iconbtn danger" data-locdel="${l.id}">🗑</button></div>`).join("")
+        || `<p style="color:var(--hint)">Локаций пока нет.</p>`;
+      $("locList").querySelectorAll("[data-locdel]").forEach(b => b.onclick = () => delLocation(+b.dataset.locdel));
+    }
+    $("locAdd").onclick = async () => {
+      const name = $("locName").value.trim();
+      if (!name) { alertMsg("Введите название локации."); return; }
+      try {
+        const r = await fetch("/api/admin/location", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, name }) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось добавить локацию."); return; }
+        $("locName").value = "";
+        await refreshProducts();
+        $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    };
+    async function delLocation(id) {
+      if (!confirm("Удалить локацию?")) return;
+      try {
+        const r = await fetch("/api/admin/location/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
+        const d = await r.json();
+        if (!d.ok) {
+          alertMsg(d.error === "has_products" ? "Нельзя удалить: в этой локации есть товары. Сначала уберите их." : "Не удалось удалить локацию.");
+          return;
+        }
+        await refreshProducts();
+        $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
 
     $("afAdd").onclick = async () => {
       const body = {
@@ -570,7 +617,7 @@
     function renderAdminList() {
       if (!allProducts.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
       $("adminList").innerHTML = allProducts.map(p => {
-        const cityN = CITY_NAMES[p.city] || p.city;
+        const cityN = p.city;
         return `<div class="admrow">
           <div class="an">${esc(p.name)}<small>${cityN} · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small></div>
           <input class="ap" type="text" inputmode="decimal" value="${p.price}">

@@ -97,7 +97,29 @@ def init_db():
         )
     """)
 
+    # Локации (точки продаж) — теперь ими управляет админ, а не жёстко в коде.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS locations (
+            id   {ID_COL},
+            name TEXT    NOT NULL,
+            sort INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     conn.commit()
+    conn.close()
+    seed_locations()      # добавит стартовые точки, если таблица пустая
+
+
+def seed_locations():
+    """Стартовые локации — только если их ещё нет. Дальше админ меняет сам."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM locations")
+    if cur.fetchone()["c"] == 0:
+        for i, name in enumerate(["Минск", "Туров", "Лунинец"]):
+            cur.execute(_q("INSERT INTO locations (name, sort) VALUES (%s, %s)"), (name, i))
+        conn.commit()
     conn.close()
 
 
@@ -277,3 +299,66 @@ def set_order_receipt(order_id, file_id):
                 (file_id, order_id))
     conn.commit()
     conn.close()
+
+
+# ---------- Локации (точки продаж) ----------
+
+def get_locations():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM locations ORDER BY sort, id")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def location_names():
+    """Список названий локаций — для проверок и справочников."""
+    return [r["name"] for r in get_locations()]
+
+
+def get_location(location_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM locations WHERE id = %s"), (location_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def add_location(name):
+    """Добавляет локацию (если такой ещё нет) и возвращает её id."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT id FROM locations WHERE name = %s"), (name,))
+    existing = cur.fetchone()
+    if existing:
+        conn.close()
+        return existing["id"]
+    cur.execute("SELECT COALESCE(MAX(sort), -1) + 1 AS s FROM locations")
+    s = cur.fetchone()["s"]
+    new_id = _insert_id(cur, "INSERT INTO locations (name, sort) VALUES (%s, %s)", (name, s))
+    conn.commit()
+    conn.close()
+    return new_id
+
+
+def delete_location(location_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM locations WHERE id = %s"), (location_id,))
+    conn.commit()
+    conn.close()
+
+
+def count_products_in_location(name):
+    """Сколько товаров в этой локации — чтобы не удалить локацию с товарами."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COUNT(*) AS c FROM products WHERE city = %s"), (name,))
+    n = cur.fetchone()["c"]
+    conn.close()
+    return n

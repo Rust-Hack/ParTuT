@@ -238,8 +238,8 @@ def show_admin_menu(chat_id):
 
 def admin_city_keyboard():
     kb = types.InlineKeyboardMarkup()
-    for code, title in CITIES.items():
-        kb.add(types.InlineKeyboardButton(title, callback_data=f"admcity:{code}"))
+    for loc in db.get_locations():
+        kb.add(types.InlineKeyboardButton(loc["name"], callback_data=f"admcity:{loc['id']}"))
     kb.add(types.InlineKeyboardButton("✖️ Отмена", callback_data="adm:cancel"))
     return kb
 
@@ -285,7 +285,8 @@ def handle_admin_callback(call, chat_id, user_id, data):
         if not st or st.get("action") != "add":
             bot.answer_callback_query(call.id)
             return
-        st["draft"]["city"] = parts[1]
+        loc = db.get_location(int(parts[1]))
+        st["draft"]["city"] = loc["name"] if loc else parts[1]
         st["step"] = "category"
         bot.answer_callback_query(call.id)
         bot.send_message(chat_id, "Категория товара?", reply_markup=admin_cat_keyboard())
