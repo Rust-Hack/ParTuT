@@ -37,8 +37,9 @@
       background: var(--surface); border-bottom: 1px solid var(--line);
       display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
     .brand { display: flex; align-items: center; gap: 8px; }
-    .brand .logo { width: 26px; height: 26px; color: var(--brand-neon); }
-    html[data-theme="dark"] .brand .logo { filter: drop-shadow(0 0 5px var(--brand-glow)); }
+    .brand .logo { width: 30px; height: 30px; color: var(--brand-neon); }
+    html[data-theme="dark"] .brand .logo { filter: drop-shadow(0 0 3px var(--brand-glow)) drop-shadow(0 0 8px var(--brand-glow)); }
+    html[data-theme="dark"] .brand .logo path { fill: rgba(95,242,242,.10); }
     .brand-text { font-size: 19px; font-weight: 800; letter-spacing: .5px; }
     html[data-theme="dark"] .brand-text { color: #fff; text-shadow: 0 0 10px var(--brand-glow); }
     .point { display: flex; align-items: center; gap: 6px; background: var(--surface-2); color: var(--text);
@@ -169,7 +170,7 @@
 <body>
   <div class="header">
     <div class="brand">
-      <svg class="logo" viewBox="0 0 24 24" fill="none"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      <svg class="logo" viewBox="0 0 24 24" fill="none"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
       <span class="brand-text">ParTuT</span>
     </div>
     <button class="point" id="pointBtn">📍 <span id="pointName">Выбери точку</span> ▾</button>
