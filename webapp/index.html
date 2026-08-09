@@ -143,6 +143,20 @@
     .iconbtn { border: none; background: var(--surface-2); color: var(--text); width: 38px; height: 38px; border-radius: 10px; font-size: 16px; flex: 0 0 auto; }
     .iconbtn.danger { color: var(--danger); }
     .iconbtn.ok { background: var(--accent); color: var(--on-accent); }
+
+    /* Карточка товара (детальный экран) */
+    .pd-img { width: 100%; aspect-ratio: 1/1; background: var(--img-bg); border-radius: 18px; box-shadow: var(--shadow);
+      position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    .pd-img img { width: 100%; height: 100%; object-fit: contain; padding: 16px; }
+    .pd-img .ph { font-size: 76px; }
+    .pd-name { font-size: 22px; font-weight: 800; margin: 16px 0 6px; text-align: left; }
+    .pd-price { color: var(--accent); font-size: 24px; font-weight: 800; }
+    .pd-desc { color: var(--hint); font-size: 15px; line-height: 1.5; margin-top: 12px; text-align: left; }
+    .pd-actions { padding-top: 16px; display: flex; gap: 12px; align-items: center; }
+    .pd-actions .bigbtn { flex: 1; }
+    .pd-step { display: flex; align-items: center; gap: 14px; background: var(--surface-2); border-radius: 14px; padding: 8px 12px; }
+    .pd-step button { width: 38px; height: 38px; border-radius: 10px; border: none; background: var(--accent); color: var(--on-accent); font-size: 20px; }
+    .pd-step span { font-weight: 800; min-width: 20px; text-align: center; font-size: 17px; }
   </style>
 </head>
 <body>
@@ -210,6 +224,13 @@
     <div class="spacer"></div><div class="icon">✅</div>
     <h2>Спасибо!</h2><p id="doneText"></p><div class="spacer"></div>
     <button class="bigbtn" id="doneBtn">Готово</button>
+  </div>
+
+  <!-- Карточка товара -->
+  <div class="view" id="productView">
+    <div class="viewhead"><button class="closebtn" style="width:auto;padding:8px 12px" id="prodBack">‹ Назад</button></div>
+    <div id="prodBody" style="flex:1"></div>
+    <div class="pd-actions" id="prodActions"></div>
   </div>
 
   <!-- Админка: управление товарами -->
@@ -342,7 +363,7 @@
       return allProducts.filter(p => p.city === city && (!cat || p.category === cat) && (!s || p.name.toLowerCase().includes(s)));
     }
     function cardHtml(p) {
-      const photo = p.photo_url ? `<img src="${p.photo_url}" alt="">` : `<div class="ph">${CAT_EMOJI[p.category] || "🛒"}</div>`;
+      const photo = p.photo_url ? `<img src="${p.photo_url}" alt="" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
       let badge = "";
       if (p.is_hit) badge = `<span class="tagbadge">🔥 Хит</span>`;
       else if (p.stock > 0 && p.stock <= 3) badge = `<span class="tagbadge warn">Мало</span>`;
@@ -352,7 +373,7 @@
                    : `<button class="plus" data-inc="${p.id}">+</button>`);
       return `<div class="card"><div class="imgwrap">${photo}${badge}
           <button class="fav ${isFav?'on':''}" data-fav="${p.id}">${isFav?'♥':'♡'}</button></div>
-        <div class="cbody"><p class="cname">${esc(p.name)}</p>
+        <div class="cbody"><p class="cname" data-open="${p.id}">${esc(p.name)}</p>
           <div class="crow"><span class="cprice">${p.price.toFixed(2)} ${CUR}</span>${ctrl}</div></div></div>`;
     }
     function renderGrid() {
@@ -365,6 +386,7 @@
       root.querySelectorAll("[data-inc]").forEach(b => b.onclick = () => changeQty(+b.dataset.inc, +1));
       root.querySelectorAll("[data-dec]").forEach(b => b.onclick = () => changeQty(+b.dataset.dec, -1));
       root.querySelectorAll("[data-fav]").forEach(b => b.onclick = () => toggleFav(+b.dataset.fav));
+      root.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openProduct(+b.dataset.open));
     }
     function changeQty(id, delta) {
       const p = allProducts.find(x => x.id === id); if (!p) return;
@@ -474,6 +496,40 @@
       finally { $("uploadBtn").disabled = false; $("uploadBtn").textContent = "📷 Загрузить чек"; }
     };
     $("doneBtn").onclick = () => { showTab("catalog"); $("doneView").classList.remove("show"); };
+
+    // ---------- Карточка товара ----------
+    let currentProductId = null;
+    function openProduct(id) { currentProductId = id; renderProduct(); $("productView").classList.add("show"); }
+    $("prodBack").onclick = () => { $("productView").classList.remove("show"); renderGrid(); };
+
+    function renderProduct() {
+      const p = allProducts.find(x => x.id === currentProductId);
+      if (!p) { $("productView").classList.remove("show"); return; }
+      const photo = p.photo_url ? `<img src="${p.photo_url}" alt="">` : `<div class="ph">${CAT_EMOJI[p.category] || "🛒"}</div>`;
+      let badge = "";
+      if (p.is_hit) badge = `<span class="tagbadge">🔥 Хит</span>`;
+      else if (p.stock > 0 && p.stock <= 3) badge = `<span class="tagbadge warn">Мало</span>`;
+      else if (p.stock <= 0) badge = `<span class="tagbadge" style="background:var(--danger)">Нет в наличии</span>`;
+      $("prodBody").innerHTML = `<div class="pd-img">${photo}${badge}</div>
+        <h2 class="pd-name">${esc(p.name)}</h2>
+        <div class="pd-price">${p.price.toFixed(2)} ${CUR}</div>
+        ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}`;
+
+      const qty = cart[p.id] || 0;
+      if (p.stock <= 0) {
+        $("prodActions").innerHTML = `<button class="bigbtn" disabled>Нет в наличии</button>`;
+      } else if (qty > 0) {
+        $("prodActions").innerHTML = `<div class="pd-step"><button id="pdDec">−</button><span>${qty}</span><button id="pdInc">+</button></div>
+          <button class="bigbtn" id="pdGoCart">В корзину · ${(p.price*qty).toFixed(2)} ${CUR}</button>`;
+        $("pdDec").onclick = () => prodQty(-1);
+        $("pdInc").onclick = () => prodQty(+1);
+        $("pdGoCart").onclick = () => { $("productView").classList.remove("show"); renderGrid(); showTab("cart"); };
+      } else {
+        $("prodActions").innerHTML = `<button class="bigbtn" id="pdAdd">+ В корзину</button>`;
+        $("pdAdd").onclick = () => prodQty(+1);
+      }
+    }
+    function prodQty(delta) { changeQty(currentProductId, delta); renderProduct(); }
 
     // ---------- Админка (только для админов) ----------
     const CITY_OPTS = [["minsk", "Минск"], ["slutsk", "Слуцк"], ["turov", "Туров"]];
