@@ -293,7 +293,7 @@
       <div style="font-weight:800;margin-bottom:4px">➕ Новый товар</div>
       <label>Точка (город)</label><select id="afCity"></select>
       <label>Категория</label><select id="afCat"></select>
-      <label>Название</label><input id="afName" placeholder="Например: Elf Bar BC 20000">
+      <div id="nameField"><label>Название</label><input id="afName" placeholder="Например: Vaporesso XROS"></div>
       <label>Цена (Br)</label><input id="afPrice" inputmode="decimal" placeholder="18.5">
 
       <!-- Одноразки/жидкости: бренд из базы, свои поля, вкусы с остатком -->
@@ -794,6 +794,7 @@
       const variantMode = (cat === "disposable" || cat === "liquid");
       $("dispFields").style.display = variantMode ? "block" : "none";
       $("genFields").style.display = variantMode ? "none" : "block";
+      $("nameField").style.display = variantMode ? "none" : "block";   // имя собираем сами
       $("puffsBlock").style.display = cat === "disposable" ? "block" : "none";
       $("liquidBlock").style.display = cat === "liquid" ? "block" : "none";
       if (variantMode) {
@@ -832,23 +833,31 @@
     }
 
     $("afAdd").onclick = async () => {
-      const category = $("afCat").value, name = $("afName").value.trim(), price = $("afPrice").value;
-      if (!name || price === "") { alertMsg("Заполните название и цену."); return; }
-      let body;
+      const category = $("afCat").value, price = $("afPrice").value;
+      if (price === "") { alertMsg("Укажите цену."); return; }
+      let body, name;
       if (category === "disposable" || category === "liquid") {
+        const b = brands.find(x => x.id === +$("dispBrand").value);
+        if (!b) { alertMsg("Выберите бренд (создайте его в разделе «Бренды»)."); return; }
         const variants = [];
         $("dispFlavors").querySelectorAll(".admrow").forEach(row => {
           const chk = row.querySelector(".dfchk");
           if (chk && chk.checked) variants.push({ flavor: row.dataset.flavor, stock: row.querySelector(".dfst").value || "0" });
         });
         if (!variants.length) { alertMsg("Отметьте хотя бы один вкус."); return; }
-        const b = brands.find(x => x.id === +$("dispBrand").value);
+        // Название собираем сами из бренда и характеристик.
+        if (category === "disposable")
+          name = [b.name, $("dispPuffsNum").value].filter(v => v && v !== "0").join(" ");
+        else
+          name = [b.name, $("liqVolume").value.trim(), $("liqStrength").value.trim()].filter(Boolean).join(" ");
         body = { initData, city: $("afCity").value, category, name, price,
           description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
-          brand: b ? b.name : "", variants };
+          brand: b.name, variants };
         if (category === "disposable") body.puffs = $("dispPuffsNum").value;
         else { body.strength = $("liqStrength").value.trim(); body.volume = $("liqVolume").value.trim(); }
       } else {
+        name = $("afName").value.trim();
+        if (!name) { alertMsg("Заполните название."); return; }
         if ($("afStock").value === "") { alertMsg("Укажите остаток."); return; }
         body = { initData, city: $("afCity").value, category, name, price,
           stock: $("afStock").value, description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
