@@ -190,7 +190,8 @@
     .frow.out { opacity: .5; }
     .frow .fname { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .frow .fname small { color: var(--hint); font-weight: 400; margin-left: 5px; }
-    .frow .fout { color: var(--hint); font-size: 12px; flex: 0 0 auto; }
+    .frow .fout { color: var(--hint); font-size: 12px; }
+    .fctrl { flex: 0 0 80px; display: flex; align-items: center; justify-content: flex-end; }
     .addbtn { width: 30px; height: 30px; border-radius: 9px; border: none; background: var(--accent); color: var(--on-accent); font-size: 20px; line-height: 1; flex: 0 0 auto; }
     .fstep { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
     .fstep button { width: 26px; height: 26px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-accent); font-size: 16px; line-height: 1; }
@@ -772,7 +773,7 @@
                   ? `<div class="fstep"><button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div>`
                   : `<button class="addbtn" data-fladd="${f}">+</button>`);
             return `<div class="frow ${qty>0?'on':''} ${out?'out':''}">
-                <span class="fname">${f}${out ? '' : ` <small>${v.stock} шт</small>`}</span>${right}</div>`;
+                <span class="fname">${f}${out ? '' : ` <small>${v.stock} шт</small>`}</span><div class="fctrl">${right}</div></div>`;
           }).join("") + `</div>`;
       }
 
