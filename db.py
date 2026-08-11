@@ -141,6 +141,7 @@ def init_db():
     conn.commit()
     conn.close()
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
+    _ensure_user_columns()      # coins / referred_by у пользователей
     seed_locations()            # добавит стартовые точки, если таблица пустая
 
 
@@ -161,6 +162,19 @@ def _ensure_product_columns():
     for c in ("brand", "flavor", "strength", "volume"):
         if c not in cols:
             cur.execute(f"ALTER TABLE products ADD COLUMN {c} TEXT")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_user_columns():
+    """Добавляет колонки бонусов пользователю, если их ещё нет."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "users")
+    if "coins" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN coins INTEGER DEFAULT 0")
+    if "referred_by" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN referred_by BIGINT")
     conn.commit()
     conn.close()
 
@@ -198,9 +212,77 @@ def set_age_ok(user_id):
             (user_id,),
         )
     else:
-        cur.execute("INSERT OR REPLACE INTO users (user_id, age_ok) VALUES (?, 1)", (user_id,))
+        # ON CONFLICT (а не REPLACE) — чтобы не затирать coins/referred_by
+        cur.execute(
+            "INSERT INTO users (user_id, age_ok) VALUES (?, 1) "
+            "ON CONFLICT(user_id) DO UPDATE SET age_ok = 1", (user_id,))
     conn.commit()
     conn.close()
+
+
+# ---------- Пользователи: бонусы и рефералы ----------
+
+def ensure_user(user_id):
+    """Создаёт строку пользователя, если её ещё нет."""
+    conn = connect()
+    cur = conn.cursor()
+    if USE_PG:
+        cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+    else:
+        cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_user_row(user_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM users WHERE user_id = %s"), (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def add_coins(user_id, n):
+    ensure_user(user_id)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET coins = COALESCE(coins, 0) + %s WHERE user_id = %s"), (int(n), user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_coins(user_id):
+    row = get_user_row(user_id)
+    return row["coins"] if row and row["coins"] is not None else 0
+
+
+def count_referrals(user_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COUNT(*) AS c FROM users WHERE referred_by = %s"), (user_id,))
+    c = cur.fetchone()["c"]
+    conn.close()
+    return c
+
+
+def set_referrer_once(user_id, ref_id):
+    """Записывает пригласившего, если он ещё не задан и это не сам пользователь.
+    Возвращает True, если запись применилась (тогда наградой занимается вызывающий)."""
+    if not ref_id or ref_id == user_id:
+        return False
+    ensure_user(user_id)
+    row = get_user_row(user_id)
+    if row and row["referred_by"]:
+        return False                      # реферер уже есть — второй раз не начисляем
+    if not get_user_row(ref_id):
+        return False                      # пригласивший должен существовать
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET referred_by = %s WHERE user_id = %s"), (ref_id, user_id))
+    conn.commit()
+    conn.close()
+    return True
 
 
 # ---------- Настройки магазина ----------

@@ -199,6 +199,11 @@
     .secthead::after { content: "▼"; color: var(--hint); font-size: 12px; transition: transform .2s; }
     details[open] > .secthead::after { transform: rotate(180deg); }
     .sectbody { padding: 0 16px 16px; }
+    /* Бонусы */
+    .bonuswrap { padding: 16px; }
+    .bonushero { background: linear-gradient(135deg, var(--accent), var(--brand-neon)); color: #04232a; border-radius: 20px; padding: 28px; text-align: center; margin-bottom: 16px; box-shadow: var(--shadow); }
+    .bonuscoin { font-size: 40px; font-weight: 800; }
+    .bonuslab { font-size: 13px; opacity: .85; margin-top: 4px; font-weight: 600; }
     /* Статистика */
     .statgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 6px; }
     .statcard { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 14px; }
@@ -398,10 +403,7 @@
 
     <section class="tab" id="tab-cart"></section>
     <section class="tab" id="tab-fav"></section>
-    <section class="tab" id="tab-bonus">
-      <div class="empty"><div class="circ">🎁</div><h3>Бонусы скоро</h3>
-        <p>Колесо фортуны, розыгрыши и рефералы появятся здесь.</p></div>
-    </section>
+    <section class="tab" id="tab-bonus"></section>
     <section class="tab" id="tab-profile"></section>
   </div>
 
@@ -724,6 +726,7 @@
       renderNav();
       if (id === "cart") renderCart();
       if (id === "fav") renderFav();
+      if (id === "bonus") renderBonus();
       if (id === "profile") renderProfile();
       window.scrollTo(0, 0);
     }
@@ -863,10 +866,12 @@
     async function start() {
       initTheme();
       try {
-        const r = await fetch("/api/me", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const startParam = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || "";
+        const r = await fetch("/api/me", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, start_param: startParam }) });
         me = await r.json();
         if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
         renderNav();
+        fetchBonus();   // подтянуть баланс коинов (для профиля/бонусов)
         if (me.age_ok) loadCatalog(); else $("ageView").classList.add("show");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
@@ -1146,7 +1151,7 @@
       $("tab-profile").innerHTML = `<div class="prof">
         <div class="profcard"><div class="avatar">${esc(letter)}</div>
           <div><div class="pn">${esc(name)}</div><div class="pid">ID: ${(tgUser && tgUser.id) || "—"}</div></div>
-          <div class="coins"><b>0</b><small>VAPECOINS</small></div></div>
+          <div class="coins"><b>${bonus.coins || 0}</b><small>VAPECOINS</small></div></div>
         <div class="plist">
           ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>` : ""}
           <div class="prow"><span>${dark ? "🌙" : "☀️"} Тёмная тема</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
@@ -1157,6 +1162,50 @@
       $("themeSwitch").onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark");
       if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
       $("openMyOrders").onclick = openMyOrders;
+    }
+
+    // ---------- Бонусы (vapecoins + рефералы) ----------
+    let bonus = { coins: 0, referrals: 0, ref_link: "", referral_bonus: 50 };
+    async function fetchBonus() {
+      try {
+        const r = await fetch("/api/bonus", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (d.ok) bonus = d;
+      } catch (e) {}
+    }
+    async function renderBonus() {
+      $("tab-bonus").innerHTML = `<p style="color:var(--hint);padding:16px">Загрузка…</p>`;
+      await fetchBonus();
+      const share = bonus.ref_link
+        ? `<button class="bigbtn" id="refShare">Пригласить друга</button>
+           <button class="closebtn" id="refCopy">Скопировать ссылку</button>`
+        : `<p style="color:var(--hint)">Ссылка появится чуть позже.</p>`;
+      $("tab-bonus").innerHTML = `<div class="bonuswrap">
+        <div class="bonushero">
+          <div class="bonuscoin">🪙 ${bonus.coins || 0}</div>
+          <div class="bonuslab">ваши VAPECOINS</div>
+        </div>
+        <div class="card-block" style="text-align:left">
+          <div style="font-weight:800;margin-bottom:6px">👥 Приведи друга</div>
+          <p style="color:var(--hint);font-size:14px;margin:0 0 12px">
+            Друг открывает магазин по вашей ссылке — вы получаете <b>${bonus.referral_bonus}</b> коинов.
+            Приглашено друзей: <b>${bonus.referrals || 0}</b>.</p>
+          ${share}
+        </div>
+        <div class="card-block" style="text-align:left">
+          <div style="font-weight:800;margin-bottom:6px">🛍 Коины за покупки</div>
+          <p style="color:var(--hint);font-size:14px;margin:0">За каждый выданный заказ начисляем коины — 1 коин за 1 Br. Дальше добавим, на что их тратить.</p>
+        </div>
+      </div>`;
+      if ($("refShare")) $("refShare").onclick = () => {
+        const text = "Загляни в наш вейп-магазин 👇";
+        const url = `https://t.me/share/url?url=${encodeURIComponent(bonus.ref_link)}&text=${encodeURIComponent(text)}`;
+        if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank");
+      };
+      if ($("refCopy")) $("refCopy").onclick = () => {
+        navigator.clipboard && navigator.clipboard.writeText(bonus.ref_link);
+        alertMsg("Ссылка скопирована ✅");
+      };
     }
 
     $("pickupClose").onclick = () => closeOverlay($("pickupOverlay"));

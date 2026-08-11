@@ -35,6 +35,16 @@ db.init_db()
 # Отдельный экземпляр бота — ТОЛЬКО чтобы отправлять сообщения/картинки.
 tg = telebot.TeleBot(BOT_TOKEN)
 
+# Имя бота для реферальных ссылок (t.me/<bot>?startapp=...).
+try:
+    BOT_USERNAME = tg.get_me().username
+except Exception as e:
+    print(f"Не смог узнать имя бота: {e}")
+    BOT_USERNAME = ""
+
+REFERRAL_BONUS = 50        # vapecoins пригласившему за нового друга
+COINS_PER_BYN = 1          # vapecoins клиенту за каждый Br выданного заказа
+
 app = Flask(__name__, static_folder="webapp", static_url_path="")
 
 # DEV_MODE=1 — разрешить пользоваться из обычного браузера (без Telegram) для локальной проверки.
@@ -112,6 +122,18 @@ def api_me():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
+    db.ensure_user(uid)
+
+    # Реферал: friend открыл приложение по ссылке ...startapp=refN
+    start_param = str(data.get("start_param") or "")
+    if start_param.startswith("ref"):
+        try:
+            ref_id = int(start_param[3:])
+            if db.set_referrer_once(uid, ref_id):
+                db.add_coins(ref_id, REFERRAL_BONUS)
+        except (TypeError, ValueError):
+            pass
+
     return jsonify({"ok": True, "age_ok": db.is_age_ok(uid), "is_admin": is_admin(uid)})
 
 
@@ -332,6 +354,23 @@ def api_my_orders():
         return jsonify({"ok": False, "error": "auth"}), 401
     orders = [_order_json(o) for o in db.get_orders_by_user(int(user["id"]))]
     return jsonify({"ok": True, "orders": orders})
+
+
+@app.route("/api/bonus", methods=["POST"])
+def api_bonus():
+    """Бонусы клиента: баланс vapecoins, число приглашённых, реферальная ссылка."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+    db.ensure_user(uid)
+    link = f"https://t.me/{BOT_USERNAME}?startapp=ref{uid}" if BOT_USERNAME else ""
+    return jsonify({"ok": True,
+                    "coins": db.get_coins(uid),
+                    "referrals": db.count_referrals(uid),
+                    "ref_link": link,
+                    "referral_bonus": REFERRAL_BONUS})
 
 
 # ============================================================
@@ -557,6 +596,8 @@ def api_admin_order_status():
         _notify_client(client_id, f"✅ Оплата по заказу #{oid} подтверждена!\n"
                                   f"Ждём вас {order['pickup_time']}. Спасибо! 🌿")
     elif action == "issued":
+        if order["status"] != "issued":                 # начисляем коины один раз
+            db.add_coins(client_id, int(order["total"]) * COINS_PER_BYN)
         db.set_order_status(oid, "issued")
         _notify_client(client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":

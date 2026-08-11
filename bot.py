@@ -192,6 +192,8 @@ def handle_order_action(call, chat_id, action, order_id):
                    f"✅ Оплата по заказу #{order_id} подтверждена!\n"
                    f"Ждём вас {order['pickup_time']}. Спасибо! 🌿")
     elif action == "issued":
+        if order["status"] != "issued":                # коины клиенту один раз
+            db.add_coins(client_id, int(order["total"]))
         db.set_order_status(order_id, "issued")
         bot.answer_callback_query(call.id, "Отмечено: выдан 📦")
         _safe_send(client_id,
