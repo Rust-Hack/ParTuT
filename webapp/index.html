@@ -182,30 +182,31 @@
     .fsel.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
     .fsel:disabled { opacity: .45; }
 
-    /* Сплэш-заставка: облако собирается линией, затем неоновая вспышка.
-       Неоновая подсветка — по краям самой заставки (не в магазине). */
+    /* Сплэш-заставка: облако собирается линией, затем плавная неоновая пульсация,
+       синхронно свечение логотипа и краёв заставки (не в магазине). */
     #splash { position: fixed; inset: 0; z-index: 100; background: #0a171c;
       display: flex; align-items: center; justify-content: center; overflow: hidden;
-      box-shadow: inset 0 0 34px rgba(95,242,242,.30), inset 0 0 5px rgba(95,242,242,.5);
-      border: 1px solid rgba(95,242,242,.18);
-      animation: splashOut .6s ease 2.7s forwards; }
+      border: 1px solid transparent;
+      animation: edgePulse 1.7s ease-in-out 1.55s both, splashOut .6s ease 3.2s forwards; }
     .splash-logo { text-align: center;
-      animation: neonBuzz 1s ease 1.55s both, logoOut .35s ease 2.5s forwards; }
+      animation: glowPulse 1.7s ease-in-out 1.55s both, logoOut .4s ease 3.2s forwards; }
     .splash-cloud { width: 140px; height: 140px; color: #5ff2f2; }
     .splash-cloud path { fill: none; stroke-dasharray: 100; stroke-dashoffset: 100;
       animation: cloudDraw 1.5s ease .2s forwards; }
     @keyframes cloudDraw { to { stroke-dashoffset: 0; } }
-    /* «включение неона» — мерцание свечения в конце сборки */
-    @keyframes neonBuzz {
+    /* Плавно разгорается и гаснет — синхронно с краями */
+    @keyframes glowPulse {
       0%   { filter: drop-shadow(0 0 0 transparent); }
-      20%  { filter: drop-shadow(0 0 9px rgba(95,242,242,.65)); }
-      30%  { filter: drop-shadow(0 0 1px rgba(95,242,242,.2)); }
-      45%  { filter: drop-shadow(0 0 11px rgba(95,242,242,.75)); }
-      60%  { filter: drop-shadow(0 0 3px rgba(95,242,242,.4)); }
-      100% { filter: drop-shadow(0 0 8px rgba(95,242,242,.6)) drop-shadow(0 0 18px rgba(95,242,242,.5)); }
+      50%  { filter: drop-shadow(0 0 11px rgba(95,242,242,.8)) drop-shadow(0 0 26px rgba(95,242,242,.55)); }
+      100% { filter: drop-shadow(0 0 0 transparent); }
+    }
+    @keyframes edgePulse {
+      0%   { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
+      50%  { box-shadow: inset 0 0 36px rgba(95,242,242,.35), inset 0 0 6px rgba(95,242,242,.55); border-color: rgba(95,242,242,.22); }
+      100% { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
     }
     .splash-title { font-size: 36px; font-weight: 800; letter-spacing: 1px; margin-top: 8px;
-      color: #fff; text-shadow: 0 0 16px rgba(95,242,242,.7);
+      color: #fff;
       opacity: 0; animation: splashFade .6s ease 1s forwards; }
     .splash-sub { font-size: 13px; letter-spacing: 5px; color: #8fd6da;
       opacity: 0; animation: splashFade .6s ease 1.25s forwards; }
@@ -1058,7 +1059,7 @@
     }
 
     // Убираем заставку после проигрыша анимации, чтобы не мешала кликам.
-    setTimeout(() => { const s = document.getElementById("splash"); if (s) s.style.display = "none"; }, 3450);
+    setTimeout(() => { const s = document.getElementById("splash"); if (s) s.style.display = "none"; }, 4000);
 
     start();
   </script>
