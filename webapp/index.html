@@ -296,14 +296,25 @@
       <label>Название</label><input id="afName" placeholder="Например: Elf Bar BC 20000">
       <label>Цена (Br)</label><input id="afPrice" inputmode="decimal" placeholder="18.5">
 
-      <!-- Одноразки: бренд из базы, ползунок затяжек, вкусы с остатком -->
+      <!-- Одноразки/жидкости: бренд из базы, свои поля, вкусы с остатком -->
       <div id="dispFields" style="display:none">
         <label>Бренд</label><select id="dispBrand"></select>
-        <label>Кол-во затяжек</label>
-        <div style="display:flex;align-items:center;gap:12px">
-          <input type="range" id="dispPuffs" min="0" max="40000" step="100" value="0" style="flex:1">
-          <input type="number" id="dispPuffsNum" min="0" step="100" value="0" style="width:96px;text-align:center">
+
+        <div id="puffsBlock">
+          <label>Кол-во затяжек</label>
+          <div style="display:flex;align-items:center;gap:12px">
+            <input type="range" id="dispPuffs" min="0" max="40000" step="100" value="0" style="flex:1">
+            <input type="number" id="dispPuffsNum" min="0" step="100" value="0" style="width:96px;text-align:center">
+          </div>
         </div>
+
+        <div id="liquidBlock" style="display:none">
+          <div class="rowf">
+            <div><label>Крепость (мг)</label><input id="liqStrength" placeholder="20 мг"></div>
+            <div><label>Объём (мл)</label><input id="liqVolume" placeholder="30 мл"></div>
+          </div>
+        </div>
+
         <label>Вкусы и остаток (отметьте нужные)</label>
         <div id="dispFlavors"></div>
       </div>
@@ -611,7 +622,7 @@
       if (p.brand) info.push(["Бренд", p.brand]);
       if (p.flavor) info.push(["Вкус", p.flavor]);
       if (p.strength) info.push(["Крепость", p.strength]);
-      if (p.volume) info.push([hasVariants(p) ? "Затяжек" : "Объём / затяжки", p.volume]);
+      if (p.volume) info.push([p.category === "disposable" ? "Затяжек" : "Объём", p.volume]);
       const infoHtml = info.length
         ? `<div class="pd-info-wrap">${info.map(([k, v]) => `<div class="pd-info"><span>${k}</span><b>${esc(v)}</b></div>`).join("")}</div>` : "";
 
@@ -779,14 +790,17 @@
 
     // Переключение формы: одноразки vs обычный товар
     function updateAddMode() {
-      const disp = $("afCat").value === "disposable";
-      $("dispFields").style.display = disp ? "block" : "none";
-      $("genFields").style.display = disp ? "none" : "block";
-      if (disp) {
-        const list = brands.filter(b => b.category === "disposable");
+      const cat = $("afCat").value;
+      const variantMode = (cat === "disposable" || cat === "liquid");
+      $("dispFields").style.display = variantMode ? "block" : "none";
+      $("genFields").style.display = variantMode ? "none" : "block";
+      $("puffsBlock").style.display = cat === "disposable" ? "block" : "none";
+      $("liquidBlock").style.display = cat === "liquid" ? "block" : "none";
+      if (variantMode) {
+        const list = brands.filter(b => b.category === cat);
         $("dispBrand").innerHTML = list.length
           ? list.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("")
-          : `<option value="">— сначала добавьте бренд выше —</option>`;
+          : `<option value="">— сначала добавьте бренд этой категории выше —</option>`;
         renderDispFlavors();
       }
     }
@@ -813,6 +827,7 @@
       $("afName").value = ""; $("afPrice").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
       $("afBrand").value = ""; $("afFlavor").value = ""; $("afStrength").value = ""; $("afVolume").value = "";
       $("dispPuffs").value = 0; $("dispPuffsNum").value = 0;
+      $("liqStrength").value = ""; $("liqVolume").value = "";
       updateAddMode();
     }
 
@@ -820,7 +835,7 @@
       const category = $("afCat").value, name = $("afName").value.trim(), price = $("afPrice").value;
       if (!name || price === "") { alertMsg("Заполните название и цену."); return; }
       let body;
-      if (category === "disposable") {
+      if (category === "disposable" || category === "liquid") {
         const variants = [];
         $("dispFlavors").querySelectorAll(".admrow").forEach(row => {
           const chk = row.querySelector(".dfchk");
@@ -830,7 +845,9 @@
         const b = brands.find(x => x.id === +$("dispBrand").value);
         body = { initData, city: $("afCity").value, category, name, price,
           description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
-          brand: b ? b.name : "", puffs: $("dispPuffsNum").value, variants };
+          brand: b ? b.name : "", variants };
+        if (category === "disposable") body.puffs = $("dispPuffsNum").value;
+        else { body.strength = $("liqStrength").value.trim(); body.volume = $("liqVolume").value.trim(); }
       } else {
         if ($("afStock").value === "") { alertMsg("Укажите остаток."); return; }
         body = { initData, city: $("afCity").value, category, name, price,

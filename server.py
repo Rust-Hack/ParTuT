@@ -334,12 +334,13 @@ def api_admin_add():
     brand = (data.get("brand") or "").strip()
     strength = (data.get("strength") or "").strip()
 
-    # Товар-модель со вкусами (одноразки): приходит список variants + затяжки (puffs).
+    # Товар-модель со вкусами (одноразки/жидкости): список variants + свои поля.
+    # Объём: у одноразок приходит как puffs (затяжки), у жидкостей как volume (мл).
     variants = data.get("variants")
     if isinstance(variants, list) and variants:
-        puffs = str(data.get("puffs") or "").strip()
+        vol = str(data.get("puffs") or data.get("volume") or "").strip()
         pid = db.add_product(city, category, name, max(0.0, price), 0, is_hit, desc,
-                             brand=brand, flavor="", strength=strength, volume=puffs)
+                             brand=brand, flavor="", strength=strength, volume=vol)
         for v in variants:
             fl = str(v.get("flavor", "")).strip()
             try:
