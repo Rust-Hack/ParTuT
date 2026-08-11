@@ -806,6 +806,34 @@
       }, { passive: true });
     })();
 
+    // ---------- Нативная кнопка «Назад» Telegram ----------
+    // Показываем её, когда открыт экран/шторка, и закрываем верхний слой (а не приложение).
+    function managedTopLayer() {
+      const ov = [...document.querySelectorAll(".overlay.show")];
+      if (ov.length) return { type: "overlay", el: ov[ov.length - 1] };
+      // экраны с кнопкой в шапке (18+/оплата/готово не трогаем — у них свой поток)
+      const views = [...document.querySelectorAll(".view.show")].filter(v => v.querySelector(".viewhead button"));
+      if (views.length) return { type: "view", el: views[views.length - 1] };
+      return null;
+    }
+    function updateBackButton() {
+      if (!tg || !tg.BackButton) return;
+      if (managedTopLayer()) tg.BackButton.show(); else tg.BackButton.hide();
+    }
+    if (tg && tg.BackButton) {
+      tg.BackButton.onClick(() => {
+        const top = managedTopLayer();
+        if (!top) return;
+        if (top.type === "overlay") closeOverlay(top.el);
+        else top.el.querySelector(".viewhead button").click();
+        setTimeout(updateBackButton, 60);
+      });
+      const obs = new MutationObserver(() => updateBackButton());
+      document.querySelectorAll(".view, .overlay").forEach(el =>
+        obs.observe(el, { attributes: true, attributeFilter: ["class"] }));
+      updateBackButton();
+    }
+
     async function start() {
       initTheme();
       try {
