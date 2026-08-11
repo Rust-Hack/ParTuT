@@ -41,10 +41,6 @@
     .brand .logo { width: 30px; height: 30px; color: var(--brand-neon); }
     html[data-theme="dark"] .brand .logo { filter: drop-shadow(0 0 3px var(--brand-glow)) drop-shadow(0 0 8px var(--brand-glow)); }
     html[data-theme="dark"] .brand .logo path { fill: rgba(95,242,242,.10); }
-    .hactions { display: flex; align-items: center; gap: 10px; }
-    .hclose { width: 34px; height: 34px; flex: 0 0 auto; border-radius: 10px; border: 1px solid var(--line);
-      background: var(--surface-2); color: var(--text); font-size: 16px; line-height: 1; padding: 0; }
-    html[data-theme="dark"] .hclose { box-shadow: 0 0 8px var(--brand-glow); border-color: var(--accent); }
     .brand-text { font-size: 19px; font-weight: 800; letter-spacing: .5px; }
     html[data-theme="dark"] .brand-text { color: #fff; text-shadow: 0 0 10px var(--brand-glow); }
     .point { display: flex; align-items: center; gap: 6px; background: var(--surface-2); color: var(--text);
@@ -300,10 +296,7 @@
       <svg class="logo" viewBox="-2 2 28 20" fill="none"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
       <span class="brand-text">ParTuT</span>
     </div>
-    <div class="hactions">
-      <button class="point" id="pointBtn">📍 <span id="pointName">Выбери точку</span> ▾</button>
-      <button class="hclose" id="closeBtn" aria-label="Закрыть">✕</button>
-    </div>
+    <button class="point" id="pointBtn">📍 <span id="pointName">Выбери точку</span> ▾</button>
   </div>
 
   <div class="content">
@@ -479,7 +472,7 @@
       function applySafeArea() {
         var sa  = tg.safeAreaInset        || { top: 0 };  // вырез экрана (чёлка/часы)
         var csa = tg.contentSafeAreaInset || { top: 0 };  // плавающие кнопки Telegram
-        var top = (sa.top || 0) + (csa.top || 0);
+        var top = (sa.top || 0) + (csa.top || 0) + 10;    // +10px запас, чтобы шапка была ниже кнопок Telegram
         document.documentElement.style.setProperty("--safe-top", top + "px");
       }
       try {
@@ -494,22 +487,10 @@
         }
       } catch (e) {}
 
-      // На случай штатного закрытия (плавающий ✕ Telegram, свайп) — спросить подтверждение.
+      // Закрытие — на родной кнопке Telegram (в полноэкранном режиме она справа вверху).
+      // Спрашиваем подтверждение перед закрытием (плавающий ✕ Telegram, свайп).
       try { if (tg.enableClosingConfirmation) tg.enableClosingConfirmation(); } catch (e) {}
     }
-
-    // Своя кнопка ✕ в шапке — спрашиваем подтверждение и закрываем приложение.
-    (function () {
-      var closeBtn = document.getElementById("closeBtn");
-      if (!closeBtn) return;
-      closeBtn.addEventListener("click", function () {
-        if (tg && tg.showConfirm) {
-          tg.showConfirm("Закрыть приложение ParTuT?", function (ok) { if (ok) tg.close(); });
-        } else if (window.confirm("Закрыть приложение ParTuT?")) {
-          if (tg && tg.close) tg.close(); else window.close();
-        }
-      });
-    })();
     const initData = tg ? tg.initData : "";
     const tgUser = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
 
