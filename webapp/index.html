@@ -112,6 +112,14 @@
     .citem .ci-name { font-weight: 700; font-size: 14px; }
     .citem .ci-price { color: var(--accent); font-weight: 700; font-size: 14px; margin-top: 2px; }
     .checkoutbar { padding: 8px 16px 16px; }
+    .upsell-h { font-weight: 800; margin: 6px 16px 10px; }
+    .upsell { display: flex; gap: 10px; overflow-x: auto; padding: 0 16px 6px; scrollbar-width: none; }
+    .upsell::-webkit-scrollbar { display: none; }
+    .ucard { flex: 0 0 122px; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .ucard img, .ucard .uph { width: 100%; height: 78px; object-fit: contain; background: var(--img-bg); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 34px; }
+    .ucard .uname { font-size: 12px; font-weight: 600; line-height: 1.25; height: 2.5em; overflow: hidden; }
+    .uadd { border: none; background: var(--accent); color: var(--on-accent); border-radius: 9px; padding: 7px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    html[data-theme="dark"] .ucard { border: 1px solid rgba(95,242,242,.20); box-shadow: var(--shadow), 0 0 12px rgba(95,242,242,.08); }
     .bigbtn { width: 100%; border: none; background: var(--accent); color: var(--on-accent); padding: 16px; border-radius: 16px;
       font-size: 16px; font-weight: 800; display: flex; justify-content: center; gap: 10px; align-items: center; }
     .bigbtn:disabled { opacity: .6; }
@@ -1099,9 +1107,29 @@
           <div style="flex:1"><div class="ci-name">${esc(p.name)}${it.flavor ? ` — ${esc(it.flavor)}` : ""}</div><div class="ci-price">${(p.price*it.qty).toFixed(2)} ${CUR}</div></div>
           <div class="mini"><button data-dec="${p.id}"${fattr}>−</button><span>${it.qty}</span><button data-inc="${p.id}"${fattr}>+</button></div></div>`;
       }).join("");
-      $("tab-cart").innerHTML = `<div class="clist">${rows}</div><div class="checkoutbar"><button class="bigbtn" id="checkout">Оформить · ${cartTotal().toFixed(2)} ${CUR}</button></div>`;
+      const ups = upsellProducts();
+      const upsHtml = ups.length
+        ? `<div class="upsell-h">Добавьте к заказу 🔥</div><div class="upsell">${ups.map(ucard).join("")}</div>`
+        : "";
+      $("tab-cart").innerHTML = `<div class="clist">${rows}</div>${upsHtml}<div class="checkoutbar"><button class="bigbtn" id="checkout">Оформить · ${cartTotal().toFixed(2)} ${CUR}</button></div>`;
       bindCardButtons($("tab-cart"));
       $("checkout").onclick = () => $("pickupOverlay").classList.add("show");
+    }
+    // Допродажа: доступные товары этой точки (хиты вперёд), которых ещё нет в корзине
+    function upsellProducts() {
+      const inCart = new Set(Object.values(cart).map(it => it.product_id));
+      const pool = allProducts.filter(p => p.city === city && p.stock > 0 && !inCart.has(p.id));
+      pool.sort((a, b) => (b.is_hit ? 1 : 0) - (a.is_hit ? 1 : 0));
+      return pool.slice(0, 8);
+    }
+    function ucard(p) {
+      const photo = p.photo_url
+        ? `<img src="${p.photo_url}" alt="" data-open="${p.id}">`
+        : `<div class="uph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
+      const btn = hasVariants(p)
+        ? `<button class="uadd" data-pick="${p.id}">Выбрать</button>`
+        : `<button class="uadd" data-inc="${p.id}">+ ${p.price.toFixed(2)} ${CUR}</button>`;
+      return `<div class="ucard">${photo}<div class="uname" data-open="${p.id}">${esc(p.name)}</div>${btn}</div>`;
     }
 
     function renderFav() {
