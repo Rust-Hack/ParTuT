@@ -849,7 +849,7 @@
         if (category === "disposable")
           name = [b.name, $("dispPuffsNum").value].filter(v => v && v !== "0").join(" ");
         else
-          name = [b.name, $("liqVolume").value.trim(), $("liqStrength").value.trim()].filter(Boolean).join(" ");
+          name = b.name;   // жидкость: название = бренд; объём/крепость — бейджами на карточке
         body = { initData, city: $("afCity").value, category, name, price,
           description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
           brand: b.name, variants };
