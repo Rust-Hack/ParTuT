@@ -192,9 +192,10 @@
       background-size: 118px 58px;
       animation: edgePulse 1.4s ease-in-out 1.5s both, splashOut .6s ease 3.1s forwards; }
     .splash-logo { text-align: center; animation: logoOut .4s ease 3.1s forwards; }
-    .splash-cloud { width: 140px; height: 140px; color: #5ff2f2; }
+    .splash-cloud { width: 140px; height: 140px; color: #5ff2f2;
+      animation: glowPulse 1.4s ease-in-out 1.5s both; }
     .splash-cloud path { fill: none; stroke-dasharray: 100; stroke-dashoffset: 100;
-      animation: cloudDraw 1.5s ease .2s forwards, glowPulse 1.4s ease-in-out 1.5s both; }
+      animation: cloudDraw 1.5s ease .2s forwards; }
     @keyframes cloudDraw { to { stroke-dashoffset: 0; } }
     /* 3 вспышки, каждая ярче — синхронно с краями */
     @keyframes glowPulse {
@@ -221,11 +222,11 @@
     @keyframes splashFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
     @keyframes textPulse {
       0% { text-shadow: none; }
-      14% { text-shadow: 0 0 6px rgba(95,242,242,.4); }
+      14% { text-shadow: 0 0 3px rgba(95,242,242,.5); }
       28% { text-shadow: none; }
-      50% { text-shadow: 0 0 12px rgba(95,242,242,.65); }
+      50% { text-shadow: 0 0 5px rgba(95,242,242,.7); }
       64% { text-shadow: none; }
-      86%,100% { text-shadow: 0 0 16px rgba(95,242,242,.9); }
+      86%,100% { text-shadow: 0 0 4px rgba(95,242,242,.9), 0 0 8px rgba(95,242,242,.5); }
     }
     @keyframes logoOut { to { opacity: 0; } }
     @keyframes splashOut { to { opacity: 0; visibility: hidden; } }
