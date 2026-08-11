@@ -139,7 +139,7 @@
     .overlay.show .sheet { animation: sheetUp .3s cubic-bezier(.22,.61,.36,1); }
     @keyframes ovFade { from { opacity: 0; } to { opacity: 1; } }
     @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-    .sheet { position: relative; background: var(--surface); width: 100%; border-radius: 22px 22px 0 0; padding: 28px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
+    .sheet { position: relative; background: var(--surface); width: 100%; border-radius: 22px 22px 0 0; padding: 28px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
     .sheet::before { content: ""; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
     .sheet h2 { margin: 0 0 14px; font-size: 18px; }
     .opt { width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: none; padding: 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
@@ -781,17 +781,21 @@
     document.querySelectorAll(".overlay").forEach(ov => {
       const sheet = ov.querySelector(".sheet");
       if (!sheet) return;
-      let startY = 0, delta = 0, dragging = false;
+      let startY = 0, delta = 0, dragging = false, atTop = false;
       sheet.addEventListener("touchstart", (e) => {
-        if (sheet.scrollTop > 0) return;          // тянем, только когда шторка прокручена вверх
-        startY = e.touches[0].clientY; delta = 0; dragging = true;
-        sheet.style.transition = "none";
+        atTop = sheet.scrollTop <= 0;             // тянуть можно только от самого верха
+        startY = e.touches[0].clientY; delta = 0; dragging = false;
       }, { passive: true });
       sheet.addEventListener("touchmove", (e) => {
-        if (!dragging) return;
-        delta = Math.max(0, e.touches[0].clientY - startY);
+        const dy = e.touches[0].clientY - startY;
+        if (!dragging) {
+          if (atTop && dy > 6) { dragging = true; sheet.style.transition = "none"; }
+          else return;                            // обычная прокрутка внутри шторки
+        }
+        delta = Math.max(0, dy);
+        e.preventDefault();                        // не даём прокручиваться каталогу позади
         sheet.style.transform = `translateY(${delta}px)`;
-      }, { passive: true });
+      }, { passive: false });
       sheet.addEventListener("touchend", () => {
         if (!dragging) return;
         dragging = false;
