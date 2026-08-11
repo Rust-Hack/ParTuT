@@ -77,12 +77,12 @@
     .fav { position: absolute; top: 8px; left: 8px; width: 34px; height: 34px; border-radius: 50%; background: var(--surface);
       border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--hint); font-size: 17px; box-shadow: var(--shadow); }
     .fav.on { color: var(--danger); }
-    .cbody { padding: 10px 12px 12px; display: flex; flex-direction: column; flex: 1; }
+    .cbody { padding: 10px 13px 15px; display: flex; flex-direction: column; flex: 1; }
     .cname { font-size: 14px; font-weight: 700; line-height: 1.25; margin: 0 0 8px; }
-    .crow { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .cprice { color: var(--accent); font-size: 16px; font-weight: 800; white-space: nowrap; }
-    .cur { width: .62em; height: .9em; vertical-align: -.11em; display: inline-block; margin-left: 1px; }
-    .plus { width: 36px; height: 36px; border-radius: 12px; border: none; background: var(--accent); color: var(--on-accent); font-size: 22px; line-height: 1; }
+    .crow { margin-top: auto; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .cprice { color: var(--accent); font-size: 19px; font-weight: 800; white-space: nowrap; }
+    .cur { width: 1.15em; height: .82em; vertical-align: -.06em; display: inline-block; margin-left: 1px; }
+    .plus { width: 42px; height: 42px; border-radius: 12px; border: none; background: var(--accent); color: var(--on-accent); font-size: 24px; line-height: 1; }
     .plus:disabled { opacity: .4; }
     .mini { display: flex; align-items: center; gap: 8px; }
     .mini button { width: 30px; height: 30px; border-radius: 9px; border: none; background: var(--accent); color: var(--on-accent); font-size: 17px; line-height: 1; }
@@ -177,7 +177,7 @@
     .pd-step { display: flex; align-items: center; gap: 14px; background: var(--surface-2); border-radius: 14px; padding: 8px 12px; }
     .pd-step button { width: 38px; height: 38px; border-radius: 10px; border: none; background: var(--accent); color: var(--on-accent); font-size: 20px; }
     .pd-step span { font-weight: 800; min-width: 20px; text-align: center; font-size: 17px; }
-    .pickbtn { border: none; background: var(--accent); color: var(--on-accent); padding: 8px 14px; border-radius: 10px; font-size: 13px; font-weight: 700; }
+    .pickbtn { border: none; background: var(--accent); color: var(--on-accent); padding: 11px 22px; border-radius: 12px; font-size: 15px; font-weight: 700; }
     .fsel-wrap { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
     .fsel { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 12px; padding: 9px 13px; font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
     .fsel small { color: var(--hint); }
@@ -194,16 +194,16 @@
     html[data-theme="dark"] .prow,
     html[data-theme="dark"] .point,
     html[data-theme="dark"] .card-block {
-      border: 1px solid rgba(95,242,242,.13);
-      box-shadow: var(--shadow), 0 0 10px rgba(95,242,242,.05);
+      border: 1px solid rgba(95,242,242,.22);
+      box-shadow: var(--shadow), 0 0 15px rgba(95,242,242,.10);
     }
     html[data-theme="dark"] .chip.active {
-      box-shadow: 0 0 12px rgba(95,242,242,.4); border-color: var(--accent);
+      box-shadow: 0 0 16px rgba(95,242,242,.55); border-color: var(--accent);
     }
-    html[data-theme="dark"] .header { box-shadow: 0 1px 12px rgba(95,242,242,.06); }
+    html[data-theme="dark"] .header { box-shadow: 0 1px 16px rgba(95,242,242,.10); }
     html[data-theme="dark"] .nav {
-      border-top: 1px solid rgba(95,242,242,.16);
-      box-shadow: 0 -2px 16px rgba(95,242,242,.06);
+      border-top: 1px solid rgba(95,242,242,.28);
+      box-shadow: 0 -2px 20px rgba(95,242,242,.10);
     }
 
     /* Сплэш-заставка: кирпичная стена, облако собирается линией, затем 3 неоновые
@@ -458,7 +458,7 @@
     const CATS = { "": "Все товары", liquid: "Жидкости", podsystem: "Подсистемы", disposable: "Одноразки" };
     const CAT_EMOJI = { disposable: "🔋", liquid: "💧", podsystem: "🧩" };
     let locations = [];   // [{id, name}] — точки продаж, приходят из базы
-    const CUR = `<svg class="cur" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5v17"/><path d="M8 3.5h4.6a3.9 3.9 0 0 1 0 7.8H8"/><path d="M4.5 15.5h9.5"/></svg>`;
+    const CUR = `<svg class="cur" viewBox="0 0 30 24"><text x="0" y="18" font-size="20" font-weight="800" font-family="-apple-system,'Segoe UI',Roboto,Arial,sans-serif" fill="currentColor">Br</text></svg>`;
     const withUnit = (val, unit) => { val = String(val || "").trim(); if (!val) return ""; return /[a-zа-я%]/i.test(val) ? val : val + " " + unit; };
 
     let allProducts = [], cityList = [], city = null, cat = "", search = "";
