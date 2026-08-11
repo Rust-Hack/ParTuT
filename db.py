@@ -251,7 +251,7 @@ def add_product(city, category, name, price, stock, is_hit=0, description="",
 
 # Какие колонки разрешено менять (защита: имя колонки нельзя подставить параметром).
 _EDITABLE = {"name", "price", "stock", "is_hit", "description", "photo",
-             "brand", "flavor", "strength", "volume"}
+             "brand", "flavor", "strength", "volume", "category", "city"}
 
 
 def update_field(product_id, field, value):

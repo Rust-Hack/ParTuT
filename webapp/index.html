@@ -162,6 +162,9 @@
     .iconbtn { border: none; background: var(--surface-2); color: var(--text); width: 38px; height: 38px; border-radius: 10px; font-size: 16px; flex: 0 0 auto; }
     .iconbtn.danger { color: var(--danger); }
     .iconbtn.ok { background: var(--accent); color: var(--on-accent); }
+    .edphoto { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+    .edphoto img { width: 72px; height: 72px; object-fit: cover; border-radius: 12px; background: var(--img-bg); flex: 0 0 auto; }
+    .edphoto input[type=file] { flex: 1; min-width: 0; }
     .fchip { background: var(--surface-2); border-radius: 999px; padding: 6px 11px; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; }
     .fchip b { cursor: pointer; color: var(--hint); font-weight: 700; }
 
@@ -1080,30 +1083,85 @@
             <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
         }
         return `<div class="admrow">
-          <div class="an">${esc(p.name)}<small>${p.city} · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small></div>
-          <input class="ap" type="text" inputmode="decimal" value="${p.price}">
-          <input class="as" type="text" inputmode="numeric" value="${p.stock}">
-          <button class="iconbtn ok" data-save="${p.id}">💾</button>
+          <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small></div>
+          <button class="iconbtn" data-edit="${p.id}">✏️</button>
           <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
       }).join("");
-      $("adminList").querySelectorAll("[data-save]").forEach(b => b.onclick = () => saveAdminRow(+b.dataset.save, b));
       $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
       $("adminList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => delAdminRow(+b.dataset.del));
     }
 
-    // ----- Редактор товара-модели -----
-    let editId = null, editVariants = [];
+    // ----- Редактор товара -----
+    let editId = null, editVariants = [], editPhotoFile = null;
     $("editClose").onclick = () => $("editView").classList.remove("show");
 
     function openEdit(id) {
       const p = allProducts.find(x => x.id === id); if (!p) return;
       editId = id;
       editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock }));
+      editPhotoFile = null;
       renderEdit(p);
       $("editView").classList.add("show");
     }
 
+    // Общий блок замены фото — превью + выбор файла (для любого товара).
+    function editPhotoBlock(p) {
+      return `<label>Фото</label>
+        <div class="edphoto">
+          <img id="edPhotoPrev" alt="" src="${p.photo_url || ''}" ${p.photo_url ? '' : 'style="display:none"'}>
+          <input type="file" id="edPhoto" accept="image/*">
+        </div>`;
+    }
+    function editHitBlock(p) {
+      return `<div class="chk" style="margin-top:12px"><input type="checkbox" id="edHit" ${p.is_hit ? 'checked' : ''}>
+        <label for="edHit" style="margin:0">🔥 Отметить как «Хит»</label></div>`;
+    }
+    // Навесить превью выбранного файла (общее для обеих веток редактора).
+    function bindEditPhoto() {
+      const inp = $("edPhoto"); if (!inp) return;
+      inp.onchange = () => {
+        const f = inp.files[0]; editPhotoFile = f || null;
+        const prev = $("edPhotoPrev");
+        if (f && prev) { prev.src = URL.createObjectURL(f); prev.style.display = ""; }
+      };
+    }
+
     function renderEdit(p) {
+      const isVar = hasVariants(p);
+      const catOptions = CAT_OPTS.map(([c, n]) => `<option value="${c}" ${p.category === c ? 'selected' : ''}>${n}</option>`).join("");
+      const cityOptions = locations.map(l => `<option value="${esc(l.name)}" ${p.city === l.name ? 'selected' : ''}>${esc(l.name)}</option>`).join("");
+
+      if (!isVar) {
+        // ---- Обычный товар: все поля правятся вручную ----
+        $("editBody").innerHTML = `
+          <div class="card-block form">
+            <div class="csub">${catName(p.category)} · ${esc(p.city)}</div>
+            <label>Категория</label><select id="edCat">${catOptions}</select>
+            <label>Точка (город)</label><select id="edCity">${cityOptions}</select>
+            <label>Название</label><input id="edName" value="${esc(p.name)}">
+            <div class="rowf">
+              <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
+              <div><label>Остаток (шт.)</label><input id="edStock" inputmode="numeric" value="${p.stock}"></div>
+            </div>
+            <div class="rowf">
+              <div><label>Бренд</label><input id="edBrand" value="${esc(p.brand || '')}"></div>
+              <div><label>Вкус</label><input id="edFlavor" value="${esc(p.flavor || '')}"></div>
+            </div>
+            <div class="rowf">
+              <div><label>Крепость</label><input id="edStrengthG" value="${esc(p.strength || '')}"></div>
+              <div><label>Объём</label><input id="edVolumeG" value="${esc(p.volume || '')}"></div>
+            </div>
+            <label>Описание</label><input id="edDesc" value="${esc(p.description || '')}">
+            ${editHitBlock(p)}
+            ${editPhotoBlock(p)}
+            <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
+          </div>`;
+        bindEditPhoto();
+        $("edSave").onclick = () => saveEdit(p);
+        return;
+      }
+
+      // ---- Товар-модель со вкусами (одноразки/жидкости) ----
       let specs = "";
       if (p.category === "disposable") {
         const pv = parseInt(p.volume, 10) || 0;
@@ -1123,6 +1181,7 @@
         <div class="card-block form">
           <div style="font-weight:800">${esc(p.name)}</div>
           <div class="csub" style="margin-top:4px">${esc(p.brand || '')} · ${catName(p.category)} · ${esc(p.city)}</div>
+          <label>Точка (город)</label><select id="edCity">${cityOptions}</select>
           <label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}">
           ${specs}
           <label>Вкусы и остаток</label>
@@ -1132,9 +1191,12 @@
             <datalist id="edFlavorOpts">${avail.map(f => `<option value="${esc(f)}">`).join("")}</datalist>
             <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
           </div>
+          ${editHitBlock(p)}
+          ${editPhotoBlock(p)}
           <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
         </div>`;
       renderEditVariants();
+      bindEditPhoto();
       if ($("edPuffs")) {
         $("edPuffs").oninput = () => { $("edPuffsNum").value = $("edPuffs").value; };
         $("edPuffsNum").oninput = () => { let v = parseInt($("edPuffsNum").value, 10); if (isNaN(v) || v < 0) v = 0; $("edPuffs").value = Math.min(v, +$("edPuffs").max); };
@@ -1158,37 +1220,46 @@
     }
 
     async function saveEdit(p) {
-      const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
-      if (!variants.length) { alertMsg("Оставьте хотя бы один вкус."); return; }
-      let volume = "", strength = p.strength || "", name = p.brand || p.name;
-      if (p.category === "disposable") { volume = $("edPuffsNum").value; name = [p.brand, volume].filter(x => x && x !== "0").join(" "); }
-      else if (p.category === "liquid") { strength = $("edStrength").value.trim(); volume = $("edVolume").value.trim(); name = p.brand; }
-      const price = $("edPrice").value;
-      $("edSave").disabled = true; $("edSave").textContent = "Сохраняю…";
+      const isVar = hasVariants(p);
       const upd = (field, value) => fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, field, value }) });
+      $("edSave").disabled = true; $("edSave").textContent = "Сохраняю…";
       try {
-        await upd("price", price);
-        await upd("volume", volume);
-        if (p.category === "liquid") await upd("strength", strength);
-        if (name) await upd("name", name);
-        await fetch("/api/admin/product/variants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, variants }) });
+        if (isVar) {
+          const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
+          if (!variants.length) { alertMsg("Оставьте хотя бы один вкус."); return; }
+          let volume = "", strength = p.strength || "", name = p.brand || p.name;
+          if (p.category === "disposable") { volume = $("edPuffsNum").value; name = [p.brand, volume].filter(x => x && x !== "0").join(" "); }
+          else if (p.category === "liquid") { strength = $("edStrength").value.trim(); volume = $("edVolume").value.trim(); name = p.brand; }
+          await upd("price", $("edPrice").value);
+          await upd("volume", volume);
+          if (p.category === "liquid") await upd("strength", strength);
+          if (name) await upd("name", name);
+          await fetch("/api/admin/product/variants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, variants }) });
+        } else {
+          const nm = $("edName").value.trim();
+          if (!nm) { alertMsg("Введите название."); return; }
+          await upd("category", $("edCat").value);
+          await upd("name", nm);
+          await upd("price", $("edPrice").value);
+          await upd("stock", $("edStock").value);
+          await upd("brand", $("edBrand").value.trim());
+          await upd("flavor", $("edFlavor").value.trim());
+          await upd("strength", $("edStrengthG").value.trim());
+          await upd("volume", $("edVolumeG").value.trim());
+          await upd("description", $("edDesc").value.trim());
+        }
+        await upd("city", $("edCity").value);
+        await upd("is_hit", $("edHit").checked ? 1 : 0);
+        if (editPhotoFile) {
+          const fd = new FormData();
+          fd.append("initData", initData); fd.append("id", editId); fd.append("file", editPhotoFile);
+          await fetch("/api/admin/photo", { method: "POST", body: fd });
+        }
         await refreshProducts();
         $("editView").classList.remove("show");
         alertMsg("Сохранено ✅");
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
-    }
-
-    async function saveAdminRow(id, btn) {
-      const row = btn.closest(".admrow");
-      const price = row.querySelector(".ap").value;
-      const stockInput = row.querySelector(".as");     // у товаров со вкусами его нет
-      const upd = (field, value) => fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, field, value }) });
-      try {
-        await upd("price", price);
-        if (stockInput) await upd("stock", stockInput.value);
-        await refreshProducts(); alertMsg("Сохранено ✅");
-      } catch (e) { alertMsg("Сеть недоступна."); }
     }
 
     async function delAdminRow(id) {

@@ -383,8 +383,17 @@ def api_admin_update():
             value = max(0.0, float(str(raw).replace(",", ".")))
         elif field == "stock":
             value = max(0, int(raw))
-        elif field in ("name", "description"):
+        elif field in ("name", "description", "brand", "flavor", "strength", "volume"):
             value = str(raw).strip()
+        elif field == "category":
+            value = str(raw).strip()
+            if value not in CATEGORIES:
+                return jsonify({"ok": False, "error": "bad_value"}), 400
+        elif field == "city":
+            value = str(raw).strip()
+            names = {loc["name"] for loc in db.get_locations()}
+            if value not in names:
+                return jsonify({"ok": False, "error": "bad_value"}), 400
         elif field == "is_hit":
             value = 1 if raw else 0
         else:
