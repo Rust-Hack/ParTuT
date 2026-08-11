@@ -146,7 +146,7 @@
     .opt.active { background: var(--accent-soft); color: var(--accent); }
     .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
 
-    .view { position: fixed; inset: 0; background: var(--page); z-index: 50; display: none; flex-direction: column; padding: calc(26px + var(--safe-top)) 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+    .view { position: fixed; inset: 0; background: var(--page); z-index: 50; display: none; flex-direction: column; padding: calc(26px + var(--safe-top)) 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
     .view.show { display: flex; }
     .view .icon { font-size: 54px; text-align: center; margin: 10px 0; }
     .view h2 { font-size: 21px; margin: 0 0 8px; text-align: center; }
@@ -225,7 +225,7 @@
     .pd-price { color: var(--accent); font-size: 24px; font-weight: 800; }
     .pd-desc { color: var(--hint); font-size: 15px; line-height: 1.5; margin-top: 12px; text-align: left; }
     /* prodBody — собственный скролл (иначе flex:1 ломает прокрутку длинных карточек) */
-    #prodBody { min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+    #prodBody { min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
     .pd-actions { padding-top: 16px; display: flex; gap: 12px; align-items: center; flex: 0 0 auto; }
     .pd-actions .bigbtn { flex: 1; }
     .pd-step { display: flex; align-items: center; gap: 14px; background: var(--surface-2); border-radius: 14px; padding: 8px 12px; }
