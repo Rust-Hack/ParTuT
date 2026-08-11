@@ -182,46 +182,46 @@
     .fsel.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
     .fsel:disabled { opacity: .45; }
 
-    /* Сплэш-заставка: неоновый логотип «включается» с мерцанием */
+    /* Сплэш-заставка: облако собирается линией, затем неоновая вспышка.
+       Неоновая подсветка — по краям самой заставки (не в магазине). */
     #splash { position: fixed; inset: 0; z-index: 100; background: #0a171c;
       display: flex; align-items: center; justify-content: center; overflow: hidden;
-      animation: splashOut .6s ease 2.5s forwards; }
-    .splash-logo { text-align: center; animation: neonFlicker 2.1s ease .15s both, logoOut .35s ease 2.2s forwards; }
-    .splash-cloud { width: 138px; height: 138px; color: #5ff2f2;
-      filter: drop-shadow(0 0 7px rgba(95,242,242,.6)) drop-shadow(0 0 20px rgba(95,242,242,.5)); }
-    .splash-cloud path { fill: rgba(95,242,242,.08); }
-    .splash-title { font-size: 36px; font-weight: 800; letter-spacing: 1px; margin-top: 8px;
-      color: #fff; text-shadow: 0 0 16px rgba(95,242,242,.7); }
-    .splash-sub { font-size: 13px; letter-spacing: 5px; color: #8fd6da; }
-    @keyframes neonFlicker {
-      0%,7% { opacity: 0; }
-      8% { opacity: 1; } 10% { opacity: .25; } 12% { opacity: 1; } 15% { opacity: .4; } 18% { opacity: 1; }
-      40% { opacity: 1; } 42% { opacity: .5; } 45% { opacity: 1; }
-      70% { opacity: 1; } 72% { opacity: .7; } 74% { opacity: 1; }
-      100% { opacity: 1; }
+      box-shadow: inset 0 0 34px rgba(95,242,242,.30), inset 0 0 5px rgba(95,242,242,.5);
+      border: 1px solid rgba(95,242,242,.18);
+      animation: splashOut .6s ease 2.7s forwards; }
+    .splash-logo { text-align: center;
+      animation: neonBuzz 1s ease 1.55s both, logoOut .35s ease 2.5s forwards; }
+    .splash-cloud { width: 140px; height: 140px; color: #5ff2f2; }
+    .splash-cloud path { fill: none; stroke-dasharray: 100; stroke-dashoffset: 100;
+      animation: cloudDraw 1.5s ease .2s forwards; }
+    @keyframes cloudDraw { to { stroke-dashoffset: 0; } }
+    /* «включение неона» — мерцание свечения в конце сборки */
+    @keyframes neonBuzz {
+      0%   { filter: drop-shadow(0 0 0 transparent); }
+      20%  { filter: drop-shadow(0 0 9px rgba(95,242,242,.65)); }
+      30%  { filter: drop-shadow(0 0 1px rgba(95,242,242,.2)); }
+      45%  { filter: drop-shadow(0 0 11px rgba(95,242,242,.75)); }
+      60%  { filter: drop-shadow(0 0 3px rgba(95,242,242,.4)); }
+      100% { filter: drop-shadow(0 0 8px rgba(95,242,242,.6)) drop-shadow(0 0 18px rgba(95,242,242,.5)); }
     }
+    .splash-title { font-size: 36px; font-weight: 800; letter-spacing: 1px; margin-top: 8px;
+      color: #fff; text-shadow: 0 0 16px rgba(95,242,242,.7);
+      opacity: 0; animation: splashFade .6s ease 1s forwards; }
+    .splash-sub { font-size: 13px; letter-spacing: 5px; color: #8fd6da;
+      opacity: 0; animation: splashFade .6s ease 1.25s forwards; }
+    @keyframes splashFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
     @keyframes logoOut { to { opacity: 0; } }
     @keyframes splashOut { to { opacity: 0; visibility: hidden; } }
-
-    /* Неоновая подсветка по краям всего приложения (только тёмная тема) */
-    #neonFrame { position: fixed; inset: 0; pointer-events: none; z-index: 90; display: none; }
-    html[data-theme="dark"] #neonFrame { display: block;
-      box-shadow: inset 0 0 24px rgba(95,242,242,.28), inset 0 0 3px rgba(95,242,242,.55);
-      border: 1px solid rgba(95,242,242,.16);
-      animation: framePulse 3.5s ease-in-out infinite; }
-    @keyframes framePulse { 0%,100% { opacity: .65; } 50% { opacity: 1; } }
   </style>
 </head>
 <body>
   <div id="splash">
     <div class="splash-logo">
-      <svg class="splash-cloud" viewBox="-2 2 28 20" fill="none"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      <svg class="splash-cloud" viewBox="-2 2 28 20" fill="none"><path pathLength="100" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>
       <div class="splash-title">ParTuT</div>
       <div class="splash-sub">VAPE &amp; PODS</div>
     </div>
   </div>
-
-  <div id="neonFrame"></div>
 
   <div class="header">
     <div class="brand">
@@ -1058,7 +1058,7 @@
     }
 
     // Убираем заставку после проигрыша анимации, чтобы не мешала кликам.
-    setTimeout(() => { const s = document.getElementById("splash"); if (s) s.style.display = "none"; }, 3250);
+    setTimeout(() => { const s = document.getElementById("splash"); if (s) s.style.display = "none"; }, 3450);
 
     start();
   </script>
