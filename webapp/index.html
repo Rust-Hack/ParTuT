@@ -57,6 +57,9 @@
 
     .chips { display: flex; gap: 9px; overflow-x: auto; padding: 8px 16px 12px; scrollbar-width: none; }
     .chips::-webkit-scrollbar { display: none; }
+    .brandchips { padding-top: 0; }
+    .brandchips:empty { display: none; }
+    .brandchips .chip { padding: 6px 13px; font-size: 12.5px; }
     .chip { flex: 0 0 auto; padding: 9px 16px; border-radius: 999px; background: var(--surface); color: var(--text);
       border: 1px solid var(--line); font-size: 14px; white-space: nowrap; font-weight: 600; }
     .chip.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
@@ -350,6 +353,7 @@
         </div>
       </div>
       <div class="chips" id="chips"></div>
+      <div class="chips brandchips" id="brandChips"></div>
       <div class="grid" id="grid"></div>
       <div id="catEmpty"></div>
     </section>
@@ -603,7 +607,7 @@
     const CUR = `<span class="cur">Br</span>`;
     const withUnit = (val, unit) => { val = String(val || "").trim(); if (!val) return ""; return /[a-zа-я%]/i.test(val) ? val : val + " " + unit; };
 
-    let allProducts = [], cityList = [], city = null, cat = "", search = "";
+    let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilter = null;
     const cart = {};
     let favs = JSON.parse(localStorage.getItem("favs") || "[]");
     let currentOrder = null, me = null, activeTab = "catalog";
@@ -670,11 +674,11 @@
     }
     async function loadCatalog() {
       await Promise.all([fetchLocations(), fetchProducts()]);
-      recomputeCities(); renderChips(); renderGrid();
+      recomputeCities(); renderChips(); renderBrandFilter(); renderGrid();
     }
     async function refreshProducts() {
       await Promise.all([fetchLocations(), fetchProducts()]);
-      recomputeCities(); renderChips(); renderGrid(); renderNav();
+      recomputeCities(); renderChips(); renderBrandFilter(); renderGrid(); renderNav();
       if ($("productsView").classList.contains("show")) renderAdminList();
       if ($("locationsView").classList.contains("show")) renderLocList();
     }
@@ -682,11 +686,34 @@
     function renderChips() {
       $("chips").innerHTML = Object.entries(CATS).map(([code, t]) =>
         `<button class="chip ${code===cat?'active':''}" data-c="${code}">${t}</button>`).join("");
-      $("chips").querySelectorAll("[data-c]").forEach(b => b.onclick = () => { cat = b.dataset.c; renderChips(); renderGrid(); });
+      $("chips").querySelectorAll("[data-c]").forEach(b => b.onclick = () => {
+        cat = b.dataset.c; brandFilter = null;   // сменили категорию — сбрасываем бренд
+        renderChips(); renderBrandFilter(); renderGrid();
+      });
+    }
+    // Бренды, доступные в текущей точке и категории (для строки фильтра)
+    function renderBrandFilter() {
+      const set = new Map();
+      allProducts.forEach(p => {
+        if (p.city !== city) return;
+        if (cat && p.category !== cat) return;
+        if (p.brand) set.set(p.brand, true);
+      });
+      const list = [...set.keys()].sort((a, b) => a.localeCompare(b, "ru"));
+      if (brandFilter && !set.has(brandFilter)) brandFilter = null;   // бренда больше нет в выборке
+      if (list.length < 2) { $("brandChips").innerHTML = ""; return; }  // 0–1 бренд — фильтр не нужен
+      const chip = (val, label) => `<button class="chip ${brandFilter === val ? 'active' : ''}" data-b="${esc(val === null ? '' : val)}">${esc(label)}</button>`;
+      $("brandChips").innerHTML = chip(null, "Все бренды") + list.map(b => chip(b, b)).join("");
+      $("brandChips").querySelectorAll("[data-b]").forEach(btn => btn.onclick = () => {
+        brandFilter = btn.dataset.b || null; renderBrandFilter(); renderGrid();
+      });
     }
     function visibleProducts() {
       const s = search.trim().toLowerCase();
-      return allProducts.filter(p => p.city === city && (!cat || p.category === cat) && (!s || p.name.toLowerCase().includes(s)));
+      return allProducts.filter(p => p.city === city
+        && (!cat || p.category === cat)
+        && (!brandFilter || p.brand === brandFilter)
+        && (!s || p.name.toLowerCase().includes(s)));
     }
     function productBadges(p) {
       const b = [];
@@ -760,7 +787,8 @@
         if (b.dataset.city !== city && Object.keys(cart).length && !confirm("Сменить точку? Корзина очистится.")) return;
         if (b.dataset.city !== city) { for (const k in cart) delete cart[k]; }
         city = b.dataset.city; $("pointName").textContent = city;
-        $("pointOverlay").classList.remove("show"); renderGrid(); renderNav();
+        brandFilter = null;   // другая точка — другой набор брендов
+        $("pointOverlay").classList.remove("show"); renderBrandFilter(); renderGrid(); renderNav();
       });
       $("pointOverlay").classList.add("show");
     };
