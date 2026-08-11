@@ -110,6 +110,16 @@ def init_db():
         )
     """)
 
+    # Бренды со списком вкусов — «база» админа. flavors хранится как JSON-массив.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS brands (
+            id       {ID_COL},
+            name     TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'disposable',
+            flavors  TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
@@ -392,3 +402,56 @@ def count_products_in_location(name):
     n = cur.fetchone()["c"]
     conn.close()
     return n
+
+
+# ---------- Бренды (со списком вкусов) ----------
+
+def get_brands(category=None):
+    conn = connect()
+    cur = conn.cursor()
+    if category:
+        cur.execute(_q("SELECT * FROM brands WHERE category = %s ORDER BY name"), (category,))
+    else:
+        cur.execute("SELECT * FROM brands ORDER BY category, name")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_brand(brand_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM brands WHERE id = %s"), (brand_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def add_brand(name, category, flavors):
+    """flavors — список строк; храним как JSON. Возвращает id."""
+    conn = connect()
+    cur = conn.cursor()
+    new_id = _insert_id(
+        cur, "INSERT INTO brands (name, category, flavors) VALUES (%s, %s, %s)",
+        (name.strip(), category, json.dumps(flavors, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+    return new_id
+
+
+def update_brand(brand_id, name, category, flavors):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE brands SET name = %s, category = %s, flavors = %s WHERE id = %s"),
+                (name.strip(), category, json.dumps(flavors, ensure_ascii=False), brand_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_brand(brand_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM brands WHERE id = %s"), (brand_id,))
+    conn.commit()
+    conn.close()

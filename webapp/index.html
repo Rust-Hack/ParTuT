@@ -158,6 +158,8 @@
     .iconbtn { border: none; background: var(--surface-2); color: var(--text); width: 38px; height: 38px; border-radius: 10px; font-size: 16px; flex: 0 0 auto; }
     .iconbtn.danger { color: var(--danger); }
     .iconbtn.ok { background: var(--accent); color: var(--on-accent); }
+    .fchip { background: var(--surface-2); border-radius: 999px; padding: 6px 11px; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; }
+    .fchip b { cursor: pointer; color: var(--hint); font-weight: 700; }
 
     /* Карточка товара (детальный экран) */
     .pd-img { width: 100%; aspect-ratio: 1/1; background: var(--img-bg); border-radius: 18px; box-shadow: var(--shadow);
@@ -263,6 +265,21 @@
         <button class="iconbtn ok" id="locAdd" style="width:auto;padding:0 16px">Добавить</button>
       </div>
       <div id="locList" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card-block form">
+      <div style="font-weight:800;margin-bottom:4px">🏷 Бренды и вкусы</div>
+      <label>Название бренда</label><input id="brName" placeholder="Elf Bar">
+      <label>Категория</label><select id="brCat"></select>
+      <label>Вкусы (по одному или через запятую)</label>
+      <div style="display:flex;gap:8px">
+        <input id="brFlavorInput" placeholder="Например: Манго" style="flex:1">
+        <button class="iconbtn ok" id="brFlavorAdd" style="width:auto;padding:0 16px">＋</button>
+      </div>
+      <div id="brFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
+      <button class="bigbtn" id="brSave" style="margin-top:14px">Сохранить бренд</button>
+      <button class="closebtn" id="brCancel" style="display:none">Отменить редактирование</button>
+      <div id="brList"></div>
     </div>
 
     <div class="card-block form">
@@ -584,14 +601,86 @@
     // ---------- Админка (только для админов) ----------
     const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
 
-    function openAdmin() {
+    async function openAdmin() {
       $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
       $("afCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+      $("brCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
       renderLocList();
       renderAdminList();
+      renderFlavorChips();
+      await fetchBrands(); renderBrandList();
       $("adminView").classList.add("show");
     }
     $("adminClose").onclick = () => $("adminView").classList.remove("show");
+
+    // ----- Бренды и вкусы -----
+    let brands = [], brandFlavors = [], editingBrandId = null;
+    async function fetchBrands() {
+      const r = await fetch("/api/brands");
+      brands = await r.json();
+    }
+    const catName = (code) => (CAT_OPTS.find(([c]) => c === code) || [, code])[1];
+
+    function renderFlavorChips() {
+      $("brFlavorChips").innerHTML = brandFlavors.map((f, i) =>
+        `<span class="fchip">${esc(f)}<b data-fx="${i}">✕</b></span>`).join("");
+      $("brFlavorChips").querySelectorAll("[data-fx]").forEach(b =>
+        b.onclick = () => { brandFlavors.splice(+b.dataset.fx, 1); renderFlavorChips(); });
+    }
+    $("brFlavorAdd").onclick = () => {
+      const v = $("brFlavorInput").value.trim();
+      if (!v) return;
+      v.split(",").map(s => s.trim()).filter(Boolean).forEach(f => { if (!brandFlavors.includes(f)) brandFlavors.push(f); });
+      $("brFlavorInput").value = ""; renderFlavorChips();
+    };
+    $("brFlavorInput").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("brFlavorAdd").click(); } };
+
+    $("brSave").onclick = async () => {
+      const name = $("brName").value.trim();
+      if (!name) { alertMsg("Введите название бренда."); return; }
+      const body = { initData, name, category: $("brCat").value, flavors: brandFlavors };
+      if (editingBrandId) body.id = editingBrandId;
+      try {
+        const r = await fetch("/api/admin/brand", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось сохранить бренд."); return; }
+        resetBrandForm();
+        await fetchBrands(); renderBrandList();
+        alertMsg("Бренд сохранён ✅");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    };
+    function resetBrandForm() {
+      editingBrandId = null; brandFlavors = [];
+      $("brName").value = ""; $("brFlavorInput").value = "";
+      $("brCancel").style.display = "none"; $("brSave").textContent = "Сохранить бренд";
+      renderFlavorChips();
+    }
+    $("brCancel").onclick = resetBrandForm;
+
+    function renderBrandList() {
+      if (!brands.length) { $("brList").innerHTML = `<p style="color:var(--hint);margin-top:12px">Брендов пока нет.</p>`; return; }
+      $("brList").innerHTML = `<div style="font-weight:700;margin:14px 0 8px">Мои бренды</div>` + brands.map(b =>
+        `<div class="admrow"><div class="an">${esc(b.name)}<small>${catName(b.category)} · вкусов: ${b.flavors.length}</small></div>
+          <button class="iconbtn" data-bre="${b.id}">✏️</button>
+          <button class="iconbtn danger" data-brd="${b.id}">🗑</button></div>`).join("");
+      $("brList").querySelectorAll("[data-bre]").forEach(b => b.onclick = () => editBrand(+b.dataset.bre));
+      $("brList").querySelectorAll("[data-brd]").forEach(b => b.onclick = () => delBrand(+b.dataset.brd));
+    }
+    function editBrand(id) {
+      const b = brands.find(x => x.id === id); if (!b) return;
+      editingBrandId = id; $("brName").value = b.name; $("brCat").value = b.category;
+      brandFlavors = [...b.flavors]; renderFlavorChips();
+      $("brCancel").style.display = "block"; $("brSave").textContent = "Обновить бренд";
+      $("brName").scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    async function delBrand(id) {
+      if (!confirm("Удалить бренд?")) return;
+      try {
+        await fetch("/api/admin/brand/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
+        if (editingBrandId === id) resetBrandForm();
+        await fetchBrands(); renderBrandList();
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
 
     // Управление локациями
     function renderLocList() {

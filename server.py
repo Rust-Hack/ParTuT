@@ -427,6 +427,54 @@ def api_admin_location_delete():
     return jsonify({"ok": True})
 
 
+# ---------- Бренды со вкусами ----------
+
+@app.route("/api/brands")
+def api_brands():
+    category = request.args.get("category")
+    out = []
+    for b in db.get_brands(category):
+        try:
+            flavors = json.loads(b["flavors"] or "[]")
+        except Exception:
+            flavors = []
+        out.append({"id": b["id"], "name": b["name"], "category": b["category"], "flavors": flavors})
+    return jsonify(out)
+
+
+@app.route("/api/admin/brand", methods=["POST"])
+def api_admin_brand():
+    """Создать или обновить бренд (если пришёл id — обновляем)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    name = (data.get("name") or "").strip()
+    category = data.get("category") or "disposable"
+    if not name or category not in CATEGORIES:
+        return jsonify({"ok": False, "error": "bad_data"}), 400
+    flavors = [str(f).strip() for f in (data.get("flavors") or []) if str(f).strip()]
+
+    bid = data.get("id")
+    if bid:
+        db.update_brand(int(bid), name, category, flavors)
+        return jsonify({"ok": True, "id": int(bid)})
+    new_id = db.add_brand(name, category, flavors)
+    return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/admin/brand/delete", methods=["POST"])
+def api_admin_brand_delete():
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        bid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    db.delete_brand(bid)
+    return jsonify({"ok": True})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
