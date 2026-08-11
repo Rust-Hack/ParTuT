@@ -319,6 +319,17 @@ def add_wheel_progress(user_id, n):
     conn.close()
 
 
+def add_spins(user_id, n):
+    """Начислить прокруты напрямую (для теста админом)."""
+    ensure_user(user_id)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET wheel_spins = COALESCE(wheel_spins, 0) + %s WHERE user_id = %s"),
+                (int(n), user_id))
+    conn.commit()
+    conn.close()
+
+
 def use_spin(user_id):
     """Списывает один прокрут. True — если был доступен."""
     ensure_user(user_id)

@@ -1289,8 +1289,16 @@
         <div class="wheel-prog-top"><span>Прогресс до прокрута</span><span>${wheel.progress}/${wheel.step}</span></div>
         <div class="wheel-bar"><i style="width:${pct}%"></i></div>
         <div class="wheel-hint" id="wheelHint">${canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} товаров до прокрута`}</div>
-        <button class="bigbtn" id="spinBtn" ${canSpin ? "" : "disabled"}>${canSpin ? "Крутить 🎡" : "Накопите товаров для прокрута"}</button>`;
+        <button class="bigbtn" id="spinBtn" ${canSpin ? "" : "disabled"}>${canSpin ? "Крутить 🎡" : "Накопите товаров для прокрута"}</button>
+        ${(me && me.is_admin) ? `<button class="closebtn" id="grantSpin" style="margin-top:8px">🔧 +3 прокрута (тест)</button>` : ""}`;
       $("spinBtn").onclick = spinWheel;
+      if ($("grantSpin")) $("grantSpin").onclick = async () => {
+        try {
+          const r = await fetch("/api/admin/wheel/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+          const d = await r.json();
+          if (d.ok) { wheel.spins = d.spins; renderWheel(); }
+        } catch (e) { alertMsg("Сеть недоступна."); }
+      };
     }
     function refreshWheelInfo() {
       const canSpin = wheel.spins > 0;

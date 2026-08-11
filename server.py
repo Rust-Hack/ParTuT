@@ -422,6 +422,18 @@ def api_wheel():
                     "spins": w["spins"], "progress": w["progress"], "step": w["step"]})
 
 
+@app.route("/api/admin/wheel/grant", methods=["POST"])
+def api_admin_wheel_grant():
+    """Тест: начислить админу 3 прокрута колеса."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    uid = int(admin["id"])
+    db.add_spins(uid, 3)
+    return jsonify({"ok": True, "spins": db.get_wheel(uid)["spins"]})
+
+
 @app.route("/api/wheel/spin", methods=["POST"])
 def api_wheel_spin():
     """Прокрут колеса: списываем прокрут, выбираем приз по весам, начисляем монеты."""
