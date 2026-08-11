@@ -366,6 +366,16 @@ def get_orders(limit=200):
     return rows
 
 
+def get_orders_by_user(user_id, limit=50):
+    """Заказы конкретного клиента, новые сверху — для истории в профиле."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT %s"), (user_id, limit))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def restore_order_stock(order):
     """Возвращает остаток по всем позициям заказа (учитывает вкусы-варианты)."""
     try:

@@ -323,6 +323,17 @@ def api_receipt():
     return jsonify({"ok": False, "error": "send_failed"}), 500
 
 
+@app.route("/api/orders", methods=["POST"])
+def api_my_orders():
+    """История заказов текущего клиента (для вкладки Профиль)."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    orders = [_order_json(o) for o in db.get_orders_by_user(int(user["id"]))]
+    return jsonify({"ok": True, "orders": orders})
+
+
 # ============================================================
 #  АДМИН-API (только для тех, кто в ADMIN_IDS)
 # ============================================================

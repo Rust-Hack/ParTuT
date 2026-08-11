@@ -471,6 +471,13 @@
     </div>
   </div>
 
+  <!-- Мои заказы (история клиента) -->
+  <div class="view" id="myOrdersView">
+    <div class="viewhead"><h2>📦 Мои заказы</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="myOrdersClose">‹ Назад</button></div>
+    <div id="myOrdersList"></div>
+  </div>
+
   <!-- Раздел: Товары (добавление + список) -->
   <div class="view" id="productsView">
     <div class="viewhead"><h2>🛍 Товары</h2>
@@ -1069,12 +1076,13 @@
         <div class="plist">
           ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>` : ""}
           <div class="prow"><span>${dark ? "🌙" : "☀️"} Тёмная тема</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
-          <div class="prow">📦 Заказы — история покупок</div>
+          <div class="prow" id="openMyOrders"><span>📦 Мои заказы</span><span>›</span></div>
           <div class="prow">💬 Менеджер</div>
           <div class="prow">❓ Помощь</div>
         </div></div>`;
       $("themeSwitch").onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark");
       if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
+      $("openMyOrders").onclick = openMyOrders;
     }
 
     $("pickupClose").onclick = () => closeOverlay($("pickupOverlay"));
@@ -1293,6 +1301,56 @@
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("setSave").disabled = false; $("setSave").textContent = "Сохранить"; }
     };
+
+    // ----- Мои заказы (история + повтор) -----
+    let myOrders = [];
+    $("myOrdersClose").onclick = () => $("myOrdersView").classList.remove("show");
+    async function openMyOrders() {
+      $("myOrdersView").classList.add("show");
+      $("myOrdersList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      try {
+        const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        myOrders = d.orders || [];
+      } catch (e) { myOrders = []; }
+      renderMyOrders();
+    }
+    function renderMyOrders() {
+      if (!myOrders.length) {
+        $("myOrdersList").innerHTML = `<div class="empty"><div class="circ">📦</div><h3>Заказов пока нет</h3><p>Оформите первый заказ в ассортименте.</p></div>`;
+        return;
+      }
+      $("myOrdersList").innerHTML = myOrders.map((o, idx) => {
+        const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
+        const items = (o.items || []).map(it =>
+          `<div class="oitem"><span>${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} ${CUR}</span></div>`).join("");
+        return `<div class="ocard">
+          <div class="ocard-top">
+            <div><div class="ocard-id">Заказ #${o.id}</div><div class="ocard-sub">${esc(o.city)} · ${esc(o.created_at)}</div></div>
+            <span class="obadge ${st.cls}">${st.label}</span>
+          </div>
+          <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} ${CUR}</span></div></div>
+          <button class="bigbtn" data-repeat="${idx}" style="margin-top:10px">🔁 Повторить заказ</button>
+        </div>`;
+      }).join("");
+      $("myOrdersList").querySelectorAll("[data-repeat]").forEach(b => b.onclick = () => repeatOrder(myOrders[+b.dataset.repeat]));
+    }
+    function repeatOrder(o) {
+      const unavail = [], toAdd = [];
+      (o.items || []).forEach(it => {
+        const p = allProducts.find(x => x.id === it.id);
+        const avail = p ? (it.flavor ? variantStock(p, it.flavor) : p.stock) : 0;
+        if (!p || avail <= 0) { unavail.push(esc(it.name) + (it.flavor ? " · " + esc(it.flavor) : "")); return; }
+        toAdd.push({ id: p.id, flavor: it.flavor || null, qty: Math.min(it.qty, avail) });
+      });
+      if (!toAdd.length) { alertMsg("Эти товары сейчас недоступны."); return; }
+      city = o.city; $("pointName").textContent = city;          // корзина привязана к одной точке
+      for (const k in cart) delete cart[k];
+      toAdd.forEach(a => { cart[cartKey(a.id, a.flavor)] = { product_id: a.id, flavor: a.flavor, qty: a.qty }; });
+      $("myOrdersView").classList.remove("show");
+      updateFilterBtn(); renderGrid(); renderNav(); showTab("cart");
+      if (unavail.length) alertMsg("Добавлено в корзину. Сейчас недоступно: " + unavail.join(", "));
+    }
 
     // ============ Заказы (управление продавцом) ============
     let adminOrders = [], ordersStatusFilter = "active";
