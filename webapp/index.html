@@ -208,6 +208,20 @@
     .bonushero { background: linear-gradient(135deg, var(--accent), var(--brand-neon)); color: #04232a; border-radius: 20px; padding: 28px; text-align: center; margin-bottom: 16px; box-shadow: var(--shadow); }
     .bonuscoin { font-size: 40px; font-weight: 800; }
     .bonuslab { font-size: 13px; opacity: .85; margin-top: 4px; font-weight: 600; }
+    .bseg { display: flex; gap: 6px; background: var(--surface-2); border-radius: 14px; padding: 5px; margin-bottom: 16px; }
+    .bseg button { flex: 1; border: none; background: transparent; color: var(--hint); padding: 11px 6px; border-radius: 10px; font-size: 13px; font-weight: 700; }
+    .bseg button.on { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
+    .wheel-head { text-align: center; font-weight: 800; font-size: 18px; margin-bottom: 12px; }
+    .wheel-stage { position: relative; width: 288px; max-width: 84vw; aspect-ratio: 1; margin: 0 auto 16px; }
+    .wheel-ptr { position: absolute; top: -4px; left: 50%; transform: translateX(-50%); z-index: 3; width: 0; height: 0; border-left: 13px solid transparent; border-right: 13px solid transparent; border-top: 22px solid var(--warn); filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
+    .wheel { position: absolute; inset: 0; border-radius: 50%; border: 6px solid var(--accent); box-shadow: 0 6px 26px rgba(0,0,0,.28); }
+    .wlabel { position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; pointer-events: none; }
+    .wlabel span { margin-top: 15px; color: #10202a; font-weight: 800; font-size: 14px; white-space: nowrap; }
+    .wheel-hub { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 72px; height: 72px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+    .wheel-prog-top { display: flex; justify-content: space-between; font-size: 13px; color: var(--hint); margin-bottom: 6px; }
+    .wheel-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin-bottom: 8px; }
+    .wheel-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s; }
+    .wheel-hint { text-align: center; color: var(--hint); font-size: 13px; margin-bottom: 14px; }
     /* Статистика */
     .statgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 6px; }
     .statcard { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 14px; }
@@ -1193,30 +1207,54 @@
         if (d.ok) bonus = d;
       } catch (e) {}
     }
+    let bonusTab = "wheel";
+    let wheel = { sectors: [], spins: 0, progress: 0, step: 5 };
+    async function fetchWheel() {
+      try {
+        const r = await fetch("/api/wheel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (d.ok) wheel = d;
+      } catch (e) {}
+    }
     async function renderBonus() {
-      $("tab-bonus").innerHTML = `<p style="color:var(--hint);padding:16px">Загрузка…</p>`;
+      $("tab-bonus").innerHTML = `<div class="bonuswrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
       await fetchBonus();
+      if (bonusTab === "wheel") await fetchWheel();
+      const seg = `<div class="bseg">
+        <button data-bt="wheel" class="${bonusTab === 'wheel' ? 'on' : ''}">🎡 Колесо</button>
+        <button data-bt="raffle" class="${bonusTab === 'raffle' ? 'on' : ''}">🏆 Розыгрыши</button>
+        <button data-bt="ref" class="${bonusTab === 'ref' ? 'on' : ''}">👥 Рефералы</button></div>`;
+      let body;
+      if (bonusTab === "raffle") {
+        body = `<div class="empty"><div class="circ">🏆</div><h3>Розыгрыши скоро</h3><p>Разыгрываем товары среди клиентов — совсем скоро здесь.</p></div>`;
+      } else if (bonusTab === "ref") {
+        body = referralHtml();
+      } else {
+        body = `<div id="wheelWrap"></div>`;
+      }
+      $("tab-bonus").innerHTML = `<div class="bonuswrap">${seg}${body}</div>`;
+      $("tab-bonus").querySelectorAll("[data-bt]").forEach(b => b.onclick = () => { bonusTab = b.dataset.bt; renderBonus(); });
+      if (bonusTab === "wheel") renderWheel();
+      else if (bonusTab === "ref") bindReferral();
+    }
+
+    function referralHtml() {
       const share = bonus.ref_link
         ? `<button class="bigbtn" id="refShare">Пригласить друга</button>
            <button class="closebtn" id="refCopy">Скопировать ссылку</button>`
         : `<p style="color:var(--hint)">Ссылка появится чуть позже.</p>`;
-      $("tab-bonus").innerHTML = `<div class="bonuswrap">
-        <div class="bonushero">
-          <div class="bonuscoin">🪙 ${bonus.coins || 0}</div>
-          <div class="bonuslab">ваши VAPECOINS</div>
-        </div>
+      return `<div class="bonushero"><div class="bonuscoin">🪙 ${bonus.coins || 0}</div><div class="bonuslab">ваши VAPECOINS</div></div>
         <div class="card-block" style="text-align:left">
           <div style="font-weight:800;margin-bottom:6px">👥 Приведи друга</div>
-          <p style="color:var(--hint);font-size:14px;margin:0 0 12px">
-            Друг открывает магазин по вашей ссылке — вы получаете <b>${bonus.referral_bonus}</b> коинов.
-            Приглашено друзей: <b>${bonus.referrals || 0}</b>.</p>
+          <p style="color:var(--hint);font-size:14px;margin:0 0 12px">Друг открывает магазин по вашей ссылке — вы получаете <b>${bonus.referral_bonus}</b> коинов. Приглашено друзей: <b>${bonus.referrals || 0}</b>.</p>
           ${share}
         </div>
         <div class="card-block" style="text-align:left">
           <div style="font-weight:800;margin-bottom:6px">🛍 Коины за покупки</div>
-          <p style="color:var(--hint);font-size:14px;margin:0">За каждый выданный заказ начисляем коины — 1 коин за 1 Br. Дальше добавим, на что их тратить.</p>
-        </div>
-      </div>`;
+          <p style="color:var(--hint);font-size:14px;margin:0">1 коин за 1 Br выданного заказа. Тратятся скидкой в корзине (100 монет = 1 Br) и крутят Колесо.</p>
+        </div>`;
+    }
+    function bindReferral() {
       if ($("refShare")) $("refShare").onclick = () => {
         const text = "Загляни в наш вейп-магазин 👇";
         const url = `https://t.me/share/url?url=${encodeURIComponent(bonus.ref_link)}&text=${encodeURIComponent(text)}`;
@@ -1226,6 +1264,63 @@
         navigator.clipboard && navigator.clipboard.writeText(bonus.ref_link);
         alertMsg("Ссылка скопирована ✅");
       };
+    }
+
+    // ----- Колесо фортуны -----
+    const WHEEL_COLORS = ["#ff6b6b","#4ecdc4","#ffd166","#a78bfa","#5ec8f2","#f2a65e","#8fd694","#f28ec8","#c3d34e","#6ea8fe","#ff8fab"];
+    let wheelDeg = 0, spinning = false;
+    function renderWheel() {
+      const sectors = wheel.sectors || [];
+      const n = sectors.length || 1;
+      const seg = 360 / n;
+      const stops = sectors.map((s, i) => `${WHEEL_COLORS[i % WHEEL_COLORS.length]} ${i * seg}deg ${(i + 1) * seg}deg`).join(",");
+      const labels = sectors.map((s, i) => {
+        const a = (i + 0.5) * seg;
+        return `<div class="wlabel" style="transform:rotate(${a}deg)"><span>${esc(s.label)}</span></div>`;
+      }).join("");
+      const canSpin = wheel.spins > 0;
+      const pct = Math.min(100, Math.round((wheel.progress / wheel.step) * 100));
+      $("wheelWrap").innerHTML = `
+        <div class="wheel-head" id="wheelHead">🪙 ${bonus.coins || 0} монет</div>
+        <div class="wheel-stage">
+          <div class="wheel-ptr"></div>
+          <div class="wheel" id="wheelEl" style="background:conic-gradient(${stops})">${labels}<div class="wheel-hub">GO</div></div>
+        </div>
+        <div class="wheel-prog-top"><span>Прогресс до прокрута</span><span>${wheel.progress}/${wheel.step}</span></div>
+        <div class="wheel-bar"><i style="width:${pct}%"></i></div>
+        <div class="wheel-hint" id="wheelHint">${canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} товаров до прокрута`}</div>
+        <button class="bigbtn" id="spinBtn" ${canSpin ? "" : "disabled"}>${canSpin ? "Крутить 🎡" : "Накопите товаров для прокрута"}</button>`;
+      $("spinBtn").onclick = spinWheel;
+    }
+    function refreshWheelInfo() {
+      const canSpin = wheel.spins > 0;
+      if ($("wheelHead")) $("wheelHead").textContent = `🪙 ${bonus.coins || 0} монет`;
+      if ($("wheelHint")) $("wheelHint").textContent = canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} товаров до прокрута`;
+      const btn = $("spinBtn");
+      if (btn) { btn.disabled = !canSpin || spinning; btn.textContent = canSpin ? "Крутить 🎡" : "Накопите товаров для прокрута"; }
+    }
+    async function spinWheel() {
+      if (spinning || wheel.spins <= 0) return;
+      spinning = true; $("spinBtn").disabled = true;
+      let res;
+      try {
+        const r = await fetch("/api/wheel/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        res = await r.json();
+      } catch (e) { spinning = false; $("spinBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
+      if (!res.ok) { spinning = false; refreshWheelInfo(); alertMsg("Нет доступных прокрутов."); return; }
+      const n = (wheel.sectors || []).length, seg = 360 / n;
+      const desiredMod = ((360 - (res.index + 0.5) * seg) % 360 + 360) % 360;
+      const curMod = ((wheelDeg % 360) + 360) % 360;
+      let delta = desiredMod - curMod; if (delta < 0) delta += 360;
+      wheelDeg += 360 * 6 + delta;                    // 6 оборотов + доводка до сектора
+      const el = $("wheelEl");
+      el.style.transition = "transform 4.2s cubic-bezier(.12,.75,.2,1)";
+      el.style.transform = `rotate(${wheelDeg}deg)`;
+      setTimeout(() => {
+        bonus.coins = res.balance; wheel.spins = res.spins; spinning = false;
+        refreshWheelInfo();
+        alertMsg(`Выпало: ${res.label} — +${res.coins} 🪙`);
+      }, 4400);
     }
 
     $("pickupClose").onclick = () => closeOverlay($("pickupOverlay"));

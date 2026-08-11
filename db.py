@@ -176,6 +176,10 @@ def _ensure_user_columns():
         cur.execute("ALTER TABLE users ADD COLUMN coins INTEGER DEFAULT 0")
     if "referred_by" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN referred_by BIGINT")
+    if "wheel_spins" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN wheel_spins INTEGER DEFAULT 0")
+    if "wheel_progress" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN wheel_progress INTEGER DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -284,6 +288,49 @@ def count_referrals(user_id):
     c = cur.fetchone()["c"]
     conn.close()
     return c
+
+
+WHEEL_STEP = 5   # сколько купленных товаров нужно на один прокрут колеса
+
+
+def get_wheel(user_id):
+    row = get_user_row(user_id)
+    return {
+        "spins": (row["wheel_spins"] if row and row["wheel_spins"] else 0),
+        "progress": (row["wheel_progress"] if row and row["wheel_progress"] else 0),
+        "step": WHEEL_STEP,
+    }
+
+
+def add_wheel_progress(user_id, n):
+    """Копит прогресс за купленные товары; каждые WHEEL_STEP превращает в прокрут."""
+    ensure_user(user_id)
+    row = get_user_row(user_id)
+    prog = (row["wheel_progress"] or 0) + int(n)
+    spins = (row["wheel_spins"] or 0)
+    while prog >= WHEEL_STEP:
+        prog -= WHEEL_STEP
+        spins += 1
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET wheel_progress = %s, wheel_spins = %s WHERE user_id = %s"),
+                (prog, spins, user_id))
+    conn.commit()
+    conn.close()
+
+
+def use_spin(user_id):
+    """Списывает один прокрут. True — если был доступен."""
+    ensure_user(user_id)
+    row = get_user_row(user_id)
+    if (row["wheel_spins"] or 0) <= 0:
+        return False
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET wheel_spins = wheel_spins - 1 WHERE user_id = %s"), (user_id,))
+    conn.commit()
+    conn.close()
+    return True
 
 
 def set_referrer_once(user_id, ref_id):

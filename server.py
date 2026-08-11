@@ -20,6 +20,7 @@ import os
 import hmac
 import hashlib
 import json
+import random
 from urllib.parse import parse_qsl
 
 import requests
@@ -45,6 +46,21 @@ except Exception as e:
 REFERRAL_BONUS = 50        # vapecoins пригласившему за нового друга
 COINS_PER_BYN = 1          # vapecoins клиенту за каждый Br выданного заказа
 COIN_VALUE = 0.01          # сколько стоит 1 монета при списании (100 монет = 1 Br)
+
+# Колесо фортуны: секторы (монеты + вес вероятности). Малые призы — часто, крупные — редко.
+WHEEL_SECTORS = [
+    {"label": "100",  "coins": 100,  "weight": 26},
+    {"label": "200",  "coins": 200,  "weight": 20},
+    {"label": "300",  "coins": 300,  "weight": 16},
+    {"label": "400",  "coins": 400,  "weight": 12},
+    {"label": "500",  "coins": 500,  "weight": 9},
+    {"label": "600",  "coins": 600,  "weight": 6},
+    {"label": "700",  "coins": 700,  "weight": 4},
+    {"label": "800",  "coins": 800,  "weight": 3},
+    {"label": "900",  "coins": 900,  "weight": 2},
+    {"label": "1000", "coins": 1000, "weight": 1},
+    {"label": "SUPER","coins": 2000, "weight": 1},
+]
 
 app = Flask(__name__, static_folder="webapp", static_url_path="")
 
@@ -392,6 +408,40 @@ def api_bonus():
                     "coin_value": COIN_VALUE})
 
 
+@app.route("/api/wheel", methods=["POST"])
+def api_wheel():
+    """Состояние колеса: секторы, доступные прокруты, прогресс."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+    w = db.get_wheel(uid)
+    return jsonify({"ok": True,
+                    "sectors": [{"label": s["label"], "coins": s["coins"]} for s in WHEEL_SECTORS],
+                    "spins": w["spins"], "progress": w["progress"], "step": w["step"]})
+
+
+@app.route("/api/wheel/spin", methods=["POST"])
+def api_wheel_spin():
+    """Прокрут колеса: списываем прокрут, выбираем приз по весам, начисляем монеты."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+    if not db.use_spin(uid):
+        return jsonify({"ok": False, "error": "no_spins"}), 400
+
+    weights = [s["weight"] for s in WHEEL_SECTORS]
+    idx = random.choices(range(len(WHEEL_SECTORS)), weights=weights, k=1)[0]
+    prize = WHEEL_SECTORS[idx]
+    db.add_coins(uid, prize["coins"])
+    w = db.get_wheel(uid)
+    return jsonify({"ok": True, "index": idx, "coins": prize["coins"], "label": prize["label"],
+                    "balance": db.get_coins(uid), "spins": w["spins"]})
+
+
 # ============================================================
 #  АДМИН-API (только для тех, кто в ADMIN_IDS)
 # ============================================================
@@ -565,6 +615,14 @@ def _notify_client(user_id, text):
         print(f"Не смог уведомить клиента {user_id}: {e}")
 
 
+def _order_item_count(o):
+    """Сколько единиц товара в заказе (для прогресса колеса)."""
+    try:
+        return sum(int(it.get("qty", 0)) for it in json.loads(o["items"]))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _order_json(o):
     try:
         items = json.loads(o["items"])
@@ -615,8 +673,9 @@ def api_admin_order_status():
         _notify_client(client_id, f"✅ Оплата по заказу #{oid} подтверждена!\n"
                                   f"Ждём вас {order['pickup_time']}. Спасибо! 🌿")
     elif action == "issued":
-        if order["status"] != "issued":                 # начисляем коины один раз
+        if order["status"] != "issued":                 # начисляем один раз
             db.add_coins(client_id, int(order["total"]) * COINS_PER_BYN)
+            db.add_wheel_progress(client_id, _order_item_count(order))   # прогресс колеса
         db.set_order_status(oid, "issued")
         _notify_client(client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
