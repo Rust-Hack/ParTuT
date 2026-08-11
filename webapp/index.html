@@ -12,7 +12,7 @@
        Меняя значения здесь, вы меняете весь дизайн разом.
        ============================================================ */
     :root {
-      --page:#f3f4f6; --surface:#ffffff; --surface-2:#f4f5f7; --img-bg:#ffffff;
+      --page:#f3f4f6; --surface:#ffffff; --surface-2:#f4f5f7; --img-bg:#f4f5f7;
       --text:#14161a; --hint:#8b909a; --line:#eceef1;
       --accent:#0aa6a6; --on-accent:#ffffff; --accent-soft:#e2f7f7;
       --danger:#ef5350; --warn:#ff9800; --shadow:0 2px 10px rgba(20,22,26,.06);
@@ -21,7 +21,7 @@
     }
     /* Тёмная тема — неоновые цвета логотипа ParTuT (бирюзовый неон на глубоком фоне) */
     html[data-theme="dark"] {
-      --page:#081317; --surface:#102630; --surface-2:#17323d; --img-bg:#ffffff;
+      --page:#081317; --surface:#102630; --surface-2:#17323d; --img-bg:#17323d;
       --text:#e9fdff; --hint:#7fa6ae; --line:#1c3a44;
       --accent:#35e0e0; --on-accent:#04232a; --accent-soft:#0e333c;
       --danger:#ff6b6b; --warn:#ffb020; --shadow:0 2px 14px rgba(0,0,0,.55);
@@ -181,9 +181,39 @@
     .fsel small { color: var(--hint); }
     .fsel.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
     .fsel:disabled { opacity: .45; }
+
+    /* Сплэш-заставка при запуске: облако прорисовывается и вспыхивает неоном */
+    #splash { position: fixed; inset: 0; z-index: 100; background: var(--page);
+      display: flex; align-items: center; justify-content: center;
+      animation: splashOut .6s ease 1.9s forwards; }
+    .splash-logo { text-align: center; }
+    .splash-cloud { width: 132px; height: 132px; color: var(--brand-neon);
+      animation: cloudGlow .7s ease-in-out 1.2s forwards; }
+    .splash-cloud path { stroke-dasharray: 100; stroke-dashoffset: 100;
+      animation: cloudDraw 1.15s ease .2s forwards; }
+    @keyframes cloudDraw { to { stroke-dashoffset: 0; } }
+    @keyframes cloudGlow {
+      from { filter: drop-shadow(0 0 0 transparent); }
+      to   { filter: drop-shadow(0 0 6px var(--brand-glow)) drop-shadow(0 0 18px var(--brand-glow)); }
+    }
+    .splash-title { font-size: 34px; font-weight: 800; letter-spacing: 1px; margin-top: 8px; color: var(--text);
+      opacity: 0; animation: splashFade .6s ease 1s forwards; }
+    html[data-theme="dark"] .splash-title { color: #fff; text-shadow: 0 0 14px var(--brand-glow); }
+    .splash-sub { font-size: 13px; letter-spacing: 5px; color: var(--hint);
+      opacity: 0; animation: splashFade .6s ease 1.25s forwards; }
+    @keyframes splashFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    @keyframes splashOut { to { opacity: 0; visibility: hidden; } }
   </style>
 </head>
 <body>
+  <div id="splash">
+    <div class="splash-logo">
+      <svg class="splash-cloud" viewBox="-2 2 28 20" fill="none"><path pathLength="100" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke="currentColor" stroke-width="1.3"/></svg>
+      <div class="splash-title">ParTuT</div>
+      <div class="splash-sub">VAPE &amp; PODS</div>
+    </div>
+  </div>
+
   <div class="header">
     <div class="brand">
       <svg class="logo" viewBox="-2 2 28 20" fill="none"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
@@ -1017,6 +1047,9 @@
         await refreshProducts();
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
+
+    // Убираем заставку после проигрыша анимации, чтобы не мешала кликам.
+    setTimeout(() => { const s = document.getElementById("splash"); if (s) s.style.display = "none"; }, 2600);
 
     start();
   </script>
