@@ -174,6 +174,12 @@
     .pd-step { display: flex; align-items: center; gap: 14px; background: var(--surface-2); border-radius: 14px; padding: 8px 12px; }
     .pd-step button { width: 38px; height: 38px; border-radius: 10px; border: none; background: var(--accent); color: var(--on-accent); font-size: 20px; }
     .pd-step span { font-weight: 800; min-width: 20px; text-align: center; font-size: 17px; }
+    .pickbtn { border: none; background: var(--accent); color: var(--on-accent); padding: 8px 14px; border-radius: 10px; font-size: 13px; font-weight: 700; }
+    .fsel-wrap { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
+    .fsel { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 12px; padding: 9px 13px; font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
+    .fsel small { color: var(--hint); }
+    .fsel.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+    .fsel:disabled { opacity: .45; }
   </style>
 </head>
 <body>
@@ -286,19 +292,31 @@
       <div style="font-weight:800;margin-bottom:4px">➕ Новый товар</div>
       <label>Точка (город)</label><select id="afCity"></select>
       <label>Категория</label><select id="afCat"></select>
-      <label>Название</label><input id="afName" placeholder="Например: Elf Bar 1500 Манго">
-      <div class="rowf">
-        <div><label>Цена (Br)</label><input id="afPrice" inputmode="decimal" placeholder="18.5"></div>
-        <div><label>Остаток (шт.)</label><input id="afStock" inputmode="numeric" placeholder="10"></div>
+      <label>Название</label><input id="afName" placeholder="Например: Elf Bar BC 20000">
+      <label>Цена (Br)</label><input id="afPrice" inputmode="decimal" placeholder="18.5">
+
+      <!-- Одноразки: бренд из базы, ползунок затяжек, вкусы с остатком -->
+      <div id="dispFields" style="display:none">
+        <label>Бренд</label><select id="dispBrand"></select>
+        <label>Затяжек: <b id="dispPuffsVal">0</b></label>
+        <input type="range" id="dispPuffs" min="0" max="30000" step="100" value="0" style="width:100%">
+        <label>Вкусы и остаток (отметьте нужные)</label>
+        <div id="dispFlavors"></div>
       </div>
-      <div class="rowf">
-        <div><label>Бренд</label><input id="afBrand" placeholder="Elf Bar"></div>
-        <div><label>Вкус</label><input id="afFlavor" placeholder="Манго"></div>
+
+      <!-- Обычный товар: одно количество и поля вручную -->
+      <div id="genFields">
+        <label>Остаток (шт.)</label><input id="afStock" inputmode="numeric" placeholder="10">
+        <div class="rowf">
+          <div><label>Бренд</label><input id="afBrand" placeholder="Elf Bar"></div>
+          <div><label>Вкус</label><input id="afFlavor" placeholder="Манго"></div>
+        </div>
+        <div class="rowf">
+          <div><label>Крепость</label><input id="afStrength" placeholder="20 мг"></div>
+          <div><label>Объём</label><input id="afVolume" placeholder="30 мл"></div>
+        </div>
       </div>
-      <div class="rowf">
-        <div><label>Крепость</label><input id="afStrength" placeholder="20 мг"></div>
-        <div><label>Объём / затяжки</label><input id="afVolume" placeholder="30 мл / 20000"></div>
-      </div>
+
       <label>Описание (необязательно)</label><input id="afDesc" placeholder="Коротко">
       <div class="chk"><input type="checkbox" id="afHit"><label for="afHit" style="margin:0">🔥 Отметить как «Хит»</label></div>
       <label>Фото (необязательно)</label><input type="file" id="afPhoto" accept="image/*">
@@ -426,13 +444,23 @@
       else if (p.stock > 0 && p.stock <= 3) b.push(`<span class="tagbadge warn">Мало</span>`);
       return b.length ? `<div class="badges-tr">${b.join("")}</div>` : "";
     }
+    function hasVariants(p) { return p.variants && p.variants.length > 0; }
+    function variantStock(p, flavor) { const v = (p.variants || []).find(x => x.flavor === flavor); return v ? v.stock : 0; }
+    function cartKey(id, flavor) { return flavor ? id + "::" + flavor : "" + id; }
+
     function cardHtml(p) {
       const photo = p.photo_url ? `<img src="${p.photo_url}" alt="" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
-      const isFav = favs.includes(p.id), qty = cart[p.id] || 0;
+      const isFav = favs.includes(p.id);
       const sub = [p.brand, p.flavor].filter(Boolean).join(" · ");
-      const ctrl = p.stock <= 0 ? `<button class="plus" disabled>×</button>`
-        : (qty > 0 ? `<div class="mini"><button data-dec="${p.id}">−</button><span>${qty}</span><button data-inc="${p.id}">+</button></div>`
-                   : `<button class="plus" data-inc="${p.id}">+</button>`);
+      let ctrl;
+      if (p.stock <= 0) ctrl = `<button class="plus" disabled>×</button>`;
+      else if (hasVariants(p)) ctrl = `<button class="pickbtn" data-open="${p.id}">Выбрать</button>`;
+      else {
+        const qty = cart[cartKey(p.id)] ? cart[cartKey(p.id)].qty : 0;
+        ctrl = qty > 0
+          ? `<div class="mini"><button data-dec="${p.id}">−</button><span>${qty}</span><button data-inc="${p.id}">+</button></div>`
+          : `<button class="plus" data-inc="${p.id}">+</button>`;
+      }
       return `<div class="card"><div class="imgwrap">${photo}${productBadges(p)}
           <button class="fav ${isFav?'on':''}" data-fav="${p.id}">${isFav?'♥':'♡'}</button></div>
         <div class="cbody"><p class="cname" data-open="${p.id}">${esc(p.name)}</p>
@@ -446,15 +474,19 @@
       bindCardButtons($("grid"));
     }
     function bindCardButtons(root) {
-      root.querySelectorAll("[data-inc]").forEach(b => b.onclick = () => changeQty(+b.dataset.inc, +1));
-      root.querySelectorAll("[data-dec]").forEach(b => b.onclick = () => changeQty(+b.dataset.dec, -1));
+      root.querySelectorAll("[data-inc]").forEach(b => b.onclick = () => changeQty(+b.dataset.inc, +1, b.dataset.flavor || null));
+      root.querySelectorAll("[data-dec]").forEach(b => b.onclick = () => changeQty(+b.dataset.dec, -1, b.dataset.flavor || null));
       root.querySelectorAll("[data-fav]").forEach(b => b.onclick = () => toggleFav(+b.dataset.fav));
       root.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openProduct(+b.dataset.open));
     }
-    function changeQty(id, delta) {
+    function changeQty(id, delta, flavor = null) {
       const p = allProducts.find(x => x.id === id); if (!p) return;
-      const next = (cart[id] || 0) + delta;
-      if (next <= 0) delete cart[id]; else cart[id] = Math.min(next, p.stock);
+      const key = cartKey(id, flavor);
+      const max = flavor ? variantStock(p, flavor) : p.stock;
+      const cur = cart[key] ? cart[key].qty : 0;
+      const next = cur + delta;
+      if (next <= 0) delete cart[key];
+      else cart[key] = { product_id: id, flavor: flavor || null, qty: Math.min(next, max) };
       renderGrid(); renderNav(); if (activeTab === "cart") renderCart();
     }
     function toggleFav(id) {
@@ -476,17 +508,18 @@
     };
     $("pointClose").onclick = () => $("pointOverlay").classList.remove("show");
 
-    const cartCount = () => Object.values(cart).reduce((s, q) => s + q, 0);
-    const cartTotal = () => Object.keys(cart).reduce((s, id) => { const p = allProducts.find(x => x.id === +id); return s + (p ? p.price * cart[id] : 0); }, 0);
+    const cartCount = () => Object.values(cart).reduce((s, it) => s + it.qty, 0);
+    const cartTotal = () => Object.values(cart).reduce((s, it) => { const p = allProducts.find(x => x.id === it.product_id); return s + (p ? p.price * it.qty : 0); }, 0);
     function renderCart() {
-      const ids = Object.keys(cart);
-      if (!ids.length) { $("tab-cart").innerHTML = `<div class="empty"><div class="circ">🛒</div><h3>Корзина пуста</h3><p>Добавьте товары из ассортимента.</p></div>`; return; }
-      const rows = ids.map(id => {
-        const p = allProducts.find(x => x.id === +id); if (!p) return "";
+      const entries = Object.values(cart);
+      if (!entries.length) { $("tab-cart").innerHTML = `<div class="empty"><div class="circ">🛒</div><h3>Корзина пуста</h3><p>Добавьте товары из ассортимента.</p></div>`; return; }
+      const rows = entries.map(it => {
+        const p = allProducts.find(x => x.id === it.product_id); if (!p) return "";
         const thumb = p.photo_url ? `<img src="${p.photo_url}">` : (CAT_EMOJI[p.category] || "🛒");
+        const fattr = it.flavor ? ` data-flavor="${esc(it.flavor)}"` : "";
         return `<div class="citem"><div class="thumb">${thumb}</div>
-          <div style="flex:1"><div class="ci-name">${esc(p.name)}</div><div class="ci-price">${(p.price*cart[id]).toFixed(2)} ${CUR}</div></div>
-          <div class="mini"><button data-dec="${p.id}">−</button><span>${cart[id]}</span><button data-inc="${p.id}">+</button></div></div>`;
+          <div style="flex:1"><div class="ci-name">${esc(p.name)}${it.flavor ? ` — ${esc(it.flavor)}` : ""}</div><div class="ci-price">${(p.price*it.qty).toFixed(2)} ${CUR}</div></div>
+          <div class="mini"><button data-dec="${p.id}"${fattr}>−</button><span>${it.qty}</span><button data-inc="${p.id}"${fattr}>+</button></div></div>`;
       }).join("");
       $("tab-cart").innerHTML = `<div class="clist">${rows}</div><div class="checkoutbar"><button class="bigbtn" id="checkout">Оформить · ${cartTotal().toFixed(2)} ${CUR}</button></div>`;
       bindCardButtons($("tab-cart"));
@@ -522,7 +555,7 @@
     $("pickupClose").onclick = () => $("pickupOverlay").classList.remove("show");
     document.querySelectorAll("#pickupOverlay .opt").forEach(b => b.onclick = () => submitOrder(b.dataset.t));
     async function submitOrder(pickup) {
-      const items = Object.keys(cart).map(id => ({ id: +id, qty: cart[id] }));
+      const items = Object.values(cart).map(it => ({ id: it.product_id, qty: it.qty, flavor: it.flavor || undefined }));
       if (!items.length) return;
       $("pickupOverlay").classList.remove("show");
       try {
@@ -562,7 +595,8 @@
 
     // ---------- Карточка товара ----------
     let currentProductId = null;
-    function openProduct(id) { currentProductId = id; renderProduct(); $("productView").classList.add("show"); }
+    let selectedFlavor = null;
+    function openProduct(id) { currentProductId = id; selectedFlavor = null; renderProduct(); $("productView").classList.add("show"); }
     $("prodBack").onclick = () => { $("productView").classList.remove("show"); renderGrid(); };
 
     function renderProduct() {
@@ -573,19 +607,36 @@
       if (p.brand) info.push(["Бренд", p.brand]);
       if (p.flavor) info.push(["Вкус", p.flavor]);
       if (p.strength) info.push(["Крепость", p.strength]);
-      if (p.volume) info.push(["Объём / затяжки", p.volume]);
+      if (p.volume) info.push([hasVariants(p) ? "Затяжек" : "Объём / затяжки", p.volume]);
       const infoHtml = info.length
         ? `<div class="pd-info-wrap">${info.map(([k, v]) => `<div class="pd-info"><span>${k}</span><b>${esc(v)}</b></div>`).join("")}</div>` : "";
+
+      let flavorHtml = "";
+      if (hasVariants(p)) {
+        flavorHtml = `<div style="font-weight:700;margin-top:16px">Выберите вкус:</div><div class="fsel-wrap">` +
+          p.variants.map(v => {
+            const out = v.stock <= 0;
+            return `<button class="fsel ${v.flavor===selectedFlavor?'on':''}" data-fl="${esc(v.flavor)}" ${out?'disabled':''}>${esc(v.flavor)} <small>${out?'нет':v.stock+' шт'}</small></button>`;
+          }).join("") + `</div>`;
+      }
+
       $("prodBody").innerHTML = `<div class="pd-img">${photo}${productBadges(p)}</div>
         <h2 class="pd-name">${esc(p.name)}</h2>
         <div class="pd-price">${p.price.toFixed(2)} ${CUR}</div>
         ${infoHtml}
-        ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}`;
+        ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}
+        ${flavorHtml}`;
+      $("prodBody").querySelectorAll("[data-fl]").forEach(b => b.onclick = () => { selectedFlavor = b.dataset.fl; renderProduct(); });
 
-      const qty = cart[p.id] || 0;
-      if (p.stock <= 0) {
-        $("prodActions").innerHTML = `<button class="bigbtn" disabled>Нет в наличии</button>`;
-      } else if (qty > 0) {
+      renderProdActions(p);
+    }
+
+    function renderProdActions(p) {
+      const flavor = hasVariants(p) ? selectedFlavor : null;
+      if (p.stock <= 0) { $("prodActions").innerHTML = `<button class="bigbtn" disabled>Нет в наличии</button>`; return; }
+      if (hasVariants(p) && !flavor) { $("prodActions").innerHTML = `<button class="bigbtn" disabled>Выберите вкус</button>`; return; }
+      const qty = cart[cartKey(p.id, flavor)] ? cart[cartKey(p.id, flavor)].qty : 0;
+      if (qty > 0) {
         $("prodActions").innerHTML = `<div class="pd-step"><button id="pdDec">−</button><span>${qty}</span><button id="pdInc">+</button></div>
           <button class="bigbtn" id="pdGoCart">В корзину · ${(p.price*qty).toFixed(2)} ${CUR}</button>`;
         $("pdDec").onclick = () => prodQty(-1);
@@ -596,7 +647,12 @@
         $("pdAdd").onclick = () => prodQty(+1);
       }
     }
-    function prodQty(delta) { changeQty(currentProductId, delta); renderProduct(); }
+
+    function prodQty(delta) {
+      const p = allProducts.find(x => x.id === currentProductId);
+      changeQty(currentProductId, delta, hasVariants(p) ? selectedFlavor : null);
+      renderProduct();
+    }
 
     // ---------- Админка (только для админов) ----------
     const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
@@ -609,6 +665,7 @@
       renderAdminList();
       renderFlavorChips();
       await fetchBrands(); renderBrandList();
+      updateAddMode();
       $("adminView").classList.add("show");
     }
     $("adminClose").onclick = () => $("adminView").classList.remove("show");
@@ -716,15 +773,62 @@
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
 
+    // Переключение формы: одноразки vs обычный товар
+    function updateAddMode() {
+      const disp = $("afCat").value === "disposable";
+      $("dispFields").style.display = disp ? "block" : "none";
+      $("genFields").style.display = disp ? "none" : "block";
+      if (disp) {
+        const list = brands.filter(b => b.category === "disposable");
+        $("dispBrand").innerHTML = list.length
+          ? list.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("")
+          : `<option value="">— сначала добавьте бренд выше —</option>`;
+        renderDispFlavors();
+      }
+    }
+    function renderDispFlavors() {
+      const b = brands.find(x => x.id === +$("dispBrand").value);
+      const flavors = b ? b.flavors : [];
+      if (!flavors.length) { $("dispFlavors").innerHTML = `<p style="color:var(--hint)">У бренда нет вкусов — добавьте их в разделе «Бренды».</p>`; return; }
+      $("dispFlavors").innerHTML = flavors.map(f =>
+        `<div class="admrow"><label class="an" style="display:flex;gap:8px;align-items:center;font-weight:600">
+           <input type="checkbox" class="dfchk" style="width:auto"> ${esc(f)}</label>
+         <input class="dfst" inputmode="numeric" placeholder="шт." style="width:64px" value="0"></div>`).join("");
+      $("dispFlavors").querySelectorAll(".admrow").forEach((row, i) => row.dataset.flavor = flavors[i]);
+    }
+    $("afCat").onchange = updateAddMode;
+    $("dispBrand").onchange = renderDispFlavors;
+    $("dispPuffs").oninput = () => $("dispPuffsVal").textContent = $("dispPuffs").value;
+
+    function clearAddForm() {
+      $("afName").value = ""; $("afPrice").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
+      $("afBrand").value = ""; $("afFlavor").value = ""; $("afStrength").value = ""; $("afVolume").value = "";
+      $("dispPuffs").value = 0; $("dispPuffsVal").textContent = "0";
+      updateAddMode();
+    }
+
     $("afAdd").onclick = async () => {
-      const body = {
-        initData, city: $("afCity").value, category: $("afCat").value,
-        name: $("afName").value.trim(), price: $("afPrice").value, stock: $("afStock").value,
-        description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
-        brand: $("afBrand").value.trim(), flavor: $("afFlavor").value.trim(),
-        strength: $("afStrength").value.trim(), volume: $("afVolume").value.trim(),
-      };
-      if (!body.name || body.price === "" || body.stock === "") { alertMsg("Заполните название, цену и остаток."); return; }
+      const category = $("afCat").value, name = $("afName").value.trim(), price = $("afPrice").value;
+      if (!name || price === "") { alertMsg("Заполните название и цену."); return; }
+      let body;
+      if (category === "disposable") {
+        const variants = [];
+        $("dispFlavors").querySelectorAll(".admrow").forEach(row => {
+          const chk = row.querySelector(".dfchk");
+          if (chk && chk.checked) variants.push({ flavor: row.dataset.flavor, stock: row.querySelector(".dfst").value || "0" });
+        });
+        if (!variants.length) { alertMsg("Отметьте хотя бы один вкус."); return; }
+        const b = brands.find(x => x.id === +$("dispBrand").value);
+        body = { initData, city: $("afCity").value, category, name, price,
+          description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
+          brand: b ? b.name : "", puffs: $("dispPuffs").value, variants };
+      } else {
+        if ($("afStock").value === "") { alertMsg("Укажите остаток."); return; }
+        body = { initData, city: $("afCity").value, category, name, price,
+          stock: $("afStock").value, description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
+          brand: $("afBrand").value.trim(), flavor: $("afFlavor").value.trim(),
+          strength: $("afStrength").value.trim(), volume: $("afVolume").value.trim() };
+      }
       $("afAdd").disabled = true; $("afAdd").textContent = "Добавляю…";
       try {
         const r = await fetch("/api/admin/product", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -735,8 +839,7 @@
           const fd = new FormData(); fd.append("initData", initData); fd.append("id", d.id); fd.append("file", f);
           await fetch("/api/admin/photo", { method: "POST", body: fd });
         }
-        $("afName").value = ""; $("afPrice").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
-        $("afBrand").value = ""; $("afFlavor").value = ""; $("afStrength").value = ""; $("afVolume").value = "";
+        clearAddForm();
         await refreshProducts();
         alertMsg("Товар добавлен ✅");
       } catch (e) { alertMsg("Сеть недоступна."); }
@@ -746,11 +849,14 @@
     function renderAdminList() {
       if (!allProducts.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
       $("adminList").innerHTML = allProducts.map(p => {
-        const cityN = p.city;
+        const variant = hasVariants(p);
+        const stockCell = variant
+          ? `<span style="width:58px;text-align:center;font-size:12px;color:var(--hint)">${p.variants.length} вк.<br>${p.stock} шт</span>`
+          : `<input class="as" type="text" inputmode="numeric" value="${p.stock}">`;
         return `<div class="admrow">
-          <div class="an">${esc(p.name)}<small>${cityN} · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small></div>
+          <div class="an">${esc(p.name)}<small>${p.city} · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small></div>
           <input class="ap" type="text" inputmode="decimal" value="${p.price}">
-          <input class="as" type="text" inputmode="numeric" value="${p.stock}">
+          ${stockCell}
           <button class="iconbtn ok" data-save="${p.id}">💾</button>
           <button class="iconbtn danger" data-del="${p.id}">🗑</button>
         </div>`;
@@ -761,10 +867,12 @@
 
     async function saveAdminRow(id, btn) {
       const row = btn.closest(".admrow");
-      const price = row.querySelector(".ap").value, stock = row.querySelector(".as").value;
+      const price = row.querySelector(".ap").value;
+      const stockInput = row.querySelector(".as");     // у товаров со вкусами его нет
       const upd = (field, value) => fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, field, value }) });
       try {
-        await upd("price", price); await upd("stock", stock);
+        await upd("price", price);
+        if (stockInput) await upd("stock", stockInput.value);
         await refreshProducts(); alertMsg("Сохранено ✅");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }

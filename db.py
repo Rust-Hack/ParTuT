@@ -120,6 +120,16 @@ def init_db():
         )
     """)
 
+    # Варианты товара: у одной карточки-модели несколько вкусов, у каждого свой остаток.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS product_variants (
+            id         {ID_COL},
+            product_id INTEGER NOT NULL,
+            flavor     TEXT    NOT NULL,
+            stock      INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     conn.commit()
     conn.close()
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
@@ -453,5 +463,67 @@ def delete_brand(brand_id):
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("DELETE FROM brands WHERE id = %s"), (brand_id,))
+    conn.commit()
+    conn.close()
+
+
+# ---------- Варианты товара (вкус + остаток) ----------
+
+def get_variants(product_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM product_variants WHERE product_id = %s ORDER BY id"), (product_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_all_variants():
+    """Все варианты сразу — чтобы разложить по товарам без запроса на каждый."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM product_variants ORDER BY id")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def add_variant(product_id, flavor, stock):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("INSERT INTO product_variants (product_id, flavor, stock) VALUES (%s, %s, %s)"),
+                (product_id, flavor, max(0, stock)))
+    conn.commit()
+    conn.close()
+
+
+def delete_variants(product_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM product_variants WHERE product_id = %s"), (product_id,))
+    conn.commit()
+    conn.close()
+
+
+def change_variant_stock(product_id, flavor, delta):
+    """Меняет остаток конкретного вкуса и пересчитывает общий остаток товара."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q(f"UPDATE product_variants SET stock = {GREATEST}(0, stock + %s) "
+                   "WHERE product_id = %s AND flavor = %s"),
+                (delta, product_id, flavor))
+    conn.commit()
+    conn.close()
+    recalc_product_stock(product_id)
+
+
+def recalc_product_stock(product_id):
+    """Общий остаток товара-модели = сумма остатков его вкусов."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COALESCE(SUM(stock), 0) AS s FROM product_variants WHERE product_id = %s"),
+                (product_id,))
+    total = cur.fetchone()["s"]
+    cur.execute(_q("UPDATE products SET stock = %s WHERE id = %s"), (total, product_id))
     conn.commit()
     conn.close()

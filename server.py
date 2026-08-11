@@ -141,6 +141,9 @@ def api_locations():
 @app.route("/api/products")
 def api_products():
     city = request.args.get("city")
+    variants_by = {}
+    for v in db.get_all_variants():
+        variants_by.setdefault(v["product_id"], []).append({"flavor": v["flavor"], "stock": v["stock"]})
     out = []
     for p in db.get_all_products():
         if city and p["city"] != city:
@@ -152,6 +155,7 @@ def api_products():
             "description": p["description"] or "",
             "brand": p["brand"] or "", "flavor": p["flavor"] or "",
             "strength": p["strength"] or "", "volume": p["volume"] or "",
+            "variants": variants_by.get(p["id"], []),
             "photo_url": (f"/api/photo?file_id={p['photo']}" if p["photo"] else None),
         })
     return jsonify(out)
@@ -217,11 +221,23 @@ def api_order():
             pid, qty = int(ri.get("id")), int(ri.get("qty", 0))
         except (TypeError, ValueError):
             continue
+        flavor = (ri.get("flavor") or "").strip() or None
         p = db.get_product(pid)
-        if not p or qty <= 0 or p["stock"] <= 0:
+        if not p or qty <= 0:
             continue
-        real_qty = min(qty, p["stock"])
-        items.append({"id": pid, "name": p["name"], "price": p["price"], "qty": real_qty})
+        if flavor:
+            # товар-модель со вкусами: остаток берём у нужного варианта
+            avail = {v["flavor"]: v["stock"] for v in db.get_variants(pid)}.get(flavor, 0)
+            if avail <= 0:
+                continue
+            real_qty = min(qty, avail)
+            name = f"{p['name']} — {flavor}"
+        else:
+            if p["stock"] <= 0:
+                continue
+            real_qty = min(qty, p["stock"])
+            name = p["name"]
+        items.append({"id": pid, "flavor": flavor, "name": name, "price": p["price"], "qty": real_qty})
         total += p["price"] * real_qty
         cities.add(p["city"])
 
@@ -233,7 +249,10 @@ def api_order():
     city = cities.pop()
     order_id = db.create_order(user_id, username, city, items, total, pickup)
     for it in items:
-        db.change_stock(it["id"], -it["qty"])
+        if it.get("flavor"):
+            db.change_variant_stock(it["id"], it["flavor"], -it["qty"])
+        else:
+            db.change_stock(it["id"], -it["qty"])
 
     # Реквизиты и итог отдаём приложению — оно покажет экран оплаты.
     return jsonify({
@@ -307,15 +326,37 @@ def api_admin_add():
         return jsonify({"ok": False, "error": "bad_data"}), 400
     try:
         price = float(str(data.get("price")).replace(",", "."))
-        stock = int(data.get("stock"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_number"}), 400
 
     is_hit = 1 if data.get("is_hit") else 0
     desc = (data.get("description") or "").strip()
     brand = (data.get("brand") or "").strip()
-    flavor = (data.get("flavor") or "").strip()
     strength = (data.get("strength") or "").strip()
+
+    # Товар-модель со вкусами (одноразки): приходит список variants + затяжки (puffs).
+    variants = data.get("variants")
+    if isinstance(variants, list) and variants:
+        puffs = str(data.get("puffs") or "").strip()
+        pid = db.add_product(city, category, name, max(0.0, price), 0, is_hit, desc,
+                             brand=brand, flavor="", strength=strength, volume=puffs)
+        for v in variants:
+            fl = str(v.get("flavor", "")).strip()
+            try:
+                st = int(v.get("stock", 0))
+            except (TypeError, ValueError):
+                st = 0
+            if fl:
+                db.add_variant(pid, fl, max(0, st))
+        db.recalc_product_stock(pid)
+        return jsonify({"ok": True, "id": pid})
+
+    # Обычный товар (одно количество, без вкусов).
+    try:
+        stock = int(data.get("stock"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_number"}), 400
+    flavor = (data.get("flavor") or "").strip()
     volume = (data.get("volume") or "").strip()
     pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc,
                          brand=brand, flavor=flavor, strength=strength, volume=volume)
@@ -364,6 +405,7 @@ def api_admin_delete():
         pid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
+    db.delete_variants(pid)
     db.delete_product(pid)
     return jsonify({"ok": True})
 
