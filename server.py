@@ -35,7 +35,7 @@ db.init_db()
 # Отдельный экземпляр бота — ТОЛЬКО чтобы отправлять сообщения/картинки.
 tg = telebot.TeleBot(BOT_TOKEN)
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="webapp", static_url_path="")
 
 # DEV_MODE=1 — разрешить пользоваться из обычного браузера (без Telegram) для локальной проверки.
 DEV_MODE = os.environ.get("DEV_MODE") == "1"
