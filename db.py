@@ -320,6 +320,36 @@ def get_order(order_id):
     return row
 
 
+def get_orders(limit=200):
+    """Все заказы, новые сверху — для админ-панели."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM orders ORDER BY id DESC LIMIT %s"), (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def restore_order_stock(order):
+    """Возвращает остаток по всем позициям заказа (учитывает вкусы-варианты)."""
+    try:
+        items = json.loads(order["items"])
+    except (TypeError, ValueError):
+        return
+    for it in items:
+        try:
+            qty = int(it.get("qty", 0))
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        if it.get("flavor"):
+            change_variant_stock(it["id"], it["flavor"], qty)
+            recalc_product_stock(it["id"])
+        else:
+            change_stock(it["id"], qty)
+
+
 def get_open_order(user_id):
     """Последний заказ пользователя, ждущий чек (status='new'). Для чека из Mini App."""
     conn = connect()

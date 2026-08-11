@@ -471,6 +471,78 @@ def api_admin_photo():
     return jsonify({"ok": True})
 
 
+# ------------------- Заказы (управление в приложении) -------------------
+
+def _notify_client(user_id, text):
+    """Сообщение клиенту о смене статуса заказа (не роняем запрос, если заблокировал бота)."""
+    try:
+        tg.send_message(int(user_id), text)
+    except Exception as e:
+        print(f"Не смог уведомить клиента {user_id}: {e}")
+
+
+def _order_json(o):
+    try:
+        items = json.loads(o["items"])
+    except (TypeError, ValueError):
+        items = []
+    return {
+        "id": o["id"],
+        "user_id": o["user_id"],
+        "username": o["username"] or "",
+        "city": o["city"],
+        "items": items,
+        "total": o["total"],
+        "pickup_time": o["pickup_time"] or "",
+        "status": o["status"],
+        "created_at": o["created_at"],
+        "receipt_url": (f"/api/photo?file_id={o['receipt_file_id']}" if o["receipt_file_id"] else None),
+    }
+
+
+@app.route("/api/admin/orders", methods=["POST"])
+def api_admin_orders():
+    """Список всех заказов для админ-панели (новые сверху)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    return jsonify({"ok": True, "orders": [_order_json(o) for o in db.get_orders()]})
+
+
+@app.route("/api/admin/order/status", methods=["POST"])
+def api_admin_order_status():
+    """Продавец меняет статус заказа из приложения (confirm / issued / reject)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        oid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+
+    order = db.get_order(oid)
+    if not order:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+
+    action = data.get("action")
+    client_id = order["user_id"]
+    if action == "confirm":
+        db.set_order_status(oid, "confirmed")
+        _notify_client(client_id, f"✅ Оплата по заказу #{oid} подтверждена!\n"
+                                  f"Ждём вас {order['pickup_time']}. Спасибо! 🌿")
+    elif action == "issued":
+        db.set_order_status(oid, "issued")
+        _notify_client(client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
+    elif action == "reject":
+        db.set_order_status(oid, "canceled")
+        db.restore_order_stock(order)               # вернуть остаток (с учётом вкусов)
+        _notify_client(client_id, f"К сожалению, заказ #{oid} отклонён продавцом. "
+                                  "Если это ошибка — напишите нам, разберёмся.")
+    else:
+        return jsonify({"ok": False, "error": "bad_action"}), 400
+    return jsonify({"ok": True})
+
+
 @app.route("/api/admin/location", methods=["POST"])
 def api_admin_location_add():
     """Добавить локацию (точку продаж)."""

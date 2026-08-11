@@ -198,8 +198,7 @@ def handle_order_action(call, chat_id, action, order_id):
                    f"Заказ #{order_id} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
         db.set_order_status(order_id, "canceled")
-        for it in json.loads(order["items"]):
-            db.change_stock(it["id"], it["qty"])       # вернуть товар на склад
+        db.restore_order_stock(order)                  # вернуть товар на склад (с учётом вкусов)
         bot.answer_callback_query(call.id, "Заказ отклонён")
         _safe_send(client_id,
                    f"К сожалению, заказ #{order_id} отклонён продавцом. "

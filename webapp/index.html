@@ -165,6 +165,31 @@
     .edphoto { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
     .edphoto img { width: 72px; height: 72px; object-fit: cover; border-radius: 12px; background: var(--img-bg); flex: 0 0 auto; }
     .edphoto input[type=file] { flex: 1; min-width: 0; }
+    /* --- Заказы --- */
+    .ochips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .ochip { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 999px; padding: 7px 14px; font-size: 13px; font-weight: 600; }
+    .ochip.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+    .ocard { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 14px; margin-bottom: 12px; }
+    .ocard-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .ocard-id { font-weight: 800; font-size: 15px; }
+    .ocard-sub { color: var(--hint); font-size: 12.5px; margin-top: 2px; }
+    .obadge { font-size: 11.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; white-space: nowrap; flex: 0 0 auto; }
+    .obadge.new { background: var(--surface-2); color: var(--hint); }
+    .obadge.paid { background: var(--accent-soft); color: var(--accent); }
+    .obadge.confirmed { background: rgba(76,175,80,.16); color: #2e9e4f; }
+    .obadge.issued { background: var(--surface-2); color: var(--text); }
+    .obadge.canceled { background: rgba(239,83,80,.14); color: var(--danger); }
+    .oitems { margin: 10px 0; border-top: 1px solid var(--line); padding-top: 10px; }
+    .oitem { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; padding: 3px 0; }
+    .oitem span:last-child { color: var(--hint); white-space: nowrap; }
+    .ototal { display: flex; justify-content: space-between; font-weight: 800; margin-top: 6px; font-size: 15px; }
+    .oreceipt { margin-top: 10px; }
+    .oreceipt img { max-width: 140px; max-height: 180px; border-radius: 12px; border: 1px solid var(--line); }
+    .oacts { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .oacts button { flex: 1; min-width: 120px; border: none; border-radius: 12px; padding: 12px; font-size: 14px; font-weight: 700; }
+    .oacts .ok { background: var(--accent); color: var(--on-accent); }
+    .oacts .issue { background: #2e9e4f; color: #fff; }
+    .oacts .rej { background: var(--surface-2); color: var(--danger); }
     .fchip { background: var(--surface-2); border-radius: 999px; padding: 6px 11px; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; }
     .fchip b { cursor: pointer; color: var(--hint); font-weight: 700; }
 
@@ -375,6 +400,8 @@
     <div class="viewhead"><h2>🛠 Управление</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="adminClose">Закрыть</button></div>
 
+    <button class="bigbtn" id="openOrders" style="margin-bottom:14px">📦 Заказы</button>
+
     <div class="card-block form">
       <div style="font-weight:800;margin-bottom:4px">📍 Локации (точки продаж)</div>
       <div style="display:flex;gap:8px;margin-top:10px">
@@ -457,6 +484,14 @@
     <div class="viewhead"><h2>✏️ Редактировать</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="editClose">Закрыть</button></div>
     <div id="editBody"></div>
+  </div>
+
+  <!-- Заказы (управление продавцом) -->
+  <div class="view" id="ordersView">
+    <div class="viewhead"><h2>📦 Заказы</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="ordersClose">Закрыть</button></div>
+    <div class="ochips" id="ordersFilter"></div>
+    <div id="ordersList"></div>
   </div>
 
   <script>
@@ -875,6 +910,90 @@
       $("adminView").classList.add("show");
     }
     $("adminClose").onclick = () => $("adminView").classList.remove("show");
+
+    // ============ Заказы (управление продавцом) ============
+    let adminOrders = [], ordersStatusFilter = "active";
+    const OSTATUS = {
+      new:       { label: "Ждёт чек",            cls: "new" },
+      paid:      { label: "Ждёт подтверждения",  cls: "paid" },
+      confirmed: { label: "Оплата подтверждена", cls: "confirmed" },
+      issued:    { label: "Выдан",               cls: "issued" },
+      canceled:  { label: "Отклонён",            cls: "canceled" },
+    };
+    const OFILTERS = [
+      ["active", "Активные"], ["paid", "Ждут подтверждения"], ["confirmed", "К выдаче"],
+      ["issued", "Выданы"], ["canceled", "Отклонены"], ["all", "Все"],
+    ];
+
+    $("openOrders").onclick = () => { $("ordersView").classList.add("show"); loadAdminOrders(); };
+    $("ordersClose").onclick = () => $("ordersView").classList.remove("show");
+
+    async function loadAdminOrders() {
+      $("ordersList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      try {
+        const r = await fetch("/api/admin/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        adminOrders = d.orders || [];
+      } catch (e) { adminOrders = []; }
+      renderOrdersFilter();
+      renderOrders();
+    }
+
+    function renderOrdersFilter() {
+      $("ordersFilter").innerHTML = OFILTERS.map(([k, name]) =>
+        `<button class="ochip ${ordersStatusFilter === k ? 'active' : ''}" data-of="${k}">${name}</button>`).join("");
+      $("ordersFilter").querySelectorAll("[data-of]").forEach(b =>
+        b.onclick = () => { ordersStatusFilter = b.dataset.of; renderOrdersFilter(); renderOrders(); });
+    }
+
+    function orderMatchesFilter(o) {
+      const f = ordersStatusFilter;
+      if (f === "all") return true;
+      if (f === "active") return ["new", "paid", "confirmed"].includes(o.status);
+      return o.status === f;
+    }
+
+    function renderOrders() {
+      const list = adminOrders.filter(orderMatchesFilter);
+      if (!list.length) { $("ordersList").innerHTML = `<p style="color:var(--hint)">Заказов нет.</p>`; return; }
+      $("ordersList").innerHTML = list.map(o => {
+        const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
+        const items = (o.items || []).map(it =>
+          `<div class="oitem"><span>${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} Br</span></div>`).join("");
+        const receipt = o.receipt_url ? `<div class="oreceipt"><img src="${o.receipt_url}" alt="чек"></div>` : "";
+        const who = o.username ? "@" + esc(o.username) : "id " + o.user_id;
+        let acts = "";
+        if (o.status === "paid") acts = `<button class="ok" data-oact="confirm" data-oid="${o.id}">✅ Подтвердить</button><button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отклонить</button>`;
+        else if (o.status === "confirmed") acts = `<button class="issue" data-oact="issued" data-oid="${o.id}">📦 Выдан</button><button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отклонить</button>`;
+        else if (o.status === "new") acts = `<button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отменить</button>`;
+        return `<div class="ocard">
+          <div class="ocard-top">
+            <div><div class="ocard-id">Заказ #${o.id}</div>
+              <div class="ocard-sub">${esc(o.city)} · ${who}${o.pickup_time ? " · " + esc(o.pickup_time) : ""}<br>${esc(o.created_at)}</div></div>
+            <span class="obadge ${st.cls}">${st.label}</span>
+          </div>
+          <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} Br</span></div></div>
+          ${receipt}
+          <div class="oacts">${acts}</div>
+        </div>`;
+      }).join("");
+      $("ordersList").querySelectorAll("[data-oact]").forEach(b => b.onclick = () => orderAction(+b.dataset.oid, b.dataset.oact));
+    }
+
+    async function orderAction(id, action) {
+      const ask = action === "reject" ? "Отклонить заказ и вернуть товар на склад?"
+                : action === "issued" ? "Отметить заказ выданным?"
+                : "Подтвердить оплату?";
+      const go = async () => {
+        try {
+          await fetch("/api/admin/order/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, action }) });
+          await loadAdminOrders();
+          await refreshProducts();   // остаток мог вернуться при отклонении
+        } catch (e) { alertMsg("Сеть недоступна."); }
+      };
+      if (tg && tg.showConfirm) tg.showConfirm(ask, ok => { if (ok) go(); });
+      else if (confirm(ask)) go();
+    }
 
     // ----- Бренды и вкусы -----
     let brands = [], brandFlavors = [], editingBrandId = null;
