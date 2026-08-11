@@ -146,6 +146,7 @@
     .viewhead h2 { margin: 0; text-align: left; font-size: 20px; }
     .form label { display: block; font-size: 13px; color: var(--hint); margin: 12px 0 5px; }
     .form input, .form select { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 15px; }
+    .form input[type=range] { accent-color: var(--accent); height: 28px; }
     .form .rowf { display: flex; gap: 10px; }
     .form .rowf > div { flex: 1; }
     .chk { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
@@ -298,8 +299,11 @@
       <!-- Одноразки: бренд из базы, ползунок затяжек, вкусы с остатком -->
       <div id="dispFields" style="display:none">
         <label>Бренд</label><select id="dispBrand"></select>
-        <label>Затяжек: <b id="dispPuffsVal">0</b></label>
-        <input type="range" id="dispPuffs" min="0" max="30000" step="100" value="0" style="width:100%">
+        <label>Кол-во затяжек</label>
+        <div style="display:flex;align-items:center;gap:12px">
+          <input type="range" id="dispPuffs" min="0" max="40000" step="100" value="0" style="flex:1">
+          <input type="number" id="dispPuffsNum" min="0" step="100" value="0" style="width:96px;text-align:center">
+        </div>
         <label>Вкусы и остаток (отметьте нужные)</label>
         <div id="dispFlavors"></div>
       </div>
@@ -798,12 +802,17 @@
     }
     $("afCat").onchange = updateAddMode;
     $("dispBrand").onchange = renderDispFlavors;
-    $("dispPuffs").oninput = () => $("dispPuffsVal").textContent = $("dispPuffs").value;
+    // Ползунок и ручной ввод затяжек синхронизированы в обе стороны.
+    $("dispPuffs").oninput = () => { $("dispPuffsNum").value = $("dispPuffs").value; };
+    $("dispPuffsNum").oninput = () => {
+      let v = parseInt($("dispPuffsNum").value, 10); if (isNaN(v) || v < 0) v = 0;
+      $("dispPuffs").value = Math.min(v, +$("dispPuffs").max);   // ползунок до своего максимума
+    };
 
     function clearAddForm() {
       $("afName").value = ""; $("afPrice").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
       $("afBrand").value = ""; $("afFlavor").value = ""; $("afStrength").value = ""; $("afVolume").value = "";
-      $("dispPuffs").value = 0; $("dispPuffsVal").textContent = "0";
+      $("dispPuffs").value = 0; $("dispPuffsNum").value = 0;
       updateAddMode();
     }
 
@@ -821,7 +830,7 @@
         const b = brands.find(x => x.id === +$("dispBrand").value);
         body = { initData, city: $("afCity").value, category, name, price,
           description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
-          brand: b ? b.name : "", puffs: $("dispPuffs").value, variants };
+          brand: b ? b.name : "", puffs: $("dispPuffsNum").value, variants };
       } else {
         if ($("afStock").value === "") { alertMsg("Укажите остаток."); return; }
         body = { initData, city: $("afCity").value, category, name, price,
