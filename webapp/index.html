@@ -164,7 +164,8 @@
     .viewhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
     .viewhead h2 { margin: 0; text-align: left; font-size: 20px; }
     .form label { display: block; font-size: 13px; color: var(--hint); margin: 12px 0 5px; }
-    .form input, .form select { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 15px; }
+    .form input, .form select, .form textarea { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 15px; }
+    .form textarea { font-family: inherit; resize: vertical; }
     .form input[type=range] { accent-color: var(--accent); height: 28px; }
     .form .rowf { display: flex; gap: 10px; }
     .form .rowf > div { flex: 1; }
@@ -454,6 +455,20 @@
     <div class="prow" id="mProducts"><span>🛍 Товары</span><span>›</span></div>
     <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
     <div class="prow" id="mBrands"><span>🏷 Бренды и вкусы</span><span>›</span></div>
+    <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
+  </div>
+
+  <!-- Раздел: Настройки магазина -->
+  <div class="view" id="settingsView">
+    <div class="viewhead"><h2>💳 Настройки</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="settingsClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <label>Реквизиты оплаты (видит клиент при оплате)</label>
+      <textarea id="setPay" rows="4" placeholder="Карта: 0000 0000 0000 0000 (Имя)&#10;или по номеру: +375 ..."></textarea>
+      <label>Через сколько минут продавец подтверждает</label>
+      <input id="setConfirm" inputmode="numeric" placeholder="15">
+      <button class="bigbtn" id="setSave" style="margin-top:16px">Сохранить</button>
+    </div>
   </div>
 
   <!-- Раздел: Товары (добавление + список) -->
@@ -1255,6 +1270,29 @@
       $("brandsView").classList.add("show");
     }
     $("brandsClose").onclick = () => $("brandsView").classList.remove("show");
+
+    // ----- Настройки магазина -----
+    $("mSettings").onclick = openSettings;
+    $("settingsClose").onclick = () => $("settingsView").classList.remove("show");
+    async function openSettings() {
+      $("settingsView").classList.add("show");
+      $("setPay").value = ""; $("setConfirm").value = "";
+      try {
+        const r = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (d.ok) { $("setPay").value = d.settings.payment_info || ""; $("setConfirm").value = d.settings.confirm_minutes || ""; }
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+    $("setSave").onclick = async () => {
+      const body = { initData, payment_info: $("setPay").value, confirm_minutes: $("setConfirm").value };
+      $("setSave").disabled = true; $("setSave").textContent = "Сохраняю…";
+      try {
+        const r = await fetch("/api/admin/settings/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        alertMsg(d.ok ? "Сохранено ✅" : "Не удалось сохранить.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("setSave").disabled = false; $("setSave").textContent = "Сохранить"; }
+    };
 
     // ============ Заказы (управление продавцом) ============
     let adminOrders = [], ordersStatusFilter = "active";

@@ -202,6 +202,19 @@ def _photo_response(content, ctype):
 #  ЗАКАЗ
 # ============================================================
 
+def _payment_info():
+    """Реквизиты оплаты: из настроек магазина, иначе — значение из config."""
+    return db.get_setting("payment_info", PAYMENT_INFO)
+
+
+def _confirm_minutes():
+    """Через сколько минут продавец подтверждает: из настроек, иначе — из config."""
+    try:
+        return int(db.get_setting("confirm_minutes", CONFIRM_MINUTES))
+    except (TypeError, ValueError):
+        return CONFIRM_MINUTES
+
+
 @app.route("/api/order", methods=["POST"])
 def api_order():
     data = request.get_json(force=True, silent=True) or {}
@@ -261,8 +274,8 @@ def api_order():
         "ok": True,
         "order_id": order_id,
         "total": round(total, 2),
-        "payment_info": PAYMENT_INFO,
-        "confirm_minutes": CONFIRM_MINUTES,
+        "payment_info": _payment_info(),
+        "confirm_minutes": _confirm_minutes(),
     })
 
 
@@ -295,7 +308,7 @@ def api_receipt():
         msg = tg.send_photo(
             user_id, photo_bytes,
             caption=(f"🧾 Чек по заказу #{order_id} получен.\n"
-                     f"Продавец подтвердит обычно за ~{CONFIRM_MINUTES} минут."),
+                     f"Продавец подтвердит обычно за ~{_confirm_minutes()} минут."),
         )
         file_id = msg.photo[-1].file_id
     except Exception as e:
@@ -542,6 +555,36 @@ def api_admin_order_status():
                                   "Если это ошибка — напишите нам, разберёмся.")
     else:
         return jsonify({"ok": False, "error": "bad_action"}), 400
+    return jsonify({"ok": True})
+
+
+# ------------------- Настройки магазина -------------------
+
+@app.route("/api/admin/settings", methods=["POST"])
+def api_admin_settings():
+    """Текущие настройки магазина для админ-панели."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    return jsonify({"ok": True, "settings": {
+        "payment_info": _payment_info(),
+        "confirm_minutes": _confirm_minutes(),
+    }})
+
+
+@app.route("/api/admin/settings/update", methods=["POST"])
+def api_admin_settings_update():
+    """Сохранить настройки магазина (реквизиты оплаты, время подтверждения)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    if "payment_info" in data:
+        db.set_setting("payment_info", str(data.get("payment_info") or "").strip())
+    if "confirm_minutes" in data:
+        try:
+            db.set_setting("confirm_minutes", max(1, int(data.get("confirm_minutes"))))
+        except (TypeError, ValueError):
+            pass
     return jsonify({"ok": True})
 
 

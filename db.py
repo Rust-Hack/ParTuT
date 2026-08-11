@@ -130,6 +130,14 @@ def init_db():
         )
     """)
 
+    # Настройки магазина (ключ-значение): реквизиты оплаты, время подтверждения и т.п.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
@@ -191,6 +199,34 @@ def set_age_ok(user_id):
         )
     else:
         cur.execute("INSERT OR REPLACE INTO users (user_id, age_ok) VALUES (?, 1)", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+# ---------- Настройки магазина ----------
+
+def get_setting(key, default=None):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT value FROM settings WHERE key = %s"), (key,))
+    row = cur.fetchone()
+    conn.close()
+    if not row or row["value"] is None:
+        return default
+    return row["value"]
+
+
+def set_setting(key, value):
+    conn = connect()
+    cur = conn.cursor()
+    if USE_PG:
+        cur.execute(
+            """INSERT INTO settings (key, value) VALUES (%s, %s)
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+            (key, str(value)),
+        )
+    else:
+        cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
     conn.close()
 
