@@ -44,6 +44,7 @@ except Exception as e:
 
 REFERRAL_BONUS = 50        # vapecoins пригласившему за нового друга
 COINS_PER_BYN = 1          # vapecoins клиенту за каждый Br выданного заказа
+COIN_VALUE = 0.01          # сколько стоит 1 монета при списании (100 монет = 1 Br)
 
 app = Flask(__name__, static_folder="webapp", static_url_path="")
 
@@ -284,7 +285,22 @@ def api_order():
         return jsonify({"ok": False, "error": "multi_city"}), 400
 
     city = cities.pop()
+    total = round(total, 2)
+
+    # Списание монет: 1 монета = COIN_VALUE Br, но не больше суммы заказа.
+    coins_used, discount = 0, 0.0
+    if data.get("use_coins") and total > 0:
+        have = db.get_coins(user_id)
+        spend = min(have, int(total / COIN_VALUE))     # столько монет реально можно списать
+        if spend > 0:
+            coins_used = spend
+            discount = round(spend * COIN_VALUE, 2)
+            total = round(total - discount, 2)
+            db.add_coins(user_id, -spend)              # списываем сразу
+
     order_id = db.create_order(user_id, username, city, items, total, pickup)
+    if coins_used:
+        db.set_order_coins_used(order_id, coins_used)
     for it in items:
         if it.get("flavor"):
             db.change_variant_stock(it["id"], it["flavor"], -it["qty"])
@@ -295,7 +311,9 @@ def api_order():
     return jsonify({
         "ok": True,
         "order_id": order_id,
-        "total": round(total, 2),
+        "total": total,
+        "coins_used": coins_used,
+        "discount": discount,
         "payment_info": _payment_info(),
         "confirm_minutes": _confirm_minutes(),
     })
@@ -370,7 +388,8 @@ def api_bonus():
                     "coins": db.get_coins(uid),
                     "referrals": db.count_referrals(uid),
                     "ref_link": link,
-                    "referral_bonus": REFERRAL_BONUS})
+                    "referral_bonus": REFERRAL_BONUS,
+                    "coin_value": COIN_VALUE})
 
 
 # ============================================================
@@ -603,6 +622,8 @@ def api_admin_order_status():
     elif action == "reject":
         db.set_order_status(oid, "canceled")
         db.restore_order_stock(order)               # вернуть остаток (с учётом вкусов)
+        if order["coins_used"]:                      # вернуть списанные монеты
+            db.add_coins(client_id, order["coins_used"])
         _notify_client(client_id, f"К сожалению, заказ #{oid} отклонён продавцом. "
                                   "Если это ошибка — напишите нам, разберёмся.")
     else:

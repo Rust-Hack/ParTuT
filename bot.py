@@ -201,6 +201,8 @@ def handle_order_action(call, chat_id, action, order_id):
     elif action == "reject":
         db.set_order_status(order_id, "canceled")
         db.restore_order_stock(order)                  # вернуть товар на склад (с учётом вкусов)
+        if order["coins_used"]:                         # вернуть списанные монеты
+            db.add_coins(client_id, order["coins_used"])
         bot.answer_callback_query(call.id, "Заказ отклонён")
         _safe_send(client_id,
                    f"К сожалению, заказ #{order_id} отклонён продавцом. "

@@ -142,6 +142,7 @@ def init_db():
     conn.close()
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
     _ensure_user_columns()      # coins / referred_by у пользователей
+    _ensure_order_columns()     # coins_used у заказов
     seed_locations()            # добавит стартовые точки, если таблица пустая
 
 
@@ -175,6 +176,25 @@ def _ensure_user_columns():
         cur.execute("ALTER TABLE users ADD COLUMN coins INTEGER DEFAULT 0")
     if "referred_by" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN referred_by BIGINT")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_order_columns():
+    """coins_used — сколько монет списано в счёт заказа (для возврата при отмене)."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "orders")
+    if "coins_used" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN coins_used INTEGER DEFAULT 0")
+    conn.commit()
+    conn.close()
+
+
+def set_order_coins_used(order_id, coins):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE orders SET coins_used = %s WHERE id = %s"), (int(coins), order_id))
     conn.commit()
     conn.close()
 

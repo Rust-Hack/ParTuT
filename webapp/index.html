@@ -112,6 +112,10 @@
     .citem .ci-name { font-weight: 700; font-size: 14px; }
     .citem .ci-price { color: var(--accent); font-weight: 700; font-size: 14px; margin-top: 2px; }
     .checkoutbar { padding: 8px 16px 16px; }
+    .coinsopt { display: flex; align-items: center; gap: 10px; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow); padding: 13px 14px; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+    .coinsopt input { width: 20px; height: 20px; accent-color: var(--accent); flex: 0 0 auto; }
+    .cotot { display: flex; justify-content: space-between; font-weight: 800; margin: 2px 2px 12px; }
+    .cotot s { color: var(--hint); font-weight: 500; margin-right: 6px; }
     .upsell-h { font-weight: 800; margin: 6px 16px 10px; }
     .upsell { display: flex; gap: 10px; overflow-x: auto; padding: 0 16px 6px; scrollbar-width: none; }
     .upsell::-webkit-scrollbar { display: none; }
@@ -691,6 +695,7 @@
 
     let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilters = [], sortMode = "default";
     const cart = {};
+    let useCoins = false;   // списывать ли монеты при оформлении
     let favs = JSON.parse(localStorage.getItem("favs") || "[]");
     let currentOrder = null, me = null, activeTab = "catalog";
 
@@ -1116,8 +1121,23 @@
       const upsHtml = ups.length
         ? `<div class="upsell-h">Добавьте к заказу 🔥</div><div class="upsell">${ups.map(ucard).join("")}</div>`
         : "";
-      $("tab-cart").innerHTML = `<div class="clist">${rows}</div>${upsHtml}<div class="checkoutbar"><button class="bigbtn" id="checkout">Оформить · ${cartTotal().toFixed(2)} ${CUR}</button></div>`;
+      const total = cartTotal();
+      const coinVal = bonus.coin_value || 0.01;
+      const maxCoins = Math.min(bonus.coins || 0, Math.floor(total / coinVal));
+      const discount = useCoins ? +(maxCoins * coinVal).toFixed(2) : 0;
+      const payable = +(total - discount).toFixed(2);
+      const coinsHtml = maxCoins > 0
+        ? `<label class="coinsopt"><input type="checkbox" id="useCoinsChk" ${useCoins ? "checked" : ""}>
+             <span>Списать ${maxCoins} 🪙 — скидка ${(maxCoins * coinVal).toFixed(2)} ${CUR}</span></label>`
+        : "";
+      const totalLine = discount > 0
+        ? `<div class="cotot"><span>Итого</span><span><s>${total.toFixed(2)}</s> ${payable.toFixed(2)} ${CUR}</span></div>`
+        : "";
+      $("tab-cart").innerHTML = `<div class="clist">${rows}</div>${upsHtml}
+        <div class="checkoutbar">${coinsHtml}${totalLine}
+          <button class="bigbtn" id="checkout">Оформить · ${payable.toFixed(2)} ${CUR}</button></div>`;
       bindCardButtons($("tab-cart"));
+      if ($("useCoinsChk")) $("useCoinsChk").onchange = () => { useCoins = $("useCoinsChk").checked; renderCart(); };
       $("checkout").onclick = () => $("pickupOverlay").classList.add("show");
     }
     // Допродажа: доступные товары этой точки (хиты вперёд), которых ещё нет в корзине
@@ -1215,13 +1235,17 @@
       if (!items.length) return;
       closeOverlay($("pickupOverlay"));
       try {
-        const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, city, items, pickup_time: pickup }) });
+        const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, city, items, pickup_time: pickup, use_coins: useCoins }) });
         const d = await r.json();
         if (d.ok) {
           currentOrder = d;
+          if (d.coins_used) bonus.coins = Math.max(0, (bonus.coins || 0) - d.coins_used);   // баланс обновился
+          useCoins = false;
           $("payTitle").textContent = `Оплата заказа #${d.order_id}`;
-          $("payReq").textContent = `К оплате: ${d.total.toFixed(2)} ${CUR}\n\n${d.payment_info}`;
+          const disc = d.discount ? `Списано ${d.coins_used} 🪙 (−${d.discount.toFixed(2)} Br)\n` : "";
+          $("payReq").textContent = `${disc}К оплате: ${d.total.toFixed(2)} Br\n\n${d.payment_info}`;
           $("payView").classList.add("show");
+          fetchBonus();
         } else {
           const errs = { auth: "Откройте магазин из бота.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек." };
           alertMsg(errs[d.error] || "Ошибка оформления.");
