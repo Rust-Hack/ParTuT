@@ -184,18 +184,19 @@
     .fsel:disabled { opacity: .45; }
     /* Вкусы списком-строками (не прыгают при добавлении) */
     .fsel-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 6px; }
-    .frow { display: flex; align-items: center; justify-content: space-between; gap: 6px;
-      background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 8px 8px 8px 12px; min-height: 44px; }
+    .frow { display: flex; flex-direction: column; gap: 8px;
+      background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 11px; }
     .frow.on { border-color: var(--accent); background: var(--accent-soft); }
     .frow.out { opacity: .5; }
-    .frow .fname { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .frow .fname small { color: var(--hint); font-weight: 400; margin-left: 5px; }
-    .frow .fout { color: var(--hint); font-size: 12px; }
-    .fctrl { flex: 0 0 80px; display: flex; align-items: center; justify-content: flex-end; }
+    .fname { font-size: 13px; font-weight: 600; line-height: 1.25; min-height: 2.5em;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .fbottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+    .fbottom.end { justify-content: flex-end; }
+    .fbn { color: var(--hint); font-size: 12px; }
     .addbtn { width: 30px; height: 30px; border-radius: 9px; border: none; background: var(--accent); color: var(--on-accent); font-size: 20px; line-height: 1; flex: 0 0 auto; }
-    .fstep { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
-    .fstep button { width: 26px; height: 26px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-accent); font-size: 16px; line-height: 1; }
-    .fstep span { font-weight: 800; min-width: 14px; text-align: center; font-size: 14px; }
+    .fstep { display: inline-flex; align-items: center; gap: 8px; }
+    .fstep button { width: 28px; height: 28px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-accent); font-size: 17px; line-height: 1; }
+    .fstep span { font-weight: 800; min-width: 16px; text-align: center; font-size: 14px; }
     /* Акцент на вкусах при переходе по кнопке «Выбрать» */
     .fsel-list.attn .frow { animation: fselAttn 1.5s ease 2; }
     @keyframes fselAttn {
@@ -767,13 +768,13 @@
             const out = v.stock <= 0;
             const qty = cart[cartKey(p.id, v.flavor)] ? cart[cartKey(p.id, v.flavor)].qty : 0;
             const f = esc(v.flavor);
-            const right = out
-              ? `<span class="fout">нет</span>`
-              : (qty > 0
-                  ? `<div class="fstep"><button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div>`
-                  : `<button class="addbtn" data-fladd="${f}">+</button>`);
+            let bottom;
+            if (out) bottom = `<span class="fbn">нет в наличии</span>`;
+            else if (qty > 0) bottom = `<div class="fstep"><button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div>`;
+            else bottom = `<span class="fbn">${v.stock} шт</span><button class="addbtn" data-fladd="${f}">+</button>`;
             return `<div class="frow ${qty>0?'on':''} ${out?'out':''}">
-                <span class="fname">${f}${out ? '' : ` <small>${v.stock} шт</small>`}</span><div class="fctrl">${right}</div></div>`;
+                <div class="fname">${f}</div>
+                <div class="fbottom ${qty>0?'end':''}">${bottom}</div></div>`;
           }).join("") + `</div>`;
       }
 
