@@ -396,35 +396,20 @@
   </div>
 
   <!-- Админка: управление товарами -->
+  <!-- Админка: хаб-меню -->
   <div class="view" id="adminView">
     <div class="viewhead"><h2>🛠 Управление</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="adminClose">Закрыть</button></div>
+    <div class="prow" id="mOrders"><span>📦 Заказы</span><span>›</span></div>
+    <div class="prow" id="mProducts"><span>🛍 Товары</span><span>›</span></div>
+    <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
+    <div class="prow" id="mBrands"><span>🏷 Бренды и вкусы</span><span>›</span></div>
+  </div>
 
-    <button class="bigbtn" id="openOrders" style="margin-bottom:14px">📦 Заказы</button>
-
-    <div class="card-block form">
-      <div style="font-weight:800;margin-bottom:4px">📍 Локации (точки продаж)</div>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <input id="locName" placeholder="Например: Пинск" style="flex:1">
-        <button class="iconbtn ok" id="locAdd" style="width:auto;padding:0 16px">Добавить</button>
-      </div>
-      <div id="locList" style="margin-top:12px"></div>
-    </div>
-
-    <div class="card-block form">
-      <div style="font-weight:800;margin-bottom:4px">🏷 Бренды и вкусы</div>
-      <label>Название бренда</label><input id="brName" placeholder="Elf Bar">
-      <label>Категория</label><select id="brCat"></select>
-      <label>Вкусы (по одному или через запятую)</label>
-      <div style="display:flex;gap:8px">
-        <input id="brFlavorInput" placeholder="Например: Манго" style="flex:1">
-        <button class="iconbtn ok" id="brFlavorAdd" style="width:auto;padding:0 16px">＋</button>
-      </div>
-      <div id="brFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
-      <button class="bigbtn" id="brSave" style="margin-top:14px">Сохранить бренд</button>
-      <button class="closebtn" id="brCancel" style="display:none">Отменить редактирование</button>
-      <div id="brList"></div>
-    </div>
+  <!-- Раздел: Товары (добавление + список) -->
+  <div class="view" id="productsView">
+    <div class="viewhead"><h2>🛍 Товары</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="productsClose">‹ Назад</button></div>
 
     <div class="card-block form">
       <div style="font-weight:800;margin-bottom:4px">➕ Новый товар</div>
@@ -477,6 +462,39 @@
 
     <div style="font-weight:800;margin:4px 0 10px">Список товаров</div>
     <div id="adminList"></div>
+  </div>
+
+  <!-- Раздел: Локации -->
+  <div class="view" id="locationsView">
+    <div class="viewhead"><h2>📍 Локации</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="locationsClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <div style="font-weight:800;margin-bottom:4px">Точки продаж</div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <input id="locName" placeholder="Например: Пинск" style="flex:1">
+        <button class="iconbtn ok" id="locAdd" style="width:auto;padding:0 16px">Добавить</button>
+      </div>
+      <div id="locList" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- Раздел: Бренды и вкусы -->
+  <div class="view" id="brandsView">
+    <div class="viewhead"><h2>🏷 Бренды и вкусы</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="brandsClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <label>Название бренда</label><input id="brName" placeholder="Elf Bar">
+      <label>Категория</label><select id="brCat"></select>
+      <label>Вкусы (по одному или через запятую)</label>
+      <div style="display:flex;gap:8px">
+        <input id="brFlavorInput" placeholder="Например: Манго" style="flex:1">
+        <button class="iconbtn ok" id="brFlavorAdd" style="width:auto;padding:0 16px">＋</button>
+      </div>
+      <div id="brFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
+      <button class="bigbtn" id="brSave" style="margin-top:14px">Сохранить бренд</button>
+      <button class="closebtn" id="brCancel" style="display:none">Отменить редактирование</button>
+      <div id="brList"></div>
+    </div>
   </div>
 
   <!-- Редактор товара-модели (вкусы/остаток/характеристики) -->
@@ -624,7 +642,8 @@
     async function refreshProducts() {
       await Promise.all([fetchLocations(), fetchProducts()]);
       recomputeCities(); renderChips(); renderGrid(); renderNav();
-      if ($("adminView").classList.contains("show")) { renderAdminList(); renderLocList(); }
+      if ($("productsView").classList.contains("show")) renderAdminList();
+      if ($("locationsView").classList.contains("show")) renderLocList();
     }
 
     function renderChips() {
@@ -899,17 +918,39 @@
     const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
 
     async function openAdmin() {
-      $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
-      $("afCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
-      $("brCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
-      renderLocList();
-      renderAdminList();
-      renderFlavorChips();
-      await fetchBrands(); renderBrandList();
-      updateAddMode();
+      await fetchBrands();               // нужно разделам «Товары» и «Бренды»
       $("adminView").classList.add("show");
     }
     $("adminClose").onclick = () => $("adminView").classList.remove("show");
+
+    // --- Разделы админки (открываются поверх хаба, «Назад» возвращает в меню) ---
+    $("mOrders").onclick = () => { $("ordersView").classList.add("show"); loadAdminOrders(); };
+    $("mProducts").onclick = openProducts;
+    $("mLocations").onclick = openLocations;
+    $("mBrands").onclick = openBrands;
+
+    function openProducts() {
+      $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
+      $("afCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+      renderFlavorChips();
+      updateAddMode();
+      renderAdminList();
+      $("productsView").classList.add("show");
+    }
+    $("productsClose").onclick = () => $("productsView").classList.remove("show");
+
+    function openLocations() {
+      renderLocList();
+      $("locationsView").classList.add("show");
+    }
+    $("locationsClose").onclick = () => $("locationsView").classList.remove("show");
+
+    function openBrands() {
+      $("brCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+      renderBrandList();
+      $("brandsView").classList.add("show");
+    }
+    $("brandsClose").onclick = () => $("brandsView").classList.remove("show");
 
     // ============ Заказы (управление продавцом) ============
     let adminOrders = [], ordersStatusFilter = "active";
@@ -925,7 +966,6 @@
       ["issued", "Выданы"], ["canceled", "Отклонены"], ["all", "Все"],
     ];
 
-    $("openOrders").onclick = () => { $("ordersView").classList.add("show"); loadAdminOrders(); };
     $("ordersClose").onclick = () => $("ordersView").classList.remove("show");
 
     async function loadAdminOrders() {
