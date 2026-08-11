@@ -181,7 +181,10 @@
     .fsel-wrap { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
     .fsel { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 12px; padding: 9px 13px; font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
     .fsel small { color: var(--hint); }
-    .fsel.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+    .fsel.on { border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); border-radius: 12px; padding: 5px 6px 5px 13px; font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 10px; }
+    .fstep { display: inline-flex; align-items: center; gap: 9px; }
+    .fstep button { width: 28px; height: 28px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-accent); font-size: 17px; line-height: 1; }
+    .fstep span { font-weight: 800; min-width: 14px; text-align: center; }
     .fsel:disabled { opacity: .45; }
     /* Акцент на вкусах при переходе по кнопке «Выбрать» */
     .fsel-wrap.attn .fsel { animation: fselAttn 1.5s ease 2; }
@@ -748,10 +751,16 @@
 
       let flavorHtml = "";
       if (hasVariants(p)) {
-        flavorHtml = `<div style="font-weight:700;margin-top:16px">Выберите вкус:</div><div class="fsel-wrap">` +
+        // Каждый вкус — свой добавитель: нажал → появляется «− кол-во +» прямо на чипе.
+        flavorHtml = `<div style="font-weight:700;margin-top:16px">Вкусы:</div><div class="fsel-wrap">` +
           p.variants.map(v => {
             const out = v.stock <= 0;
-            return `<button class="fsel ${v.flavor===selectedFlavor?'on':''}" data-fl="${esc(v.flavor)}" ${out?'disabled':''}>${esc(v.flavor)} <small>${out?'нет':v.stock+' шт'}</small></button>`;
+            const qty = cart[cartKey(p.id, v.flavor)] ? cart[cartKey(p.id, v.flavor)].qty : 0;
+            const f = esc(v.flavor);
+            if (out) return `<button class="fsel" disabled>${f} <small>нет</small></button>`;
+            if (qty > 0) return `<div class="fsel on"><span>${f}</span><div class="fstep">
+                <button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div></div>`;
+            return `<button class="fsel" data-fladd="${f}">${f} <small>${v.stock} шт</small></button>`;
           }).join("") + `</div>`;
       }
 
@@ -761,16 +770,31 @@
         ${infoHtml}
         ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}
         ${flavorHtml}`;
-      $("prodBody").querySelectorAll("[data-fl]").forEach(b => b.onclick = () => { selectedFlavor = b.dataset.fl; renderProduct(); });
+      $("prodBody").querySelectorAll("[data-fladd]").forEach(b => b.onclick = () => flavorQty(b.dataset.fladd, +1));
+      $("prodBody").querySelectorAll("[data-flinc]").forEach(b => b.onclick = () => flavorQty(b.dataset.flinc, +1));
+      $("prodBody").querySelectorAll("[data-fldec]").forEach(b => b.onclick = () => flavorQty(b.dataset.fldec, -1));
 
       renderProdActions(p);
     }
 
+    function flavorQty(flavor, delta) { changeQty(currentProductId, delta, flavor); renderProduct(); }
+
     function renderProdActions(p) {
-      const flavor = hasVariants(p) ? selectedFlavor : null;
+      if (hasVariants(p)) {
+        // Итог по этому товару (все набранные вкусы)
+        let items = 0;
+        Object.values(cart).forEach(it => { if (it.product_id === p.id) items += it.qty; });
+        if (items > 0) {
+          $("prodActions").innerHTML = `<button class="bigbtn" id="pdGoCart">В корзину · ${items} шт · ${(items*p.price).toFixed(2)} ${CUR}</button>`;
+          $("pdGoCart").onclick = () => { $("productView").classList.remove("show"); renderGrid(); showTab("cart"); };
+        } else {
+          $("prodActions").innerHTML = `<div style="text-align:center;color:var(--hint);padding:10px 0">Нажмите на вкус, чтобы добавить</div>`;
+        }
+        return;
+      }
+      // Обычный товар (без вкусов)
       if (p.stock <= 0) { $("prodActions").innerHTML = `<button class="bigbtn" disabled>Нет в наличии</button>`; return; }
-      if (hasVariants(p) && !flavor) { $("prodActions").innerHTML = `<button class="bigbtn" disabled>Выберите вкус</button>`; return; }
-      const qty = cart[cartKey(p.id, flavor)] ? cart[cartKey(p.id, flavor)].qty : 0;
+      const qty = cart[cartKey(p.id)] ? cart[cartKey(p.id)].qty : 0;
       if (qty > 0) {
         $("prodActions").innerHTML = `<div class="pd-step"><button id="pdDec">−</button><span>${qty}</span><button id="pdInc">+</button></div>
           <button class="bigbtn" id="pdGoCart">В корзину · ${(p.price*qty).toFixed(2)} ${CUR}</button>`;
@@ -783,11 +807,7 @@
       }
     }
 
-    function prodQty(delta) {
-      const p = allProducts.find(x => x.id === currentProductId);
-      changeQty(currentProductId, delta, hasVariants(p) ? selectedFlavor : null);
-      renderProduct();
-    }
+    function prodQty(delta) { changeQty(currentProductId, delta, null); renderProduct(); }
 
     // ---------- Админка (только для админов) ----------
     const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
