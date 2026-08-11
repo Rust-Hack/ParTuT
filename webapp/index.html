@@ -183,6 +183,12 @@
     .fsel small { color: var(--hint); }
     .fsel.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
     .fsel:disabled { opacity: .45; }
+    /* Акцент на вкусах при переходе по кнопке «Выбрать» */
+    .fsel-wrap.attn .fsel { animation: fselAttn 1.5s ease 2; }
+    @keyframes fselAttn {
+      0%, 100% { box-shadow: none; transform: none; }
+      35%, 55% { box-shadow: 0 0 16px rgba(95,242,242,.65); border-color: var(--accent); transform: translateY(-2px); }
+    }
 
     /* Мягкая неоновая подсветка элементов (тёмная тема) — тонко, не вызывающе */
     html[data-theme="dark"] .card,
@@ -568,7 +574,7 @@
       if (p.stock <= 0) {
         ctrl = `<button class="plus" disabled>×</button>`;
       } else if (hasVariants(p)) {
-        ctrl = `<button class="pickbtn" data-open="${p.id}">Выбрать</button>`;
+        ctrl = `<button class="pickbtn" data-pick="${p.id}">Выбрать</button>`;
       } else {
         const qty = cart[cartKey(p.id)] ? cart[cartKey(p.id)].qty : 0;
         ctrl = qty > 0
@@ -592,6 +598,7 @@
       root.querySelectorAll("[data-dec]").forEach(b => b.onclick = () => changeQty(+b.dataset.dec, -1, b.dataset.flavor || null));
       root.querySelectorAll("[data-fav]").forEach(b => b.onclick = () => toggleFav(+b.dataset.fav));
       root.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openProduct(+b.dataset.open));
+      root.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => openProduct(+b.dataset.pick, true));
     }
     function changeQty(id, delta, flavor = null) {
       const p = allProducts.find(x => x.id === id); if (!p) return;
@@ -710,7 +717,20 @@
     // ---------- Карточка товара ----------
     let currentProductId = null;
     let selectedFlavor = null;
-    function openProduct(id) { currentProductId = id; selectedFlavor = null; renderProduct(); $("productView").classList.add("show"); }
+    function openProduct(id, focusFlavors = false) {
+      currentProductId = id; selectedFlavor = null; renderProduct();
+      $("productView").classList.add("show");
+      if (focusFlavors) {
+        setTimeout(() => {
+          const wrap = $("prodBody").querySelector(".fsel-wrap");
+          if (wrap) {
+            wrap.scrollIntoView({ behavior: "smooth", block: "center" });
+            wrap.classList.remove("attn"); void wrap.offsetWidth;   // рестарт анимации
+            wrap.classList.add("attn");
+          }
+        }, 150);
+      }
+    }
     $("prodBack").onclick = () => { $("productView").classList.remove("show"); renderGrid(); };
 
     function renderProduct() {
