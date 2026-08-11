@@ -396,6 +396,30 @@ def api_admin_update():
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/product/variants", methods=["POST"])
+def api_admin_variants():
+    """Заменяет список вкусов товара целиком (добавить/убрать/изменить остаток)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        pid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+
+    db.delete_variants(pid)
+    for v in (data.get("variants") or []):
+        fl = str(v.get("flavor", "")).strip()
+        try:
+            st = int(v.get("stock", 0))
+        except (TypeError, ValueError):
+            st = 0
+        if fl:
+            db.add_variant(pid, fl, max(0, st))
+    db.recalc_product_stock(pid)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/admin/product/delete", methods=["POST"])
 def api_admin_delete():
     """Удалить товар."""

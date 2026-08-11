@@ -342,6 +342,13 @@
     <div id="adminList"></div>
   </div>
 
+  <!-- Редактор товара-модели (вкусы/остаток/характеристики) -->
+  <div class="view" id="editView">
+    <div class="viewhead"><h2>✏️ Редактировать</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="editClose">Закрыть</button></div>
+    <div id="editBody"></div>
+  </div>
+
   <script>
     const tg = window.Telegram ? window.Telegram.WebApp : null;
     if (tg) { tg.ready(); tg.expand(); }
@@ -884,20 +891,111 @@
     function renderAdminList() {
       if (!allProducts.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
       $("adminList").innerHTML = allProducts.map(p => {
-        const variant = hasVariants(p);
-        const stockCell = variant
-          ? `<span style="width:58px;text-align:center;font-size:12px;color:var(--hint)">${p.variants.length} вк.<br>${p.stock} шт</span>`
-          : `<input class="as" type="text" inputmode="numeric" value="${p.stock}">`;
+        if (hasVariants(p)) {
+          // товар-модель: цену/вкусы/остаток правим в редакторе (✏️)
+          return `<div class="admrow">
+            <div class="an">${esc(p.name)}<small>${p.city} · ${p.variants.length} вк · ${p.stock} шт${p.is_hit ? ' · 🔥' : ''}</small></div>
+            <button class="iconbtn" data-edit="${p.id}">✏️</button>
+            <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
+        }
         return `<div class="admrow">
           <div class="an">${esc(p.name)}<small>${p.city} · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small></div>
           <input class="ap" type="text" inputmode="decimal" value="${p.price}">
-          ${stockCell}
+          <input class="as" type="text" inputmode="numeric" value="${p.stock}">
           <button class="iconbtn ok" data-save="${p.id}">💾</button>
-          <button class="iconbtn danger" data-del="${p.id}">🗑</button>
-        </div>`;
+          <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
       }).join("");
       $("adminList").querySelectorAll("[data-save]").forEach(b => b.onclick = () => saveAdminRow(+b.dataset.save, b));
+      $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
       $("adminList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => delAdminRow(+b.dataset.del));
+    }
+
+    // ----- Редактор товара-модели -----
+    let editId = null, editVariants = [];
+    $("editClose").onclick = () => $("editView").classList.remove("show");
+
+    function openEdit(id) {
+      const p = allProducts.find(x => x.id === id); if (!p) return;
+      editId = id;
+      editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock }));
+      renderEdit(p);
+      $("editView").classList.add("show");
+    }
+
+    function renderEdit(p) {
+      let specs = "";
+      if (p.category === "disposable") {
+        const pv = parseInt(p.volume, 10) || 0;
+        specs = `<label>Кол-во затяжек</label>
+          <div style="display:flex;gap:12px;align-items:center">
+            <input type="range" id="edPuffs" min="0" max="40000" step="100" value="${Math.min(pv,40000)}" style="flex:1">
+            <input type="number" id="edPuffsNum" min="0" step="100" value="${pv}" style="width:96px;text-align:center">
+          </div>`;
+      } else if (p.category === "liquid") {
+        specs = `<div class="rowf">
+          <div><label>Крепость (мг)</label><input id="edStrength" value="${esc(p.strength || '')}"></div>
+          <div><label>Объём (мл)</label><input id="edVolume" value="${esc(p.volume || '')}"></div></div>`;
+      }
+      const brandObj = brands.find(b => b.name === p.brand && b.category === p.category);
+      const avail = brandObj ? brandObj.flavors : [];
+      $("editBody").innerHTML = `
+        <div class="card-block form">
+          <div style="font-weight:800">${esc(p.name)}</div>
+          <div class="csub" style="margin-top:4px">${esc(p.brand || '')} · ${catName(p.category)} · ${esc(p.city)}</div>
+          <label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}">
+          ${specs}
+          <label>Вкусы и остаток</label>
+          <div id="edVarList"></div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <input id="edNewFlavor" placeholder="Добавить вкус" style="flex:1" list="edFlavorOpts">
+            <datalist id="edFlavorOpts">${avail.map(f => `<option value="${esc(f)}">`).join("")}</datalist>
+            <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
+          </div>
+          <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
+        </div>`;
+      renderEditVariants();
+      if ($("edPuffs")) {
+        $("edPuffs").oninput = () => { $("edPuffsNum").value = $("edPuffs").value; };
+        $("edPuffsNum").oninput = () => { let v = parseInt($("edPuffsNum").value, 10); if (isNaN(v) || v < 0) v = 0; $("edPuffs").value = Math.min(v, +$("edPuffs").max); };
+      }
+      $("edAddFlavor").onclick = () => {
+        const v = $("edNewFlavor").value.trim(); if (!v) return;
+        if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
+        $("edNewFlavor").value = ""; renderEditVariants();
+      };
+      $("edSave").onclick = () => saveEdit(p);
+    }
+
+    function renderEditVariants() {
+      $("edVarList").innerHTML = editVariants.length
+        ? editVariants.map((v, i) => `<div class="admrow"><div class="an">${esc(v.flavor)}</div>
+            <input class="edvst" data-i="${i}" inputmode="numeric" value="${v.stock}" style="width:64px;text-align:center">
+            <button class="iconbtn danger" data-vdel="${i}">✕</button></div>`).join("")
+        : `<p style="color:var(--hint)">Нет вкусов — добавьте ниже.</p>`;
+      $("edVarList").querySelectorAll(".edvst").forEach(inp => inp.oninput = () => { editVariants[+inp.dataset.i].stock = inp.value; });
+      $("edVarList").querySelectorAll("[data-vdel]").forEach(b => b.onclick = () => { editVariants.splice(+b.dataset.vdel, 1); renderEditVariants(); });
+    }
+
+    async function saveEdit(p) {
+      const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
+      if (!variants.length) { alertMsg("Оставьте хотя бы один вкус."); return; }
+      let volume = "", strength = p.strength || "", name = p.brand || p.name;
+      if (p.category === "disposable") { volume = $("edPuffsNum").value; name = [p.brand, volume].filter(x => x && x !== "0").join(" "); }
+      else if (p.category === "liquid") { strength = $("edStrength").value.trim(); volume = $("edVolume").value.trim(); name = p.brand; }
+      const price = $("edPrice").value;
+      $("edSave").disabled = true; $("edSave").textContent = "Сохраняю…";
+      const upd = (field, value) => fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, field, value }) });
+      try {
+        await upd("price", price);
+        await upd("volume", volume);
+        if (p.category === "liquid") await upd("strength", strength);
+        if (name) await upd("name", name);
+        await fetch("/api/admin/product/variants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, variants }) });
+        await refreshProducts();
+        $("editView").classList.remove("show");
+        alertMsg("Сохранено ✅");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
     }
 
     async function saveAdminRow(id, btn) {
