@@ -18,6 +18,7 @@
       --danger:#ef5350; --warn:#ff9800; --shadow:0 2px 10px rgba(20,22,26,.06);
       --brand-neon:#0bb6b6; --brand-glow:transparent;
       --header-h:58px; --nav-h:70px;
+      --safe-top:0px; /* высота «чёлки»/статус-бара в полноэкранном режиме, задаётся из JS */
     }
     /* Тёмная тема — неоновые цвета логотипа ParTuT (бирюзовый неон на глубоком фоне) */
     html[data-theme="dark"] {
@@ -33,19 +34,23 @@
       font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
     button { font-family: inherit; cursor: pointer; }
 
-    .header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-h); z-index: 20;
+    .header { position: fixed; top: 0; left: 0; right: 0; height: calc(var(--header-h) + var(--safe-top)); z-index: 20;
       background: var(--surface); border-bottom: 1px solid var(--line);
-      display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+      display: flex; align-items: center; justify-content: space-between; padding: var(--safe-top) 16px 0; }
     .brand { display: flex; align-items: center; gap: 8px; }
     .brand .logo { width: 30px; height: 30px; color: var(--brand-neon); }
     html[data-theme="dark"] .brand .logo { filter: drop-shadow(0 0 3px var(--brand-glow)) drop-shadow(0 0 8px var(--brand-glow)); }
     html[data-theme="dark"] .brand .logo path { fill: rgba(95,242,242,.10); }
+    .hactions { display: flex; align-items: center; gap: 10px; }
+    .hclose { width: 34px; height: 34px; flex: 0 0 auto; border-radius: 10px; border: 1px solid var(--line);
+      background: var(--surface-2); color: var(--text); font-size: 16px; line-height: 1; padding: 0; }
+    html[data-theme="dark"] .hclose { box-shadow: 0 0 8px var(--brand-glow); border-color: var(--accent); }
     .brand-text { font-size: 19px; font-weight: 800; letter-spacing: .5px; }
     html[data-theme="dark"] .brand-text { color: #fff; text-shadow: 0 0 10px var(--brand-glow); }
     .point { display: flex; align-items: center; gap: 6px; background: var(--surface-2); color: var(--text);
       border: none; border-radius: 999px; padding: 9px 14px; font-size: 14px; font-weight: 600; }
 
-    .content { padding-top: var(--header-h); padding-bottom: calc(var(--nav-h) + max(env(safe-area-inset-bottom), 14px) + 8px); min-height: 100vh; }
+    .content { padding-top: calc(var(--header-h) + var(--safe-top)); padding-bottom: calc(var(--nav-h) + max(env(safe-area-inset-bottom), 14px) + 8px); min-height: 100vh; }
     .tab { display: none; } .tab.show { display: block; }
 
     .searchrow { display: flex; gap: 10px; padding: 12px 16px 6px; }
@@ -135,7 +140,7 @@
     .opt.active { background: var(--accent-soft); color: var(--accent); }
     .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
 
-    .view { position: fixed; inset: 0; background: var(--page); z-index: 50; display: none; flex-direction: column; padding: 26px 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; }
+    .view { position: fixed; inset: 0; background: var(--page); z-index: 50; display: none; flex-direction: column; padding: calc(26px + var(--safe-top)) 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; }
     .view.show { display: flex; }
     .view .icon { font-size: 54px; text-align: center; margin: 10px 0; }
     .view h2 { font-size: 21px; margin: 0 0 8px; text-align: center; }
@@ -295,7 +300,10 @@
       <svg class="logo" viewBox="-2 2 28 20" fill="none"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
       <span class="brand-text">ParTuT</span>
     </div>
-    <button class="point" id="pointBtn">📍 <span id="pointName">Выбери точку</span> ▾</button>
+    <div class="hactions">
+      <button class="point" id="pointBtn">📍 <span id="pointName">Выбери точку</span> ▾</button>
+      <button class="hclose" id="closeBtn" aria-label="Закрыть">✕</button>
+    </div>
   </div>
 
   <div class="content">
@@ -464,7 +472,44 @@
       try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
       // Подстраховка: если Telegram всё же попробует свернуть — снова разворачиваем.
       try { if (tg.onEvent) tg.onEvent("viewportChanged", function () { if (!tg.isExpanded) tg.expand(); }); } catch (e) {}
+
+      // Полноэкранный режим — убирает верхнюю плашку Telegram (Bot API 8.0).
+      // В нём контент уходит под «чёлку»/статус-бар, поэтому высоту безопасной
+      // зоны считаем и кладём в CSS-переменную --safe-top (её использует шапка).
+      function applySafeArea() {
+        var sa  = tg.safeAreaInset        || { top: 0 };  // вырез экрана (чёлка/часы)
+        var csa = tg.contentSafeAreaInset || { top: 0 };  // плавающие кнопки Telegram
+        var top = (sa.top || 0) + (csa.top || 0);
+        document.documentElement.style.setProperty("--safe-top", top + "px");
+      }
+      try {
+        if (tg.requestFullscreen) {
+          tg.requestFullscreen();
+          if (tg.onEvent) {
+            tg.onEvent("fullscreenChanged", applySafeArea);
+            tg.onEvent("safeAreaChanged", applySafeArea);
+            tg.onEvent("contentSafeAreaChanged", applySafeArea);
+          }
+          applySafeArea();
+        }
+      } catch (e) {}
+
+      // На случай штатного закрытия (плавающий ✕ Telegram, свайп) — спросить подтверждение.
+      try { if (tg.enableClosingConfirmation) tg.enableClosingConfirmation(); } catch (e) {}
     }
+
+    // Своя кнопка ✕ в шапке — спрашиваем подтверждение и закрываем приложение.
+    (function () {
+      var closeBtn = document.getElementById("closeBtn");
+      if (!closeBtn) return;
+      closeBtn.addEventListener("click", function () {
+        if (tg && tg.showConfirm) {
+          tg.showConfirm("Закрыть приложение ParTuT?", function (ok) { if (ok) tg.close(); });
+        } else if (window.confirm("Закрыть приложение ParTuT?")) {
+          if (tg && tg.close) tg.close(); else window.close();
+        }
+      });
+    })();
     const initData = tg ? tg.initData : "";
     const tgUser = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
 
