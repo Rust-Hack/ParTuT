@@ -166,6 +166,14 @@
     .edphoto img { width: 72px; height: 72px; object-fit: cover; border-radius: 12px; background: var(--img-bg); flex: 0 0 auto; }
     .edphoto input[type=file] { flex: 1; min-width: 0; }
     .admsearch { width: 100%; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 15px; margin-bottom: 10px; }
+    /* Сворачиваемые секции (аккордеон) */
+    .sect { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); margin-bottom: 16px; }
+    .secthead { list-style: none; cursor: pointer; padding: 15px 16px; font-weight: 800; font-size: 15px;
+      display: flex; align-items: center; justify-content: space-between; user-select: none; }
+    .secthead::-webkit-details-marker { display: none; }
+    .secthead::after { content: "▼"; color: var(--hint); font-size: 12px; transition: transform .2s; }
+    details[open] > .secthead::after { transform: rotate(180deg); }
+    .sectbody { padding: 0 16px 16px; }
     .brgroup { font-weight: 700; color: var(--hint); font-size: 13px; margin: 16px 0 8px; }
     .brrow { cursor: pointer; }
     .brflavors { display: flex; flex-wrap: wrap; gap: 6px; margin: -2px 2px 12px; }
@@ -247,6 +255,7 @@
     html[data-theme="dark"] .coins,
     html[data-theme="dark"] .prow,
     html[data-theme="dark"] .point,
+    html[data-theme="dark"] .sect,
     html[data-theme="dark"] .card-block {
       border: 1px solid rgba(95,242,242,.22);
       box-shadow: var(--shadow), 0 0 15px rgba(95,242,242,.10);
@@ -416,8 +425,9 @@
     <div class="viewhead"><h2>🛍 Товары</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="productsClose">‹ Назад</button></div>
 
-    <div class="card-block form">
-      <div style="font-weight:800;margin-bottom:4px">➕ Новый товар</div>
+    <details class="sect">
+      <summary class="secthead">➕ Новый товар</summary>
+      <div class="sectbody form">
       <label>Точка (город)</label><select id="afCity"></select>
       <label>Категория</label><select id="afCat"></select>
       <div id="nameField"><label>Название</label><input id="afName" placeholder="Например: Vaporesso XROS"></div>
@@ -463,13 +473,18 @@
       <div class="chk"><input type="checkbox" id="afHit"><label for="afHit" style="margin:0">🔥 Отметить как «Хит»</label></div>
       <label>Фото (необязательно)</label><input type="file" id="afPhoto" accept="image/*">
       <button class="bigbtn" id="afAdd" style="margin-top:16px">Добавить товар</button>
-    </div>
+      </div>
+    </details>
 
-    <div style="font-weight:800;margin:4px 0 10px">Список товаров</div>
-    <input id="admSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
-    <div class="ochips" id="admCatChips"></div>
-    <div class="ochips" id="admLocChips"></div>
-    <div id="adminList"></div>
+    <details class="sect" open>
+      <summary class="secthead">Список товаров</summary>
+      <div class="sectbody">
+        <input id="admSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
+        <div class="ochips" id="admCatChips"></div>
+        <div class="ochips" id="admLocChips"></div>
+        <div id="adminList"></div>
+      </div>
+    </details>
   </div>
 
   <!-- Раздел: Локации -->
@@ -490,7 +505,9 @@
   <div class="view" id="brandsView">
     <div class="viewhead"><h2>🏷 Бренды и вкусы</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="brandsClose">‹ Назад</button></div>
-    <div class="card-block form">
+    <details class="sect" id="brFormSect">
+      <summary class="secthead">➕ Добавить бренд</summary>
+      <div class="sectbody form">
       <label>Название бренда</label><input id="brName" placeholder="Elf Bar">
       <label>Категория</label><select id="brCat"></select>
       <label>Вкусы (по одному или через запятую)</label>
@@ -501,10 +518,16 @@
       <div id="brFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
       <button class="bigbtn" id="brSave" style="margin-top:14px">Сохранить бренд</button>
       <button class="closebtn" id="brCancel" style="display:none">Отменить редактирование</button>
-    </div>
+      </div>
+    </details>
 
-    <input id="brSearch" class="admsearch" placeholder="🔍 Поиск бренда">
-    <div id="brList"></div>
+    <details class="sect" open>
+      <summary class="secthead">Мои бренды</summary>
+      <div class="sectbody">
+        <input id="brSearch" class="admsearch" placeholder="🔍 Поиск бренда">
+        <div id="brList"></div>
+      </div>
+    </details>
   </div>
 
   <!-- Редактор товара-модели (вкусы/остаток/характеристики) -->
@@ -1150,6 +1173,7 @@
       editingBrandId = id; $("brName").value = b.name; $("brCat").value = b.category;
       brandFlavors = [...b.flavors]; renderFlavorChips();
       $("brCancel").style.display = "block"; $("brSave").textContent = "Обновить бренд";
+      $("brFormSect").open = true;   // раскрыть свёрнутую форму
       $("brName").scrollIntoView({ behavior: "smooth", block: "center" });
     }
     async function delBrand(id) {
