@@ -139,7 +139,8 @@
     .overlay.show .sheet { animation: sheetUp .3s cubic-bezier(.22,.61,.36,1); }
     @keyframes ovFade { from { opacity: 0; } to { opacity: 1; } }
     @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-    .sheet { background: var(--surface); width: 100%; border-radius: 22px 22px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
+    .sheet { position: relative; background: var(--surface); width: 100%; border-radius: 22px 22px 0 0; padding: 28px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
+    .sheet::before { content: ""; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
     .sheet h2 { margin: 0 0 14px; font-size: 18px; }
     .opt { width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: none; padding: 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
     .opt.active { background: var(--accent-soft); color: var(--accent); }
@@ -393,7 +394,7 @@
       <div class="fltlabel">Бренд</div>
       <div id="brandFilterList"></div>
       <button class="bigbtn" id="filterApply" style="margin-top:8px">Применить</button>
-      <button class="closebtn" id="filterReset" style="display:none;color:var(--danger)">Сбросить фильтры</button>
+      <button class="closebtn" id="filterReset" style="color:var(--danger)">Сбросить фильтры</button>
     </div>
   </div>
 
@@ -759,12 +760,48 @@
         if (i >= 0) brandFilters.splice(i, 1); else brandFilters.push(b);   // добавить/убрать
         openFilter(); updateFilterBtn(); renderGrid();
       });
-      $("filterReset").style.display = filtersActive() ? "block" : "none";
       $("filterOverlay").classList.add("show");
     }
     $("filterBtn").onclick = openFilter;
-    $("filterApply").onclick = () => $("filterOverlay").classList.remove("show");
+    $("filterApply").onclick = () => closeOverlay($("filterOverlay"));
     $("filterReset").onclick = () => { brandFilters = []; sortMode = "default"; openFilter(); updateFilterBtn(); renderGrid(); };
+
+    // ---------- Нижние шторки: анимированное закрытие + свайп вниз ----------
+    function closeOverlay(ov) {
+      const sheet = ov.querySelector(".sheet");
+      sheet.style.transition = "transform .22s ease";
+      sheet.style.transform = "translateY(100%)";
+      ov.style.transition = "opacity .22s ease"; ov.style.opacity = "0";
+      setTimeout(() => {
+        ov.classList.remove("show");
+        ov.style.opacity = ""; ov.style.transition = "";
+        sheet.style.transition = ""; sheet.style.transform = "";
+      }, 220);
+    }
+    document.querySelectorAll(".overlay").forEach(ov => {
+      const sheet = ov.querySelector(".sheet");
+      if (!sheet) return;
+      let startY = 0, delta = 0, dragging = false;
+      sheet.addEventListener("touchstart", (e) => {
+        if (sheet.scrollTop > 0) return;          // тянем, только когда шторка прокручена вверх
+        startY = e.touches[0].clientY; delta = 0; dragging = true;
+        sheet.style.transition = "none";
+      }, { passive: true });
+      sheet.addEventListener("touchmove", (e) => {
+        if (!dragging) return;
+        delta = Math.max(0, e.touches[0].clientY - startY);
+        sheet.style.transform = `translateY(${delta}px)`;
+      }, { passive: true });
+      sheet.addEventListener("touchend", () => {
+        if (!dragging) return;
+        dragging = false;
+        sheet.style.transition = "transform .2s ease";
+        if (delta > 90) closeOverlay(ov);         // потянул достаточно — закрываем
+        else sheet.style.transform = "";          // иначе — вернуть на место
+      });
+      // тап по затемнённому фону — тоже закрыть
+      ov.addEventListener("click", (e) => { if (e.target === ov) closeOverlay(ov); });
+    });
 
     function sortProducts(list) {
       const arr = [...list];
@@ -854,11 +891,11 @@
         if (b.dataset.city !== city) { for (const k in cart) delete cart[k]; }
         city = b.dataset.city; $("pointName").textContent = city;
         brandFilters = [];   // другая точка — другой набор брендов
-        $("pointOverlay").classList.remove("show"); updateFilterBtn(); renderGrid(); renderNav();
+        closeOverlay($("pointOverlay")); updateFilterBtn(); renderGrid(); renderNav();
       });
       $("pointOverlay").classList.add("show");
     };
-    $("pointClose").onclick = () => $("pointOverlay").classList.remove("show");
+    $("pointClose").onclick = () => closeOverlay($("pointOverlay"));
 
     const cartCount = () => Object.values(cart).reduce((s, it) => s + it.qty, 0);
     const cartTotal = () => Object.values(cart).reduce((s, it) => { const p = allProducts.find(x => x.id === it.product_id); return s + (p ? p.price * it.qty : 0); }, 0);
@@ -904,12 +941,12 @@
       if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
     }
 
-    $("pickupClose").onclick = () => $("pickupOverlay").classList.remove("show");
+    $("pickupClose").onclick = () => closeOverlay($("pickupOverlay"));
     document.querySelectorAll("#pickupOverlay .opt").forEach(b => b.onclick = () => submitOrder(b.dataset.t));
     async function submitOrder(pickup) {
       const items = Object.values(cart).map(it => ({ id: it.product_id, qty: it.qty, flavor: it.flavor || undefined }));
       if (!items.length) return;
-      $("pickupOverlay").classList.remove("show");
+      closeOverlay($("pickupOverlay"));
       try {
         const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, city, items, pickup_time: pickup }) });
         const d = await r.json();
