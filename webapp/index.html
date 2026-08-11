@@ -57,9 +57,12 @@
 
     .chips { display: flex; gap: 9px; overflow-x: auto; padding: 8px 16px 12px; scrollbar-width: none; }
     .chips::-webkit-scrollbar { display: none; }
-    .brandchips { padding-top: 0; }
-    .brandchips:empty { display: none; }
-    .brandchips .chip { padding: 6px 13px; font-size: 12.5px; }
+    .filterbtn { flex: 0 0 auto; width: 48px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); color: var(--text); display: flex; align-items: center; justify-content: center; position: relative; }
+    .filterbtn.on { color: var(--accent); border-color: var(--accent); }
+    .filterbtn.on::after { content: ""; position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    html[data-theme="dark"] .filterbtn { box-shadow: var(--shadow), 0 0 15px rgba(95,242,242,.10); }
+    .fltlabel { font-weight: 700; color: var(--hint); font-size: 13px; margin: 6px 0 8px; }
+    .fltchips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
     .chip { flex: 0 0 auto; padding: 9px 16px; border-radius: 999px; background: var(--surface); color: var(--text);
       border: 1px solid var(--line); font-size: 14px; white-space: nowrap; font-weight: 600; }
     .chip.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
@@ -351,9 +354,13 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
           <input id="searchInput" placeholder="Поиск товаров...">
         </div>
+        <button class="filterbtn" id="filterBtn" aria-label="Фильтры">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="4" y1="7" x2="20" y2="7"/><circle cx="10" cy="7" r="2.4" fill="var(--surface)"/>
+            <line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.4" fill="var(--surface)"/></svg>
+        </button>
       </div>
       <div class="chips" id="chips"></div>
-      <div class="chips brandchips" id="brandChips"></div>
       <div class="grid" id="grid"></div>
       <div id="catEmpty"></div>
     </section>
@@ -372,6 +379,18 @@
   <div class="overlay" id="pointOverlay">
     <div class="sheet"><h2>📍 Выбери точку</h2><div id="pointList"></div>
       <button class="closebtn" id="pointClose">Закрыть</button></div>
+  </div>
+
+  <!-- Фильтры и сортировка витрины -->
+  <div class="overlay" id="filterOverlay">
+    <div class="sheet">
+      <h2>Фильтры</h2>
+      <div class="fltlabel">Сортировка</div>
+      <div id="sortList"></div>
+      <div class="fltlabel">Бренд</div>
+      <div id="brandFilterList"></div>
+      <button class="closebtn" id="filterClose">Готово</button>
+    </div>
   </div>
 
   <div class="overlay" id="pickupOverlay">
@@ -607,7 +626,7 @@
     const CUR = `<span class="cur">Br</span>`;
     const withUnit = (val, unit) => { val = String(val || "").trim(); if (!val) return ""; return /[a-zа-я%]/i.test(val) ? val : val + " " + unit; };
 
-    let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilter = null;
+    let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilter = null, sortMode = "default";
     const cart = {};
     let favs = JSON.parse(localStorage.getItem("favs") || "[]");
     let currentOrder = null, me = null, activeTab = "catalog";
@@ -674,11 +693,11 @@
     }
     async function loadCatalog() {
       await Promise.all([fetchLocations(), fetchProducts()]);
-      recomputeCities(); renderChips(); renderBrandFilter(); renderGrid();
+      recomputeCities(); renderChips(); updateFilterBtn(); renderGrid();
     }
     async function refreshProducts() {
       await Promise.all([fetchLocations(), fetchProducts()]);
-      recomputeCities(); renderChips(); renderBrandFilter(); renderGrid(); renderNav();
+      recomputeCities(); renderChips(); updateFilterBtn(); renderGrid(); renderNav();
       if ($("productsView").classList.contains("show")) renderAdminList();
       if ($("locationsView").classList.contains("show")) renderLocList();
     }
@@ -688,25 +707,57 @@
         `<button class="chip ${code===cat?'active':''}" data-c="${code}">${t}</button>`).join("");
       $("chips").querySelectorAll("[data-c]").forEach(b => b.onclick = () => {
         cat = b.dataset.c; brandFilter = null;   // сменили категорию — сбрасываем бренд
-        renderChips(); renderBrandFilter(); renderGrid();
+        renderChips(); updateFilterBtn(); renderGrid();
       });
     }
-    // Бренды, доступные в текущей точке и категории (для строки фильтра)
-    function renderBrandFilter() {
-      const set = new Map();
+
+    // ---------- Фильтры и сортировка (панель) ----------
+    const SORTS = [
+      ["default", "По умолчанию"], ["price_asc", "Сначала дешевле"], ["price_desc", "Сначала дороже"],
+      ["str_desc", "Сначала крепкие"], ["str_asc", "Сначала не крепкие"],
+    ];
+    const strengthVal = (p) => parseFloat(String(p.strength || "").replace(",", ".")) || 0;
+
+    function brandsInScope() {
+      const set = new Set();
       allProducts.forEach(p => {
         if (p.city !== city) return;
         if (cat && p.category !== cat) return;
-        if (p.brand) set.set(p.brand, true);
+        if (p.brand) set.add(p.brand);
       });
-      const list = [...set.keys()].sort((a, b) => a.localeCompare(b, "ru"));
-      if (brandFilter && !set.has(brandFilter)) brandFilter = null;   // бренда больше нет в выборке
-      if (list.length < 2) { $("brandChips").innerHTML = ""; return; }  // 0–1 бренд — фильтр не нужен
-      const chip = (val, label) => `<button class="chip ${brandFilter === val ? 'active' : ''}" data-b="${esc(val === null ? '' : val)}">${esc(label)}</button>`;
-      $("brandChips").innerHTML = chip(null, "Все бренды") + list.map(b => chip(b, b)).join("");
-      $("brandChips").querySelectorAll("[data-b]").forEach(btn => btn.onclick = () => {
-        brandFilter = btn.dataset.b || null; renderBrandFilter(); renderGrid();
+      return [...set].sort((a, b) => a.localeCompare(b, "ru"));
+    }
+    function updateFilterBtn() {
+      if (brandFilter && !brandsInScope().includes(brandFilter)) brandFilter = null;
+      const active = brandFilter || sortMode !== "default";
+      $("filterBtn").classList.toggle("on", !!active);
+    }
+    function openFilter() {
+      $("sortList").innerHTML = SORTS.map(([k, n]) =>
+        `<button class="opt ${sortMode === k ? 'active' : ''}" data-s="${k}">${n}</button>`).join("");
+      $("sortList").querySelectorAll("[data-s]").forEach(b => b.onclick = () => {
+        sortMode = b.dataset.s; openFilter(); updateFilterBtn(); renderGrid();
       });
+      const brs = brandsInScope();
+      const opt = (val, label) => `<button class="opt ${brandFilter === val ? 'active' : ''}" data-b="${esc(val === null ? '' : val)}">${esc(label)}</button>`;
+      $("brandFilterList").innerHTML = brs.length
+        ? opt(null, "Все бренды") + brs.map(b => opt(b, b)).join("")
+        : `<p style="color:var(--hint)">В этой категории брендов нет.</p>`;
+      $("brandFilterList").querySelectorAll("[data-b]").forEach(btn => btn.onclick = () => {
+        brandFilter = btn.dataset.b || null; openFilter(); updateFilterBtn(); renderGrid();
+      });
+      $("filterOverlay").classList.add("show");
+    }
+    $("filterBtn").onclick = openFilter;
+    $("filterClose").onclick = () => $("filterOverlay").classList.remove("show");
+
+    function sortProducts(list) {
+      const arr = [...list];
+      if (sortMode === "price_asc") arr.sort((a, b) => a.price - b.price);
+      else if (sortMode === "price_desc") arr.sort((a, b) => b.price - a.price);
+      else if (sortMode === "str_desc") arr.sort((a, b) => strengthVal(b) - strengthVal(a));
+      else if (sortMode === "str_asc") arr.sort((a, b) => strengthVal(a) - strengthVal(b));
+      return arr;
     }
     function visibleProducts() {
       const s = search.trim().toLowerCase();
@@ -752,7 +803,7 @@
           <div class="crow"><span class="cprice">${p.price.toFixed(2)} ${CUR}</span>${ctrl}</div></div></div>`;
     }
     function renderGrid() {
-      const list = visibleProducts();
+      const list = sortProducts(visibleProducts());
       $("grid").innerHTML = list.map(cardHtml).join("");
       $("catEmpty").innerHTML = list.length ? "" : `<div class="empty"><div class="circ">🔎</div><h3>Ничего не найдено</h3><p>Другая категория или точка.</p></div>`;
       bindCardButtons($("grid"));
@@ -788,7 +839,7 @@
         if (b.dataset.city !== city) { for (const k in cart) delete cart[k]; }
         city = b.dataset.city; $("pointName").textContent = city;
         brandFilter = null;   // другая точка — другой набор брендов
-        $("pointOverlay").classList.remove("show"); renderBrandFilter(); renderGrid(); renderNav();
+        $("pointOverlay").classList.remove("show"); updateFilterBtn(); renderGrid(); renderNav();
       });
       $("pointOverlay").classList.add("show");
     };
