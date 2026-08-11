@@ -81,7 +81,7 @@
     .cname { font-size: 14px; font-weight: 700; line-height: 1.25; margin: 0 0 8px; }
     .crow { margin-top: auto; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .cprice { color: var(--accent); font-size: 18px; font-weight: 800; white-space: nowrap; }
-    .cur { width: 1.15em; height: .82em; vertical-align: -.06em; display: inline-block; margin-left: 1px; }
+    .cur { font-size: .86em; font-weight: 700; margin-left: 2px; }
     .plus { width: 42px; height: 42px; border-radius: 12px; border: none; background: var(--accent); color: var(--on-accent); font-size: 24px; line-height: 1; }
     .plus:disabled { opacity: .4; }
     .mini { display: flex; align-items: center; gap: 8px; }
@@ -459,7 +459,7 @@
     const CATS = { "": "Все товары", liquid: "Жидкости", podsystem: "Подсистемы", disposable: "Одноразки" };
     const CAT_EMOJI = { disposable: "🔋", liquid: "💧", podsystem: "🧩" };
     let locations = [];   // [{id, name}] — точки продаж, приходят из базы
-    const CUR = `<svg class="cur" viewBox="0 0 30 24"><text x="0" y="18" font-size="20" font-weight="800" font-family="-apple-system,'Segoe UI',Roboto,Arial,sans-serif" fill="currentColor">Br</text></svg>`;
+    const CUR = `<span class="cur">Br</span>`;
     const withUnit = (val, unit) => { val = String(val || "").trim(); if (!val) return ""; return /[a-zа-я%]/i.test(val) ? val : val + " " + unit; };
 
     let allProducts = [], cityList = [], city = null, cat = "", search = "";
