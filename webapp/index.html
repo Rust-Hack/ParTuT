@@ -670,19 +670,39 @@
     }
 
     // ---------- Жесты ----------
-    // Свайп вправо по экрану = «Назад» (только экраны с кнопкой в шапке; 18+/оплата не свайпаются)
+    // Свайп вправо по экрану = «Назад», экран едет за пальцем (18+/оплата не свайпаются)
     document.querySelectorAll(".view").forEach(view => {
       const backBtn = view.querySelector(".viewhead button");
       if (!backBtn) return;
-      let sx = 0, sy = 0, tracking = false;
+      let sx = 0, sy = 0, dx = 0, mode = null;   // mode: null(не решили)|'h'(тянем назад)|'v'(отдали скроллу)
       view.addEventListener("touchstart", (e) => {
-        if (e.touches.length !== 1) { tracking = false; return; }
-        sx = e.touches[0].clientX; sy = e.touches[0].clientY; tracking = true;
+        if (e.touches.length !== 1) { mode = "v"; return; }
+        sx = e.touches[0].clientX; sy = e.touches[0].clientY; dx = 0; mode = null;
+        view.style.transition = "none";
       }, { passive: true });
-      view.addEventListener("touchend", (e) => {
-        if (!tracking) return; tracking = false;
-        const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
-        if (dx > 70 && Math.abs(dx) > Math.abs(dy) * 2) backBtn.click();   // вправо и горизонтально
+      view.addEventListener("touchmove", (e) => {
+        if (mode === "v") return;
+        const ddx = e.touches[0].clientX - sx, ddy = e.touches[0].clientY - sy;
+        if (mode === null) {
+          if (Math.abs(ddx) < 8 && Math.abs(ddy) < 8) return;              // ещё не понятно направление
+          mode = (ddx > 0 && Math.abs(ddx) > Math.abs(ddy)) ? "h" : "v";   // вправо+горизонтально — назад
+          if (mode === "v") return;
+        }
+        dx = Math.max(0, ddx);
+        e.preventDefault();                        // забираем жест у вертикального скролла
+        view.style.transform = `translateX(${dx}px)`;
+      }, { passive: false });
+      view.addEventListener("touchend", () => {
+        if (mode !== "h") { mode = null; return; }
+        mode = null;
+        const w = view.clientWidth || 320;
+        view.style.transition = "transform .2s ease";
+        if (dx > Math.min(120, w * 0.33)) {        // достаточно — уезжаем и закрываем
+          view.style.transform = `translateX(${w}px)`;
+          setTimeout(() => { view.style.transition = "none"; view.style.transform = ""; backBtn.click(); }, 200);
+        } else {
+          view.style.transform = "";               // мало — вернуть на место
+        }
       }, { passive: true });
     });
     // Свайп влево/вправо по каталогу = переключение вкладок нижнего меню
