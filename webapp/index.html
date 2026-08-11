@@ -166,6 +166,10 @@
     .edphoto img { width: 72px; height: 72px; object-fit: cover; border-radius: 12px; background: var(--img-bg); flex: 0 0 auto; }
     .edphoto input[type=file] { flex: 1; min-width: 0; }
     .admsearch { width: 100%; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 15px; margin-bottom: 10px; }
+    .brgroup { font-weight: 700; color: var(--hint); font-size: 13px; margin: 16px 0 8px; }
+    .brrow { cursor: pointer; }
+    .brflavors { display: flex; flex-wrap: wrap; gap: 6px; margin: -2px 2px 12px; }
+    .brchip { background: var(--surface-2); color: var(--text); border-radius: 999px; padding: 5px 11px; font-size: 12.5px; }
     /* --- Заказы / фильтры-чипы --- */
     .ochips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
     .ochip { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 999px; padding: 7px 14px; font-size: 13px; font-weight: 600; }
@@ -497,8 +501,10 @@
       <div id="brFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
       <button class="bigbtn" id="brSave" style="margin-top:14px">Сохранить бренд</button>
       <button class="closebtn" id="brCancel" style="display:none">Отменить редактирование</button>
-      <div id="brList"></div>
     </div>
+
+    <input id="brSearch" class="admsearch" placeholder="🔍 Поиск бренда">
+    <div id="brList"></div>
   </div>
 
   <!-- Редактор товара-модели (вкусы/остаток/характеристики) -->
@@ -1101,12 +1107,41 @@
     }
     $("brCancel").onclick = resetBrandForm;
 
+    let brandSearch = "";
+    const brandExpanded = new Set();   // id брендов, у которых раскрыты вкусы
+    $("brSearch").oninput = () => { brandSearch = $("brSearch").value; renderBrandList(); };
+
     function renderBrandList() {
       if (!brands.length) { $("brList").innerHTML = `<p style="color:var(--hint);margin-top:12px">Брендов пока нет.</p>`; return; }
-      $("brList").innerHTML = `<div style="font-weight:700;margin:14px 0 8px">Мои бренды</div>` + brands.map(b =>
-        `<div class="admrow"><div class="an">${esc(b.name)}<small>${catName(b.category)} · вкусов: ${b.flavors.length}</small></div>
-          <button class="iconbtn" data-bre="${b.id}">✏️</button>
-          <button class="iconbtn danger" data-brd="${b.id}">🗑</button></div>`).join("");
+      const q = brandSearch.trim().toLowerCase();
+      const filtered = brands.filter(b => !q || b.name.toLowerCase().includes(q));
+      if (!filtered.length) { $("brList").innerHTML = `<p style="color:var(--hint);margin-top:12px">Ничего не найдено.</p>`; return; }
+      let html = "";
+      for (const [cat, cn] of CAT_OPTS) {
+        const group = filtered.filter(b => b.category === cat);
+        if (!group.length) continue;
+        html += `<div class="brgroup">${cn} · ${group.length}</div>`;
+        html += group.map(b => {
+          const open = brandExpanded.has(b.id);
+          const chips = open
+            ? `<div class="brflavors">${b.flavors.length
+                ? b.flavors.map(f => `<span class="brchip">${esc(f)}</span>`).join("")
+                : '<span style="color:var(--hint);font-size:12.5px">вкусов нет</span>'}</div>`
+            : "";
+          return `<div class="admrow brrow" data-brtoggle="${b.id}">
+              <div class="an">${esc(b.name)}<small>вкусов: ${b.flavors.length} ${open ? '▲' : '▼'}</small></div>
+              <button class="iconbtn" data-bre="${b.id}">✏️</button>
+              <button class="iconbtn danger" data-brd="${b.id}">🗑</button>
+            </div>${chips}`;
+        }).join("");
+      }
+      $("brList").innerHTML = html;
+      $("brList").querySelectorAll("[data-brtoggle]").forEach(row => row.onclick = (e) => {
+        if (e.target.closest("[data-bre],[data-brd]")) return;   // клик по кнопкам не раскрывает
+        const id = +row.dataset.brtoggle;
+        if (brandExpanded.has(id)) brandExpanded.delete(id); else brandExpanded.add(id);
+        renderBrandList();
+      });
       $("brList").querySelectorAll("[data-bre]").forEach(b => b.onclick = () => editBrand(+b.dataset.bre));
       $("brList").querySelectorAll("[data-brd]").forEach(b => b.onclick = () => delBrand(+b.dataset.brd));
     }
