@@ -150,6 +150,7 @@
     .opt.active { background: var(--accent-soft); color: var(--accent); }
     .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
 
+    .swipe-dim { position: fixed; inset: 0; background: #000; opacity: 0; z-index: 49; pointer-events: none; display: none; }
     .view { position: fixed; inset: 0; background: var(--page); z-index: 50; display: none; flex-direction: column; padding: calc(26px + var(--safe-top)) 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
     .view.show { display: flex; }
     .view .icon { font-size: 54px; text-align: center; margin: 10px 0; }
@@ -681,6 +682,7 @@
     // ---------- Жесты ----------
     // Свайп вправо по экрану = «Назад», экран едет за пальцем (18+/оплата не свайпаются)
     document.querySelectorAll(".view").forEach(view => {
+      if (view.id === "productView") return;    // у карточки — свой, более богатый жест
       const backBtn = view.querySelector(".viewhead button");
       if (!backBtn) return;
       let sx = 0, sy = 0, dx = 0, mode = null;   // mode: null(не решили)|'h'(тянем назад)|'v'(отдали скроллу)
@@ -714,6 +716,53 @@
         }
       }, { passive: true });
     });
+    // Карточка товара: свайп-назад с параллаксом каталога, затемнением и учётом скорости
+    (function () {
+      const view = $("productView"), content = document.querySelector(".content"), backBtn = $("prodBack");
+      const dim = document.createElement("div"); dim.className = "swipe-dim"; document.body.appendChild(dim);
+      let sx = 0, sy = 0, dx = 0, mode = null, t0 = 0;
+      const noTrans = () => view.style.transition = content.style.transition = dim.style.transition = "none";
+      const anim = () => view.style.transition = content.style.transition = dim.style.transition = "transform .2s ease, opacity .2s ease";
+      const setPos = (x) => {
+        const w = view.clientWidth || 320;
+        view.style.transform = `translateX(${x}px)`;
+        content.style.transform = `translateX(${-0.25 * (w - x)}px)`;   // каталог подъезжает справа-налево
+        dim.style.opacity = String(0.4 * (1 - x / w));                  // затемнение спадает по мере ухода
+      };
+      const clear = () => {
+        view.style.transition = content.style.transition = dim.style.transition = "";
+        view.style.transform = content.style.transform = ""; dim.style.opacity = ""; dim.style.display = "none";
+      };
+      view.addEventListener("touchstart", (e) => {
+        if (e.touches.length !== 1) { mode = "v"; return; }
+        sx = e.touches[0].clientX; sy = e.touches[0].clientY; dx = 0; mode = null; t0 = Date.now(); noTrans();
+      }, { passive: true });
+      view.addEventListener("touchmove", (e) => {
+        if (mode === "v") return;
+        const ddx = e.touches[0].clientX - sx, ddy = e.touches[0].clientY - sy;
+        if (mode === null) {
+          if (Math.abs(ddx) < 8 && Math.abs(ddy) < 8) return;
+          mode = (ddx > 0 && Math.abs(ddx) > Math.abs(ddy)) ? "h" : "v";
+          if (mode === "v") return;
+          dim.style.display = "block";
+        }
+        dx = Math.max(0, ddx); e.preventDefault(); setPos(dx);
+      }, { passive: false });
+      view.addEventListener("touchend", () => {
+        if (mode !== "h") { mode = null; return; }
+        mode = null;
+        const w = view.clientWidth || 320;
+        const vel = dx / Math.max(1, Date.now() - t0);   // скорость, px/мс
+        anim();
+        if (dx > w * 0.33 || vel > 0.5) {                // треть ширины ИЛИ быстрый флик
+          view.style.transform = `translateX(${w}px)`; content.style.transform = ""; dim.style.opacity = "0";
+          setTimeout(() => { clear(); backBtn.click(); }, 200);
+        } else {
+          setPos(0); setTimeout(clear, 200);
+        }
+      }, { passive: true });
+    })();
+
     // Свайп влево/вправо по каталогу = переключение вкладок нижнего меню
     (function () {
       const order = NAV.map(n => n.id);
