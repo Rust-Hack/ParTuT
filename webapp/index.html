@@ -192,10 +192,9 @@
       background-size: 118px 58px;
       animation: edgePulse 1.4s ease-in-out 1.5s both, splashOut .6s ease 3.1s forwards; }
     .splash-logo { text-align: center; animation: logoOut .4s ease 3.1s forwards; }
-    .splash-cloud { width: 140px; height: 140px; color: #5ff2f2;
-      animation: glowPulse 1.4s ease-in-out 1.5s both; }
+    .splash-cloud { width: 140px; height: 140px; color: #5ff2f2; }
     .splash-cloud path { fill: none; stroke-dasharray: 100; stroke-dashoffset: 100;
-      animation: cloudDraw 1.5s ease .2s forwards; }
+      animation: cloudDraw 1.5s ease .2s forwards, glowPulse 1.4s ease-in-out 1.5s both; }
     @keyframes cloudDraw { to { stroke-dashoffset: 0; } }
     /* 3 вспышки, каждая ярче — синхронно с краями */
     @keyframes glowPulse {
