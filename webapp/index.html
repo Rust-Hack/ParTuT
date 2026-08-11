@@ -768,13 +768,14 @@
             const out = v.stock <= 0;
             const qty = cart[cartKey(p.id, v.flavor)] ? cart[cartKey(p.id, v.flavor)].qty : 0;
             const f = esc(v.flavor);
-            let bottom;
-            if (out) bottom = `<span class="fbn">нет в наличии</span>`;
-            else if (qty > 0) bottom = `<div class="fstep"><button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div>`;
-            else bottom = `<span class="fbn">${v.stock} шт</span><button class="addbtn" data-fladd="${f}">+</button>`;
+            const right = out ? ""
+              : (qty > 0
+                  ? `<div class="fstep"><button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div>`
+                  : `<button class="addbtn" data-fladd="${f}">+</button>`);
+            const left = out ? `нет в наличии` : `${v.stock} шт`;
             return `<div class="frow ${qty>0?'on':''} ${out?'out':''}">
                 <div class="fname">${f}</div>
-                <div class="fbottom ${qty>0?'end':''}">${bottom}</div></div>`;
+                <div class="fbottom"><span class="fbn">${left}</span>${right}</div></div>`;
           }).join("") + `</div>`;
       }
 
