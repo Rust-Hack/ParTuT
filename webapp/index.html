@@ -165,7 +165,8 @@
     .edphoto { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
     .edphoto img { width: 72px; height: 72px; object-fit: cover; border-radius: 12px; background: var(--img-bg); flex: 0 0 auto; }
     .edphoto input[type=file] { flex: 1; min-width: 0; }
-    /* --- Заказы --- */
+    .admsearch { width: 100%; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 15px; margin-bottom: 10px; }
+    /* --- Заказы / фильтры-чипы --- */
     .ochips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
     .ochip { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 999px; padding: 7px 14px; font-size: 13px; font-weight: 600; }
     .ochip.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
@@ -461,6 +462,9 @@
     </div>
 
     <div style="font-weight:800;margin:4px 0 10px">Список товаров</div>
+    <input id="admSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
+    <div class="ochips" id="admCatChips"></div>
+    <div class="ochips" id="admLocChips"></div>
     <div id="adminList"></div>
   </div>
 
@@ -929,11 +933,29 @@
     $("mLocations").onclick = openLocations;
     $("mBrands").onclick = openBrands;
 
+    // Фильтры админ-списка товаров
+    let admSearch = "", admCatFilter = "all", admLocFilter = "all";
+
+    function renderAdmFilters() {
+      const cats = [["all", "Все"], ...CAT_OPTS];
+      $("admCatChips").innerHTML = cats.map(([c, n]) =>
+        `<button class="ochip ${admCatFilter === c ? 'active' : ''}" data-ac="${c}">${n}</button>`).join("");
+      const locs = [["all", "Все точки"], ...locations.map(l => [l.name, l.name])];
+      $("admLocChips").innerHTML = locs.map(([c, n]) =>
+        `<button class="ochip ${admLocFilter === c ? 'active' : ''}" data-al="${esc(c)}">${esc(n)}</button>`).join("");
+      $("admCatChips").querySelectorAll("[data-ac]").forEach(b =>
+        b.onclick = () => { admCatFilter = b.dataset.ac; renderAdmFilters(); renderAdminList(); });
+      $("admLocChips").querySelectorAll("[data-al]").forEach(b =>
+        b.onclick = () => { admLocFilter = b.dataset.al; renderAdmFilters(); renderAdminList(); });
+    }
+    $("admSearch").oninput = () => { admSearch = $("admSearch").value; renderAdminList(); };
+
     function openProducts() {
       $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
       $("afCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
       renderFlavorChips();
       updateAddMode();
+      renderAdmFilters();
       renderAdminList();
       $("productsView").classList.add("show");
     }
@@ -1233,7 +1255,15 @@
 
     function renderAdminList() {
       if (!allProducts.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
-      $("adminList").innerHTML = allProducts.map(p => {
+      const q = (admSearch || "").trim().toLowerCase();
+      const list = allProducts.filter(p => {
+        if (admCatFilter !== "all" && p.category !== admCatFilter) return false;
+        if (admLocFilter !== "all" && p.city !== admLocFilter) return false;
+        if (q && !(`${p.name} ${p.brand || ""} ${p.flavor || ""}`.toLowerCase().includes(q))) return false;
+        return true;
+      });
+      if (!list.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Ничего не найдено.</p>`; return; }
+      $("adminList").innerHTML = list.map(p => {
         if (hasVariants(p)) {
           // товар-модель: цену/вкусы/остаток правим в редакторе (✏️)
           return `<div class="admrow">
