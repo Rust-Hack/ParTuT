@@ -457,7 +457,14 @@
 
   <script>
     const tg = window.Telegram ? window.Telegram.WebApp : null;
-    if (tg) { tg.ready(); tg.expand(); }
+    if (tg) {
+      tg.ready();
+      tg.expand();                                        // раскрыть на всю высоту
+      // Отключаем свайп-вниз, который сворачивает приложение (Bot API 7.7+).
+      try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
+      // Подстраховка: если Telegram всё же попробует свернуть — снова разворачиваем.
+      try { if (tg.onEvent) tg.onEvent("viewportChanged", function () { if (!tg.isExpanded) tg.expand(); }); } catch (e) {}
+    }
     const initData = tg ? tg.initData : "";
     const tgUser = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
 
