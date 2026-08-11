@@ -17,7 +17,7 @@
       --accent:#0aa6a6; --on-accent:#ffffff; --accent-soft:#e2f7f7;
       --danger:#ef5350; --warn:#ff9800; --shadow:0 2px 10px rgba(20,22,26,.06);
       --brand-neon:#0bb6b6; --brand-glow:transparent;
-      --header-h:58px; --nav-h:66px;
+      --header-h:58px; --nav-h:70px;
     }
     /* Тёмная тема — неоновые цвета логотипа ParTuT (бирюзовый неон на глубоком фоне) */
     html[data-theme="dark"] {
@@ -45,7 +45,7 @@
     .point { display: flex; align-items: center; gap: 6px; background: var(--surface-2); color: var(--text);
       border: none; border-radius: 999px; padding: 9px 14px; font-size: 14px; font-weight: 600; }
 
-    .content { padding-top: var(--header-h); padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom)); min-height: 100vh; }
+    .content { padding-top: var(--header-h); padding-bottom: calc(var(--nav-h) + max(env(safe-area-inset-bottom), 14px) + 8px); min-height: 100vh; }
     .tab { display: none; } .tab.show { display: block; }
 
     .searchrow { display: flex; gap: 10px; padding: 12px 16px 6px; }
@@ -79,8 +79,9 @@
     .fav.on { color: var(--danger); }
     .cbody { padding: 10px 12px 12px; display: flex; flex-direction: column; flex: 1; }
     .cname { font-size: 14px; font-weight: 700; line-height: 1.25; margin: 0 0 8px; }
-    .crow { margin-top: auto; display: flex; align-items: center; justify-content: space-between; }
-    .cprice { color: var(--accent); font-size: 17px; font-weight: 800; }
+    .crow { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .cprice { color: var(--accent); font-size: 16px; font-weight: 800; white-space: nowrap; }
+    .cur { width: .62em; height: .9em; vertical-align: -.11em; display: inline-block; margin-left: 1px; }
     .plus { width: 36px; height: 36px; border-radius: 12px; border: none; background: var(--accent); color: var(--on-accent); font-size: 22px; line-height: 1; }
     .plus:disabled { opacity: .4; }
     .mini { display: flex; align-items: center; gap: 8px; }
@@ -117,8 +118,9 @@
     .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 21px; height: 21px; border-radius: 50%; background: #fff; transition: transform .2s; }
     .switch.on::after { transform: translateX(19px); }
 
-    .nav { position: fixed; left: 0; right: 0; bottom: 0; height: calc(var(--nav-h) + env(safe-area-inset-bottom));
-      padding-bottom: env(safe-area-inset-bottom); background: var(--surface); border-top: 1px solid var(--line); display: flex; z-index: 20; }
+    .nav { position: fixed; left: 0; right: 0; bottom: 0;
+      height: calc(var(--nav-h) + max(env(safe-area-inset-bottom), 14px));
+      padding-bottom: max(env(safe-area-inset-bottom), 14px); background: var(--surface); border-top: 1px solid var(--line); display: flex; z-index: 20; }
     .navwrap { position: relative; flex: 1; }
     .navbtn { width: 100%; height: 100%; border: none; background: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--hint); font-size: 11px; }
     .navbtn.active { color: var(--accent); }
@@ -182,6 +184,28 @@
     .fsel.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
     .fsel:disabled { opacity: .45; }
 
+    /* Мягкая неоновая подсветка элементов (тёмная тема) — тонко, не вызывающе */
+    html[data-theme="dark"] .card,
+    html[data-theme="dark"] .search,
+    html[data-theme="dark"] .chip,
+    html[data-theme="dark"] .citem,
+    html[data-theme="dark"] .profcard,
+    html[data-theme="dark"] .coins,
+    html[data-theme="dark"] .prow,
+    html[data-theme="dark"] .point,
+    html[data-theme="dark"] .card-block {
+      border: 1px solid rgba(95,242,242,.13);
+      box-shadow: var(--shadow), 0 0 10px rgba(95,242,242,.05);
+    }
+    html[data-theme="dark"] .chip.active {
+      box-shadow: 0 0 12px rgba(95,242,242,.4); border-color: var(--accent);
+    }
+    html[data-theme="dark"] .header { box-shadow: 0 1px 12px rgba(95,242,242,.06); }
+    html[data-theme="dark"] .nav {
+      border-top: 1px solid rgba(95,242,242,.16);
+      box-shadow: 0 -2px 16px rgba(95,242,242,.06);
+    }
+
     /* Сплэш-заставка: кирпичная стена, облако собирается линией, затем 3 неоновые
        вспышки с нарастающей яркостью — синхронно логотип и края заставки. */
     #splash { position: fixed; inset: 0; z-index: 100; overflow: hidden;
@@ -192,19 +216,20 @@
       background-size: 118px 58px;
       animation: edgePulse 1.4s ease-in-out 1.5s both, splashOut .6s ease 3.1s forwards; }
     .splash-logo { text-align: center; animation: logoOut .4s ease 3.1s forwards; }
-    .splash-cloud { width: 140px; height: 140px; color: #5ff2f2;
-      animation: glowPulse 1.4s ease-in-out 1.5s both; }
-    .splash-cloud path { fill: none; stroke-dasharray: 100; stroke-dashoffset: 100;
+    .splash-cloud { width: 140px; height: 140px; }
+    /* контур рисуется линией */
+    .cloud-line { fill: none; stroke: #5ff2f2; stroke-dasharray: 100; stroke-dashoffset: 100;
       animation: cloudDraw 1.5s ease .2s forwards; }
+    /* размытая копия под контуром = свечение по форме (без квадрата), мигает 3 раза */
+    .cloud-glow { fill: none; stroke: #5ff2f2; opacity: 0;
+      animation: glowFlash 1.4s ease-in-out 1.5s both; }
     @keyframes cloudDraw { to { stroke-dashoffset: 0; } }
-    /* 3 вспышки, каждая ярче — синхронно с краями */
-    @keyframes glowPulse {
-      0% { filter: drop-shadow(0 0 0 transparent); }
-      14% { filter: drop-shadow(0 0 6px rgba(95,242,242,.4)); }                                              /* вспышка 1 */
-      28% { filter: drop-shadow(0 0 0 transparent); }
-      50% { filter: drop-shadow(0 0 12px rgba(95,242,242,.65)) drop-shadow(0 0 20px rgba(95,242,242,.35)); } /* вспышка 2 */
-      64% { filter: drop-shadow(0 0 0 transparent); }
-      86%,100% { filter: drop-shadow(0 0 18px rgba(95,242,242,.9)) drop-shadow(0 0 34px rgba(95,242,242,.6)); } /* вспышка 3, остаётся */
+    /* 3 вспышки, каждая ярче — синхронно с текстом и краями */
+    @keyframes glowFlash {
+      0% { opacity: 0; }
+      14% { opacity: .45; } 28% { opacity: 0; }
+      50% { opacity: .72; } 64% { opacity: 0; }
+      86%,100% { opacity: 1; }
     }
     @keyframes edgePulse {
       0% { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
@@ -222,11 +247,11 @@
     @keyframes splashFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
     @keyframes textPulse {
       0% { text-shadow: none; }
-      14% { text-shadow: 0 0 3px rgba(95,242,242,.5); }
+      14% { text-shadow: 0 0 6px rgba(95,242,242,.6); }
       28% { text-shadow: none; }
-      50% { text-shadow: 0 0 5px rgba(95,242,242,.7); }
+      50% { text-shadow: 0 0 9px rgba(95,242,242,.8); }
       64% { text-shadow: none; }
-      86%,100% { text-shadow: 0 0 4px rgba(95,242,242,.9), 0 0 8px rgba(95,242,242,.5); }
+      86%,100% { text-shadow: 0 0 5px rgba(95,242,242,.95), 0 0 11px rgba(95,242,242,.5); }
     }
     @keyframes logoOut { to { opacity: 0; } }
     @keyframes splashOut { to { opacity: 0; visibility: hidden; } }
@@ -235,7 +260,11 @@
 <body>
   <div id="splash">
     <div class="splash-logo">
-      <svg class="splash-cloud" viewBox="-2 2 28 20" fill="none"><path pathLength="100" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      <svg class="splash-cloud" viewBox="-2 2 28 20" fill="none">
+        <defs><filter id="cloudGlow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="1.1"/></filter></defs>
+        <path class="cloud-glow" filter="url(#cloudGlow)" pathLength="100" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
+        <path class="cloud-line" pathLength="100" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>
+      </svg>
       <div class="splash-title">ParTuT</div>
       <div class="splash-sub">VAPE &amp; PODS</div>
     </div>
@@ -429,7 +458,8 @@
     const CATS = { "": "Все товары", liquid: "Жидкости", podsystem: "Подсистемы", disposable: "Одноразки" };
     const CAT_EMOJI = { disposable: "🔋", liquid: "💧", podsystem: "🧩" };
     let locations = [];   // [{id, name}] — точки продаж, приходят из базы
-    const CUR = "Br";
+    const CUR = `<svg class="cur" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5v17"/><path d="M8 3.5h4.6a3.9 3.9 0 0 1 0 7.8H8"/><path d="M4.5 15.5h9.5"/></svg>`;
+    const withUnit = (val, unit) => { val = String(val || "").trim(); if (!val) return ""; return /[a-zа-я%]/i.test(val) ? val : val + " " + unit; };
 
     let allProducts = [], cityList = [], city = null, cat = "", search = "";
     const cart = {};
@@ -517,8 +547,11 @@
     }
     function productBadges(p) {
       const b = [];
-      if (p.strength) b.push(`<span class="tagbadge">${esc(p.strength)}</span>`);
-      if (p.volume) b.push(`<span class="tagbadge alt">${esc(p.volume)}</span>`);
+      // У жидкостей — крепость (мг) и объём (мл). У одноразок затяжки НЕ показываем (они в названии).
+      if (p.category === "liquid") {
+        if (p.strength) b.push(`<span class="tagbadge">${esc(withUnit(p.strength, "мг"))}</span>`);
+        if (p.volume) b.push(`<span class="tagbadge alt">${esc(withUnit(p.volume, "мл"))}</span>`);
+      }
       if (p.is_hit) b.push(`<span class="tagbadge hit">🔥 Хит</span>`);
       else if (p.stock > 0 && p.stock <= 3) b.push(`<span class="tagbadge warn">Мало</span>`);
       return b.length ? `<div class="badges-tr">${b.join("")}</div>` : "";
@@ -685,8 +718,9 @@
       const info = [];
       if (p.brand) info.push(["Бренд", p.brand]);
       if (p.flavor) info.push(["Вкус", p.flavor]);
-      if (p.strength) info.push(["Крепость", p.strength]);
-      if (p.volume) info.push([p.category === "disposable" ? "Затяжек" : "Объём", p.volume]);
+      if (p.strength) info.push(["Крепость", withUnit(p.strength, "мг")]);
+      if (p.volume) info.push([p.category === "disposable" ? "Затяжек" : "Объём",
+        p.category === "disposable" ? p.volume : withUnit(p.volume, "мл")]);
       const infoHtml = info.length
         ? `<div class="pd-info-wrap">${info.map(([k, v]) => `<div class="pd-info"><span>${k}</span><b>${esc(v)}</b></div>`).join("")}</div>` : "";
 
