@@ -146,7 +146,7 @@
     .opt.active { background: var(--accent-soft); color: var(--accent); }
     .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
 
-    .view { position: fixed; inset: 0; background: var(--page); z-index: 50; display: none; flex-direction: column; padding: calc(26px + var(--safe-top)) 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; }
+    .view { position: fixed; inset: 0; background: var(--page); z-index: 50; display: none; flex-direction: column; padding: calc(26px + var(--safe-top)) 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
     .view.show { display: flex; }
     .view .icon { font-size: 54px; text-align: center; margin: 10px 0; }
     .view h2 { font-size: 21px; margin: 0 0 8px; text-align: center; }
@@ -224,7 +224,9 @@
     .pd-name { font-size: 22px; font-weight: 800; margin: 16px 0 6px; text-align: left; }
     .pd-price { color: var(--accent); font-size: 24px; font-weight: 800; }
     .pd-desc { color: var(--hint); font-size: 15px; line-height: 1.5; margin-top: 12px; text-align: left; }
-    .pd-actions { padding-top: 16px; display: flex; gap: 12px; align-items: center; }
+    /* prodBody — собственный скролл (иначе flex:1 ломает прокрутку длинных карточек) */
+    #prodBody { min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+    .pd-actions { padding-top: 16px; display: flex; gap: 12px; align-items: center; flex: 0 0 auto; }
     .pd-actions .bigbtn { flex: 1; }
     .pd-step { display: flex; align-items: center; gap: 14px; background: var(--surface-2); border-radius: 14px; padding: 8px 12px; }
     .pd-step button { width: 38px; height: 38px; border-radius: 10px; border: none; background: var(--accent); color: var(--on-accent); font-size: 20px; }
@@ -935,7 +937,7 @@
           <div><div class="pn">${esc(name)}</div><div class="pid">ID: ${(tgUser && tgUser.id) || "—"}</div></div>
           <div class="coins"><b>0</b><small>VAPECOINS</small></div></div>
         <div class="plist">
-          ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление товарами</span><span>›</span></div>` : ""}
+          ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>` : ""}
           <div class="prow"><span>${dark ? "🌙" : "☀️"} Тёмная тема</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
           <div class="prow">📦 Заказы — история покупок</div>
           <div class="prow">💬 Менеджер</div>
@@ -992,6 +994,7 @@
     function openProduct(id, focusFlavors = false) {
       currentProductId = id; selectedFlavor = null; renderProduct();
       $("productView").classList.add("show");
+      $("prodBody").scrollTop = 0;   // новая карточка — с начала
       if (focusFlavors) {
         setTimeout(() => {
           const wrap = $("prodBody").querySelector(".fsel-list");

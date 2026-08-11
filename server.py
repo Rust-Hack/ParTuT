@@ -180,11 +180,13 @@ def api_photo():
             _file_path_cache[file_id] = path
         url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}"
         r = requests.get(url, timeout=15)
+        r.raise_for_status()
         ctype = r.headers.get("Content-Type", "image/jpeg")
         if len(_photo_cache) < 200:              # простой предохранитель по размеру
             _photo_cache[file_id] = (r.content, ctype)
         return _photo_response(r.content, ctype)
     except Exception as e:
+        _file_path_cache.pop(file_id, None)      # путь мог протухнуть — сбросим, чтобы взять заново
         print(f"Ошибка отдачи фото {file_id}: {e}")
         return Response("photo error", status=404)
 
