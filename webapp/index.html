@@ -135,8 +135,11 @@
     .badge-count { position: absolute; top: 8px; right: calc(50% - 22px); background: var(--danger); color: #fff; font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 5px; }
 
     .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: flex-end; z-index: 40; }
-    .overlay.show { display: flex; }
-    .sheet { background: var(--surface); width: 100%; border-radius: 22px 22px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); }
+    .overlay.show { display: flex; animation: ovFade .2s ease; }
+    .overlay.show .sheet { animation: sheetUp .3s cubic-bezier(.22,.61,.36,1); }
+    @keyframes ovFade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    .sheet { background: var(--surface); width: 100%; border-radius: 22px 22px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
     .sheet h2 { margin: 0 0 14px; font-size: 18px; }
     .opt { width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: none; padding: 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
     .opt.active { background: var(--accent-soft); color: var(--accent); }
@@ -389,7 +392,8 @@
       <div id="sortList"></div>
       <div class="fltlabel">Бренд</div>
       <div id="brandFilterList"></div>
-      <button class="closebtn" id="filterClose">Готово</button>
+      <button class="bigbtn" id="filterApply" style="margin-top:8px">Применить</button>
+      <button class="closebtn" id="filterReset" style="display:none;color:var(--danger)">Сбросить фильтры</button>
     </div>
   </div>
 
@@ -626,7 +630,7 @@
     const CUR = `<span class="cur">Br</span>`;
     const withUnit = (val, unit) => { val = String(val || "").trim(); if (!val) return ""; return /[a-zа-я%]/i.test(val) ? val : val + " " + unit; };
 
-    let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilter = null, sortMode = "default";
+    let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilters = [], sortMode = "default";
     const cart = {};
     let favs = JSON.parse(localStorage.getItem("favs") || "[]");
     let currentOrder = null, me = null, activeTab = "catalog";
@@ -706,7 +710,7 @@
       $("chips").innerHTML = Object.entries(CATS).map(([code, t]) =>
         `<button class="chip ${code===cat?'active':''}" data-c="${code}">${t}</button>`).join("");
       $("chips").querySelectorAll("[data-c]").forEach(b => b.onclick = () => {
-        cat = b.dataset.c; brandFilter = null;   // сменили категорию — сбрасываем бренд
+        cat = b.dataset.c; brandFilters = [];   // сменили категорию — сбрасываем бренды
         renderChips(); updateFilterBtn(); renderGrid();
       });
     }
@@ -727,10 +731,11 @@
       });
       return [...set].sort((a, b) => a.localeCompare(b, "ru"));
     }
+    function filtersActive() { return brandFilters.length > 0 || sortMode !== "default"; }
     function updateFilterBtn() {
-      if (brandFilter && !brandsInScope().includes(brandFilter)) brandFilter = null;
-      const active = brandFilter || sortMode !== "default";
-      $("filterBtn").classList.toggle("on", !!active);
+      const scope = brandsInScope();
+      brandFilters = brandFilters.filter(b => scope.includes(b));   // убрать бренды не из выборки
+      $("filterBtn").classList.toggle("on", filtersActive());
     }
     function openFilter() {
       $("sortList").innerHTML = SORTS.map(([k, n]) =>
@@ -739,17 +744,27 @@
         sortMode = b.dataset.s; openFilter(); updateFilterBtn(); renderGrid();
       });
       const brs = brandsInScope();
-      const opt = (val, label) => `<button class="opt ${brandFilter === val ? 'active' : ''}" data-b="${esc(val === null ? '' : val)}">${esc(label)}</button>`;
+      // «Все бренды» активно, когда ничего не выбрано; каждый бренд — переключатель
+      const allOpt = `<button class="opt ${brandFilters.length ? '' : 'active'}" data-ball="1">Все бренды</button>`;
+      const opt = (b) => `<button class="opt ${brandFilters.includes(b) ? 'active' : ''}" data-b="${esc(b)}">${esc(b)}</button>`;
       $("brandFilterList").innerHTML = brs.length
-        ? opt(null, "Все бренды") + brs.map(b => opt(b, b)).join("")
+        ? allOpt + brs.map(opt).join("")
         : `<p style="color:var(--hint)">В этой категории брендов нет.</p>`;
-      $("brandFilterList").querySelectorAll("[data-b]").forEach(btn => btn.onclick = () => {
-        brandFilter = btn.dataset.b || null; openFilter(); updateFilterBtn(); renderGrid();
+      $("brandFilterList").querySelector("[data-ball]") && ($("brandFilterList").querySelector("[data-ball]").onclick = () => {
+        brandFilters = []; openFilter(); updateFilterBtn(); renderGrid();
       });
+      $("brandFilterList").querySelectorAll("[data-b]").forEach(btn => btn.onclick = () => {
+        const b = btn.dataset.b;
+        const i = brandFilters.indexOf(b);
+        if (i >= 0) brandFilters.splice(i, 1); else brandFilters.push(b);   // добавить/убрать
+        openFilter(); updateFilterBtn(); renderGrid();
+      });
+      $("filterReset").style.display = filtersActive() ? "block" : "none";
       $("filterOverlay").classList.add("show");
     }
     $("filterBtn").onclick = openFilter;
-    $("filterClose").onclick = () => $("filterOverlay").classList.remove("show");
+    $("filterApply").onclick = () => $("filterOverlay").classList.remove("show");
+    $("filterReset").onclick = () => { brandFilters = []; sortMode = "default"; openFilter(); updateFilterBtn(); renderGrid(); };
 
     function sortProducts(list) {
       const arr = [...list];
@@ -763,7 +778,7 @@
       const s = search.trim().toLowerCase();
       return allProducts.filter(p => p.city === city
         && (!cat || p.category === cat)
-        && (!brandFilter || p.brand === brandFilter)
+        && (!brandFilters.length || brandFilters.includes(p.brand))
         && (!s || p.name.toLowerCase().includes(s)));
     }
     function productBadges(p) {
@@ -838,7 +853,7 @@
         if (b.dataset.city !== city && Object.keys(cart).length && !confirm("Сменить точку? Корзина очистится.")) return;
         if (b.dataset.city !== city) { for (const k in cart) delete cart[k]; }
         city = b.dataset.city; $("pointName").textContent = city;
-        brandFilter = null;   // другая точка — другой набор брендов
+        brandFilters = [];   // другая точка — другой набор брендов
         $("pointOverlay").classList.remove("show"); updateFilterBtn(); renderGrid(); renderNav();
       });
       $("pointOverlay").classList.add("show");
