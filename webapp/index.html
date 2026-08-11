@@ -181,16 +181,25 @@
     .fsel-wrap { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
     .fsel { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 12px; padding: 9px 13px; font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
     .fsel small { color: var(--hint); }
-    .fsel.on { border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); border-radius: 12px; padding: 5px 6px 5px 13px; font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 10px; }
-    .fstep { display: inline-flex; align-items: center; gap: 9px; }
-    .fstep button { width: 28px; height: 28px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-accent); font-size: 17px; line-height: 1; }
-    .fstep span { font-weight: 800; min-width: 14px; text-align: center; }
     .fsel:disabled { opacity: .45; }
+    /* Вкусы списком-строками (не прыгают при добавлении) */
+    .fsel-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
+    .frow { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 9px 10px 9px 14px; min-height: 46px; }
+    .frow.on { border-color: var(--accent); background: var(--accent-soft); }
+    .frow.out { opacity: .5; }
+    .frow .fname { font-size: 14px; font-weight: 600; }
+    .frow .fname small { color: var(--hint); font-weight: 400; margin-left: 7px; }
+    .frow .fout { color: var(--hint); font-size: 13px; }
+    .addbtn { width: 32px; height: 32px; border-radius: 9px; border: none; background: var(--accent); color: var(--on-accent); font-size: 20px; line-height: 1; flex: 0 0 auto; }
+    .fstep { display: inline-flex; align-items: center; gap: 10px; }
+    .fstep button { width: 30px; height: 30px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-accent); font-size: 18px; line-height: 1; }
+    .fstep span { font-weight: 800; min-width: 16px; text-align: center; }
     /* Акцент на вкусах при переходе по кнопке «Выбрать» */
-    .fsel-wrap.attn .fsel { animation: fselAttn 1.5s ease 2; }
+    .fsel-list.attn .frow { animation: fselAttn 1.5s ease 2; }
     @keyframes fselAttn {
-      0%, 100% { box-shadow: none; transform: none; }
-      35%, 55% { box-shadow: 0 0 16px rgba(95,242,242,.65); border-color: var(--accent); transform: translateY(-2px); }
+      0%, 100% { box-shadow: none; }
+      35%, 55% { box-shadow: 0 0 16px rgba(95,242,242,.6); border-color: var(--accent); }
     }
 
     /* Мягкая неоновая подсветка элементов (тёмная тема) — тонко, не вызывающе */
@@ -725,7 +734,7 @@
       $("productView").classList.add("show");
       if (focusFlavors) {
         setTimeout(() => {
-          const wrap = $("prodBody").querySelector(".fsel-wrap");
+          const wrap = $("prodBody").querySelector(".fsel-list");
           if (wrap) {
             wrap.scrollIntoView({ behavior: "smooth", block: "center" });
             wrap.classList.remove("attn"); void wrap.offsetWidth;   // рестарт анимации
@@ -751,16 +760,19 @@
 
       let flavorHtml = "";
       if (hasVariants(p)) {
-        // Каждый вкус — свой добавитель: нажал → появляется «− кол-во +» прямо на чипе.
-        flavorHtml = `<div style="font-weight:700;margin-top:16px">Вкусы:</div><div class="fsel-wrap">` +
+        // Вкусы — строками на всю ширину, чтобы список не «прыгал» при добавлении.
+        flavorHtml = `<div style="font-weight:700;margin:16px 0 8px">Вкусы:</div><div class="fsel-list">` +
           p.variants.map(v => {
             const out = v.stock <= 0;
             const qty = cart[cartKey(p.id, v.flavor)] ? cart[cartKey(p.id, v.flavor)].qty : 0;
             const f = esc(v.flavor);
-            if (out) return `<button class="fsel" disabled>${f} <small>нет</small></button>`;
-            if (qty > 0) return `<div class="fsel on"><span>${f}</span><div class="fstep">
-                <button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div></div>`;
-            return `<button class="fsel" data-fladd="${f}">${f} <small>${v.stock} шт</small></button>`;
+            const right = out
+              ? `<span class="fout">нет</span>`
+              : (qty > 0
+                  ? `<div class="fstep"><button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div>`
+                  : `<button class="addbtn" data-fladd="${f}">+</button>`);
+            return `<div class="frow ${qty>0?'on':''} ${out?'out':''}">
+                <span class="fname">${f}${out ? '' : ` <small>${v.stock} шт</small>`}</span>${right}</div>`;
           }).join("") + `</div>`;
       }
 
