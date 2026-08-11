@@ -182,28 +182,42 @@
     .fsel.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
     .fsel:disabled { opacity: .45; }
 
-    /* Сплэш-заставка: облако собирается линией, затем плавная неоновая пульсация,
-       синхронно свечение логотипа и краёв заставки (не в магазине). */
-    #splash { position: fixed; inset: 0; z-index: 100; background: #0a171c;
-      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    /* Сплэш-заставка: кирпичная стена, облако собирается линией, затем 3 неоновые
+       вспышки с нарастающей яркостью — синхронно логотип и края заставки. */
+    #splash { position: fixed; inset: 0; z-index: 100; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
       border: 1px solid transparent;
-      animation: edgePulse 1.7s ease-in-out 1.55s both, splashOut .6s ease 3.2s forwards; }
+      background-color: #0a171c;
+      background-image:
+        radial-gradient(circle at 50% 43%, rgba(95,242,242,.14), transparent 58%),
+        linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,0,0,.5) 2px, transparent 2px),
+        linear-gradient(rgba(0,0,0,.5) 2px, transparent 2px);
+      background-size: 100% 100%, 58px 30px, 58px 30px, 58px 30px;
+      background-position: center, 0 0, 0 0, 0 0;
+      animation: edgePulse 1.4s ease-in-out 1.5s both, splashOut .6s ease 3.1s forwards; }
     .splash-logo { text-align: center;
-      animation: glowPulse 1.7s ease-in-out 1.55s both, logoOut .4s ease 3.2s forwards; }
+      animation: glowPulse 1.4s ease-in-out 1.5s both, logoOut .4s ease 3.1s forwards; }
     .splash-cloud { width: 140px; height: 140px; color: #5ff2f2; }
     .splash-cloud path { fill: none; stroke-dasharray: 100; stroke-dashoffset: 100;
       animation: cloudDraw 1.5s ease .2s forwards; }
     @keyframes cloudDraw { to { stroke-dashoffset: 0; } }
-    /* Плавно разгорается и гаснет — синхронно с краями */
+    /* 3 вспышки, каждая ярче — синхронно с краями */
     @keyframes glowPulse {
-      0%   { filter: drop-shadow(0 0 0 transparent); }
-      50%  { filter: drop-shadow(0 0 11px rgba(95,242,242,.8)) drop-shadow(0 0 26px rgba(95,242,242,.55)); }
-      100% { filter: drop-shadow(0 0 0 transparent); }
+      0% { filter: drop-shadow(0 0 0 transparent); }
+      14% { filter: drop-shadow(0 0 6px rgba(95,242,242,.4)); }                                              /* вспышка 1 */
+      28% { filter: drop-shadow(0 0 0 transparent); }
+      50% { filter: drop-shadow(0 0 12px rgba(95,242,242,.65)) drop-shadow(0 0 20px rgba(95,242,242,.35)); } /* вспышка 2 */
+      64% { filter: drop-shadow(0 0 0 transparent); }
+      86%,100% { filter: drop-shadow(0 0 18px rgba(95,242,242,.9)) drop-shadow(0 0 34px rgba(95,242,242,.6)); } /* вспышка 3, остаётся */
     }
     @keyframes edgePulse {
-      0%   { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
-      50%  { box-shadow: inset 0 0 36px rgba(95,242,242,.35), inset 0 0 6px rgba(95,242,242,.55); border-color: rgba(95,242,242,.22); }
-      100% { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
+      0% { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
+      14% { box-shadow: inset 0 0 16px rgba(95,242,242,.18); border-color: rgba(95,242,242,.12); }
+      28% { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
+      50% { box-shadow: inset 0 0 28px rgba(95,242,242,.3); border-color: rgba(95,242,242,.2); }
+      64% { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
+      86%,100% { box-shadow: inset 0 0 44px rgba(95,242,242,.45), inset 0 0 7px rgba(95,242,242,.6); border-color: rgba(95,242,242,.3); }
     }
     .splash-title { font-size: 36px; font-weight: 800; letter-spacing: 1px; margin-top: 8px;
       color: #fff;
