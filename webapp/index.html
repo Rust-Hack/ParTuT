@@ -669,6 +669,42 @@
       window.scrollTo(0, 0);
     }
 
+    // ---------- Жесты ----------
+    // Свайп вправо по экрану = «Назад» (только экраны с кнопкой в шапке; 18+/оплата не свайпаются)
+    document.querySelectorAll(".view").forEach(view => {
+      const backBtn = view.querySelector(".viewhead button");
+      if (!backBtn) return;
+      let sx = 0, sy = 0, tracking = false;
+      view.addEventListener("touchstart", (e) => {
+        if (e.touches.length !== 1) { tracking = false; return; }
+        sx = e.touches[0].clientX; sy = e.touches[0].clientY; tracking = true;
+      }, { passive: true });
+      view.addEventListener("touchend", (e) => {
+        if (!tracking) return; tracking = false;
+        const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+        if (dx > 70 && Math.abs(dx) > Math.abs(dy) * 2) backBtn.click();   // вправо и горизонтально
+      }, { passive: true });
+    });
+    // Свайп влево/вправо по каталогу = переключение вкладок нижнего меню
+    (function () {
+      const order = NAV.map(n => n.id);
+      const content = document.querySelector(".content");
+      let sx = 0, sy = 0, track = false;
+      content.addEventListener("touchstart", (e) => {
+        if (e.touches.length !== 1) { track = false; return; }
+        if (e.target.closest(".chips, input, textarea, select, .searchrow")) { track = false; return; }
+        sx = e.touches[0].clientX; sy = e.touches[0].clientY; track = true;
+      }, { passive: true });
+      content.addEventListener("touchend", (e) => {
+        if (!track) return; track = false;
+        const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+        if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 2) return;   // слишком слабо/вертикально
+        const i = order.indexOf(activeTab);
+        if (dx < 0 && i < order.length - 1) showTab(order[i + 1]);          // влево → следующая
+        else if (dx > 0 && i > 0) showTab(order[i - 1]);                     // вправо → предыдущая
+      }, { passive: true });
+    })();
+
     async function start() {
       initTheme();
       try {
