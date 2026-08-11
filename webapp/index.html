@@ -77,10 +77,10 @@
     .fav { position: absolute; top: 8px; left: 8px; width: 34px; height: 34px; border-radius: 50%; background: var(--surface);
       border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--hint); font-size: 17px; box-shadow: var(--shadow); }
     .fav.on { color: var(--danger); }
-    .cbody { padding: 10px 13px 15px; display: flex; flex-direction: column; flex: 1; }
+    .cbody { padding: 10px 11px 13px; display: flex; flex-direction: column; flex: 1; }
     .cname { font-size: 14px; font-weight: 700; line-height: 1.25; margin: 0 0 8px; }
-    .crow { margin-top: auto; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .cprice { color: var(--accent); font-size: 18px; font-weight: 800; white-space: nowrap; }
+    .crow { margin-top: auto; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .cprice { color: var(--accent); font-size: 16px; font-weight: 800; white-space: nowrap; }
     .cur { font-size: .86em; font-weight: 700; margin-left: 2px; }
     .plus { width: 42px; height: 42px; border-radius: 12px; border: none; background: var(--accent); color: var(--on-accent); font-size: 24px; line-height: 1; }
     .plus:disabled { opacity: .4; }
@@ -177,8 +177,7 @@
     .pd-step { display: flex; align-items: center; gap: 14px; background: var(--surface-2); border-radius: 14px; padding: 8px 12px; }
     .pd-step button { width: 38px; height: 38px; border-radius: 10px; border: none; background: var(--accent); color: var(--on-accent); font-size: 20px; }
     .pd-step span { font-weight: 800; min-width: 20px; text-align: center; font-size: 17px; }
-    .pickbtn { border: none; background: var(--accent); color: var(--on-accent); padding: 9px 16px; border-radius: 11px; font-size: 14px; font-weight: 700; white-space: nowrap; }
-    .pickbtn.full { width: 100%; margin-top: 10px; padding: 12px; font-size: 15px; text-align: center; }
+    .pickbtn { border: none; background: var(--accent); color: var(--on-accent); padding: 8px 14px; border-radius: 10px; font-size: 13px; font-weight: 700; white-space: nowrap; }
     .fsel-wrap { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
     .fsel { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 12px; padding: 9px 13px; font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
     .fsel small { color: var(--hint); }
@@ -565,15 +564,14 @@
       const photo = p.photo_url ? `<img src="${p.photo_url}" alt="" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
       const isFav = favs.includes(p.id);
       const sub = [p.brand, p.flavor].filter(Boolean).join(" · ");
-      // inlineCtrl — рядом с ценой (маленькое: + или степпер); blockCtrl — на всю ширину («Выбрать»)
-      let inlineCtrl = "", blockCtrl = "";
+      let ctrl;
       if (p.stock <= 0) {
-        inlineCtrl = `<button class="plus" disabled>×</button>`;
+        ctrl = `<button class="plus" disabled>×</button>`;
       } else if (hasVariants(p)) {
-        blockCtrl = `<button class="pickbtn full" data-open="${p.id}">Выбрать</button>`;
+        ctrl = `<button class="pickbtn" data-open="${p.id}">Выбрать</button>`;
       } else {
         const qty = cart[cartKey(p.id)] ? cart[cartKey(p.id)].qty : 0;
-        inlineCtrl = qty > 0
+        ctrl = qty > 0
           ? `<div class="mini"><button data-dec="${p.id}">−</button><span>${qty}</span><button data-inc="${p.id}">+</button></div>`
           : `<button class="plus" data-inc="${p.id}">+</button>`;
       }
@@ -581,8 +579,7 @@
           <button class="fav ${isFav?'on':''}" data-fav="${p.id}">${isFav?'♥':'♡'}</button></div>
         <div class="cbody"><p class="cname" data-open="${p.id}">${esc(p.name)}</p>
           ${sub ? `<div class="csub">${esc(sub)}</div>` : ""}
-          <div class="crow"><span class="cprice">${p.price.toFixed(2)} ${CUR}</span>${inlineCtrl}</div>
-          ${blockCtrl}</div></div>`;
+          <div class="crow"><span class="cprice">${p.price.toFixed(2)} ${CUR}</span>${ctrl}</div></div></div>`;
     }
     function renderGrid() {
       const list = visibleProducts();
