@@ -191,6 +191,16 @@
     .secthead::after { content: "▼"; color: var(--hint); font-size: 12px; transition: transform .2s; }
     details[open] > .secthead::after { transform: rotate(180deg); }
     .sectbody { padding: 0 16px 16px; }
+    /* Статистика */
+    .statgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 6px; }
+    .statcard { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 14px; }
+    .statcard .statnum { font-size: 21px; font-weight: 800; color: var(--accent); }
+    .statcard .statlab { color: var(--hint); font-size: 12.5px; margin-top: 3px; }
+    .stathead { font-weight: 800; margin: 20px 0 8px; }
+    .statlist { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 4px 14px; }
+    .statrow { display: flex; justify-content: space-between; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+    .statrow:last-child { border-bottom: none; }
+    html[data-theme="dark"] .statcard, html[data-theme="dark"] .statlist { border: 1px solid rgba(95,242,242,.22); box-shadow: var(--shadow), 0 0 15px rgba(95,242,242,.10); }
     .brgroup { font-weight: 700; color: var(--hint); font-size: 13px; margin: 16px 0 8px; }
     .brrow { cursor: pointer; }
     .brflavors { display: flex; flex-wrap: wrap; gap: 6px; margin: -2px 2px 12px; }
@@ -455,7 +465,15 @@
     <div class="prow" id="mProducts"><span>🛍 Товары</span><span>›</span></div>
     <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
     <div class="prow" id="mBrands"><span>🏷 Бренды и вкусы</span><span>›</span></div>
+    <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
+  </div>
+
+  <!-- Раздел: Статистика -->
+  <div class="view" id="statsView">
+    <div class="viewhead"><h2>📊 Статистика</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="statsClose">‹ Назад</button></div>
+    <div id="statsBody"></div>
   </div>
 
   <!-- Раздел: Настройки магазина -->
@@ -1306,6 +1324,47 @@
       $("brandsView").classList.add("show");
     }
     $("brandsClose").onclick = () => $("brandsView").classList.remove("show");
+
+    // ----- Статистика -----
+    const STATUS_RU = { new: "Ждут чек", paid: "Ждут подтверждения", confirmed: "Подтверждены", issued: "Выданы", canceled: "Отклонены" };
+    $("mStats").onclick = openStats;
+    $("statsClose").onclick = () => $("statsView").classList.remove("show");
+    async function openStats() {
+      $("statsView").classList.add("show");
+      $("statsBody").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      let s;
+      try {
+        const r = await fetch("/api/admin/stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (!d.ok) { $("statsBody").innerHTML = `<p style="color:var(--hint)">Не удалось загрузить.</p>`; return; }
+        s = d.stats;
+      } catch (e) { $("statsBody").innerHTML = `<p style="color:var(--hint)">Сеть недоступна.</p>`; return; }
+
+      const money = (v) => `${(+v).toFixed(2)} ${CUR}`;
+      const statusRows = Object.entries(s.by_status || {})
+        .map(([k, v]) => `<div class="statrow"><span>${STATUS_RU[k] || k}</span><b>${v}</b></div>`).join("") || `<div class="statrow"><span>Заказов нет</span></div>`;
+      const topRows = (s.top || []).length
+        ? s.top.map(t => `<div class="statrow"><span>${esc(t.name)}</span><b>${t.qty} шт</b></div>`).join("")
+        : `<div class="statrow"><span style="color:var(--hint)">Пока нет продаж</span></div>`;
+      const cityRows = (s.revenue_by_city || []).length
+        ? s.revenue_by_city.map(c => `<div class="statrow"><span>${esc(c.city)}</span><b>${money(c.total)}</b></div>`).join("")
+        : `<div class="statrow"><span style="color:var(--hint)">Ещё нет выданных заказов</span></div>`;
+      const lowRows = (s.low_stock || []).length
+        ? s.low_stock.map(p => `<div class="statrow"><span>${esc(p.name)} · ${esc(p.city)}</span><b style="color:var(--warn)">${p.stock} шт</b></div>`).join("")
+        : `<div class="statrow"><span style="color:var(--hint)">Всё в достатке</span></div>`;
+
+      $("statsBody").innerHTML = `
+        <div class="statgrid">
+          <div class="statcard"><div class="statnum">${money(s.issued_total)}</div><div class="statlab">Выручка (выдано)</div></div>
+          <div class="statcard"><div class="statnum">${money(s.inwork_total)}</div><div class="statlab">Ожидается (в работе)</div></div>
+          <div class="statcard"><div class="statnum">${s.orders_total}</div><div class="statlab">Заказов всего</div></div>
+          <div class="statcard"><div class="statnum">${s.out_of_stock} / ${s.products_total}</div><div class="statlab">Нет в наличии / всего</div></div>
+        </div>
+        <div class="stathead">Заказы по статусам</div><div class="statlist">${statusRows}</div>
+        <div class="stathead">Топ товаров (по продажам)</div><div class="statlist">${topRows}</div>
+        <div class="stathead">Выручка по точкам</div><div class="statlist">${cityRows}</div>
+        <div class="stathead">Мало на складе (≤3)</div><div class="statlist">${lowRows}</div>`;
+    }
 
     // ----- Настройки магазина -----
     $("mSettings").onclick = openSettings;
