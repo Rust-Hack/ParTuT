@@ -472,7 +472,7 @@
       function applySafeArea() {
         var sa  = tg.safeAreaInset        || { top: 0 };  // вырез экрана (чёлка/часы)
         var csa = tg.contentSafeAreaInset || { top: 0 };  // плавающие кнопки Telegram
-        var top = (sa.top || 0) + (csa.top || 0) + 24;    // запас, чтобы шапка была ниже кнопок Telegram
+        var top = (sa.top || 0) + (csa.top || 0) + 14;    // запас, чтобы шапка была ниже кнопок Telegram
         document.documentElement.style.setProperty("--safe-top", top + "px");
       }
       try {
