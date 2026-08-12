@@ -561,12 +561,36 @@ SLOT_SYMBOLS = [
 ]
 
 
-def _losing_reels():
+# Линии слота: центральный ряд + две диагонали (клетки [row, col]).
+SLOT_LINES = [
+    [[1, 0], [1, 1], [1, 2]],   # центральный ряд
+    [[0, 0], [1, 1], [2, 2]],   # диагональ ↘
+    [[0, 2], [1, 1], [2, 0]],   # диагональ ↙
+]
+
+
+def _line_vals(grid, line):
+    return [grid[r][c] for r, c in line]
+
+
+def _slot_grid(win_emoji, line_idx):
+    """Строит 3×3. Если win_emoji задан — выкладывает его по линии line_idx.
+    При проигрыше гарантирует, что НИ ОДНА линия не совпала (чтобы не показать неоплаченный «выигрыш»)."""
     emojis = [s["emoji"] for s in SLOT_SYMBOLS]
-    while True:
-        r = [random.choice(emojis) for _ in range(3)]
-        if not (r[0] == r[1] == r[2]):
-            return r
+    grid = [[random.choice(emojis) for _ in range(3)] for _ in range(3)]
+    if win_emoji is not None:
+        for r, c in SLOT_LINES[line_idx]:
+            grid[r][c] = win_emoji
+        return grid
+    # проигрыш — ломаем любые случайно совпавшие линии
+    for _ in range(30):
+        bad = [i for i, ln in enumerate(SLOT_LINES) if len(set(_line_vals(grid, ln))) == 1]
+        if not bad:
+            break
+        r, c = SLOT_LINES[bad[0]][random.randint(0, 2)]
+        cur = grid[r][c]
+        grid[r][c] = random.choice([e for e in emojis if e != cur] or emojis)
+    return grid
 
 
 @app.route("/api/slot", methods=["POST"])
@@ -599,12 +623,15 @@ def api_slot_spin():
     if balance is None:
         return jsonify({"ok": False, "error": "no_coins"}), 400
 
-    # Сетка 3×3: средний ряд — результат (выигрыш = 3 одинаковых), верх/низ — случайные.
-    emojis = [s["emoji"] for s in SLOT_SYMBOLS]
-    mid = [win["emoji"]] * 3 if win else _losing_reels()
-    rand_row = lambda: [random.choice(emojis) for _ in range(3)]
-    grid = [rand_row(), mid, rand_row()]
-    return jsonify({"ok": True, "win": bool(win), "grid": grid,
+    # Сетка 3×3. Выигрыш выкладывается по случайной линии (ряд или диагональ).
+    if win:
+        line_idx = random.randint(0, len(SLOT_LINES) - 1)
+        grid = _slot_grid(win["emoji"], line_idx)
+        win_cells = SLOT_LINES[line_idx]
+    else:
+        grid = _slot_grid(None, 0)
+        win_cells = []
+    return jsonify({"ok": True, "win": bool(win), "grid": grid, "win_cells": win_cells,
                     "coins": prize_coins, "label": win["label"] if win else "",
                     "balance": balance})
 

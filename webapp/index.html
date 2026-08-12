@@ -243,9 +243,8 @@
     .reel-col { width: 84px; max-width: 27vw; aspect-ratio: 1 / 3; overflow: hidden; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow), inset 0 0 0 3px var(--accent); }
     .reel-strip { will-change: transform; }
     .reel-cell { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; font-size: 40px; }
-    .slot-line { position: absolute; top: 33.33%; height: 33.33%; left: -4px; right: -4px; border: 2px solid var(--warn); border-radius: 12px; pointer-events: none; opacity: .55; }
-    .slot-line.win { opacity: 1; box-shadow: 0 0 16px var(--warn); animation: lineWin .5s ease; }
-    @keyframes lineWin { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    .reel-cell.hit { background: rgba(255,176,32,.22); box-shadow: inset 0 0 0 3px var(--warn), 0 0 14px var(--warn); border-radius: 12px; animation: cellWin .5s ease; }
+    @keyframes cellWin { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
     .slotpays { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 16px; }
     .slotpay { background: var(--surface); border-radius: 10px; box-shadow: var(--shadow); padding: 8px 4px; text-align: center; }
     .slotpay span { font-size: 22px; display: block; }
@@ -1346,10 +1345,9 @@
           <div class="reel-col"><div class="reel-strip" id="strip0"></div></div>
           <div class="reel-col"><div class="reel-strip" id="strip1"></div></div>
           <div class="reel-col"><div class="reel-strip" id="strip2"></div></div>
-          <div class="slot-line" id="slotLine"></div>
         </div>
         <button class="bigbtn" id="slotBtn" ${canSpin ? "" : "disabled"}>${slotBtnText()}</button>
-        <div class="wheel-hint">Средний ряд — 3 одинаковых = приз. Прокрут ${slot.cost} монет.</div>
+        <div class="wheel-hint">3 одинаковых в линию — ряд или диагональ. Прокрут ${slot.cost} монет.</div>
         <div class="slotpays">${pay}</div>`;
       [0, 1, 2].forEach(c => initStrip($("strip" + c)));
       $("slotBtn").onclick = spinSlot;
@@ -1357,7 +1355,6 @@
     async function spinSlot() {
       if (slotSpinning || (bonus.coins || 0) < slot.cost) return;
       slotSpinning = true; $("slotBtn").disabled = true;
-      $("slotLine").classList.remove("win");
       let res;
       try {
         const r = await fetch("/api/slot/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
@@ -1389,7 +1386,11 @@
         if ($("slotHead")) $("slotHead").textContent = `🪙 ${bonus.coins} монет`;
         const btn = $("slotBtn");
         if (btn) { btn.disabled = (bonus.coins || 0) < slot.cost; btn.textContent = slotBtnText(); }
-        if (res.win && $("slotLine")) $("slotLine").classList.add("win");
+        // Подсветить выигрышные клетки (ряд или диагональ)
+        if (res.win) (res.win_cells || []).forEach(([r, c]) => {
+          const cell = $("strip" + c) && $("strip" + c).children[N + r];
+          if (cell) cell.classList.add("hit");
+        });
         setTimeout(() => alertMsg(res.win ? `🎉 Три ${res.label}! +${res.coins} 🪙` : "Не повезло — крути ещё!"), 250);
       }, maxDur * 1000 + 150);
     }
