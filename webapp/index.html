@@ -944,7 +944,7 @@
         me = await r.json();
         if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
         renderNav();
-        fetchBonus(); fetchWheel();   // прогреваем бонусы/колесо, чтобы вкладка открывалась мгновенно
+        fetchBonus(); fetchWheel(); fetchSlot();   // прогреваем бонусы/колесо/слот — вкладка открывается мгновенно
         if (me.age_ok) loadCatalog(); else $("ageView").classList.add("show");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
@@ -1330,16 +1330,20 @@
     async function spinSlot() {
       if (slotSpinning || (bonus.coins || 0) < slot.cost) return;
       slotSpinning = true; $("slotBtn").disabled = true;
+      // 1) Сразу мелькаем барабанами, не дожидаясь сети.
+      const emojis = (slot.symbols || []).map(s => s.emoji);
+      const reels = [$("reel0"), $("reel1"), $("reel2")];
+      reels.forEach(r => r.classList.remove("hit"));
+      const ivs = reels.map(reel => setInterval(() => { reel.textContent = emojis[Math.floor(Math.random() * emojis.length)] || "❔"; }, 70));
+      // 2) Параллельно — результат (1 запрос).
       let res;
       try {
         const r = await fetch("/api/slot/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         res = await r.json();
-      } catch (e) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
-      if (!res.ok) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
+      } catch (e) { ivs.forEach(clearInterval); slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
+      if (!res.ok) { ivs.forEach(clearInterval); slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
       bonus.coins = res.balance;
-      const emojis = (slot.symbols || []).map(s => s.emoji);
-      const reels = [$("reel0"), $("reel1"), $("reel2")];
-      const ivs = reels.map(reel => setInterval(() => { reel.textContent = emojis[Math.floor(Math.random() * emojis.length)] || "❔"; }, 70));
+      // 3) Барабаны останавливаются по очереди на результате.
       reels.forEach((reel, i) => setTimeout(() => {
         clearInterval(ivs[i]);
         reel.textContent = res.reels[i];
@@ -1349,9 +1353,9 @@
           if ($("slotHead")) $("slotHead").textContent = `🪙 ${bonus.coins} монет`;
           const btn = $("slotBtn"), can = bonus.coins >= slot.cost;
           if (btn) { btn.disabled = !can; btn.textContent = can ? `Крутить · ${slot.cost} 🪙` : "Недостаточно монет"; }
-          setTimeout(() => alertMsg(res.win ? `🎉 Три ${res.label}! +${res.coins} 🪙` : "Не повезло — крути ещё!"), 300);
+          setTimeout(() => alertMsg(res.win ? `🎉 Три ${res.label}! +${res.coins} 🪙` : "Не повезло — крути ещё!"), 250);
         }
-      }, 800 + i * 450));
+      }, 450 + i * 300));
     }
 
     // ----- Розыгрыши -----
@@ -1511,25 +1515,39 @@
     async function spinWheel() {
       if (spinning || wheel.spins <= 0) return;
       spinning = true; $("spinBtn").disabled = true;
+      const el = $("wheelEl");
+      // 1) Сразу крутим (равномерно), не дожидаясь сети.
+      let landing = false, raf = 0;
+      const base = wheelDeg, t0 = performance.now();
+      el.style.transition = "none";
+      const frame = (t) => {
+        if (landing) return;
+        wheelDeg = base + (t - t0) * 0.9;             // ~0.9°/мс
+        el.style.transform = `rotate(${wheelDeg}deg)`;
+        raf = requestAnimationFrame(frame);
+      };
+      raf = requestAnimationFrame(frame);
+      // 2) Параллельно — запрос результата (теперь 1 запрос, быстрый).
       let res;
       try {
         const r = await fetch("/api/wheel/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         res = await r.json();
-      } catch (e) { spinning = false; $("spinBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
+      } catch (e) { landing = true; cancelAnimationFrame(raf); spinning = false; $("spinBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
+      landing = true; cancelAnimationFrame(raf);
       if (!res.ok) { spinning = false; refreshWheelInfo(); alertMsg("Нет доступных прокрутов."); return; }
+      // 3) Плавно тормозим на нужном секторе.
       const n = (wheel.sectors || []).length, seg = 360 / n;
       const desiredMod = ((360 - (res.index + 0.5) * seg) % 360 + 360) % 360;
       const curMod = ((wheelDeg % 360) + 360) % 360;
       let delta = desiredMod - curMod; if (delta < 0) delta += 360;
-      wheelDeg += 360 * 6 + delta;                    // 6 оборотов + доводка до сектора
-      const el = $("wheelEl");
-      el.style.transition = "transform 4.2s cubic-bezier(.12,.75,.2,1)";
+      wheelDeg += 360 * 3 + delta;                    // 3 оборота + доводка
+      el.style.transition = "transform 2.4s cubic-bezier(.12,.72,.2,1)";
       el.style.transform = `rotate(${wheelDeg}deg)`;
       setTimeout(() => {
         bonus.coins = res.balance; wheel.spins = res.spins; spinning = false;
         refreshWheelInfo();
         alertMsg(`Выпало: ${res.label} — +${res.coins} 🪙`);
-      }, 4400);
+      }, 2500);
     }
 
     // ----- Оформление: способ получения + оплата -----

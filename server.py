@@ -576,7 +576,6 @@ def api_slot():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    db.ensure_user(uid)
     return jsonify({"ok": True, "cost": SLOT_COST, "balance": db.get_coins(uid),
                     "symbols": [{"emoji": s["emoji"], "label": s["label"], "coins": s["coins"]} for s in SLOT_SYMBOLS]})
 
