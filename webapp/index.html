@@ -237,7 +237,16 @@
     .wlabel.win span { text-shadow: 0 0 12px var(--brand-neon), 0 0 22px var(--brand-neon); animation: labelWin .8s ease; }
     @keyframes labelWin { 0%,100% { transform: scale(1); } 45% { transform: scale(1.35); } }
     .wheel { position: absolute; inset: 0; border-radius: 50%; border: 5px solid var(--brand-neon); background-color: #0e222b;
-      box-shadow: 0 6px 26px rgba(0,0,0,.35), 0 0 16px var(--brand-glow), inset 0 0 22px rgba(0,0,0,.55); transition: box-shadow .7s ease; }
+      box-shadow: 0 6px 26px rgba(0,0,0,.35), 0 0 16px var(--brand-glow), inset 0 0 22px rgba(0,0,0,.55); transition: box-shadow .7s ease;
+      will-change: transform; backface-visibility: hidden; }
+    /* Неоновые лампочки по ободу (бегущая волна) */
+    .wheel-lamps { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+    .lamp { position: absolute; inset: 0; }
+    .lamp i { position: absolute; top: -3px; left: 50%; margin-left: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--brand-neon); box-shadow: 0 0 8px var(--brand-neon), 0 0 3px #fff; animation: lampBlink 1.1s ease-in-out infinite; }
+    @keyframes lampBlink { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+    /* Конфетти на крупный выигрыш */
+    .confetti { position: absolute; top: 42%; left: 50%; width: 8px; height: 12px; border-radius: 2px; pointer-events: none; z-index: 6; }
+    @keyframes confFall { 0% { opacity: 1; transform: translate(-50%,-50%) rotate(0); } 100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)); } }
     .wheel.won { box-shadow: 0 6px 26px rgba(0,0,0,.35), 0 0 0 4px var(--brand-neon), 0 0 40px var(--brand-neon), inset 0 0 22px rgba(0,0,0,.55); }
     .wheel.ready { animation: rimPulse 1.6s ease-in-out infinite; }
     @keyframes rimPulse {
@@ -1689,6 +1698,9 @@
       }).join(",");
       const rays = `repeating-conic-gradient(from 0deg, rgba(120,245,245,.85) 0 1.1deg, transparent 1.1deg ${seg}deg)`;
       const wheelBgImage = `${rays}, conic-gradient(${tint}), ${WHEEL_BRICK}`;   // ставим из JS (кавычки в url ломают inline style)
+      const lampN = 16;
+      const lamps = Array.from({ length: lampN }, (_, i) =>
+        `<div class="lamp" style="transform:rotate(${i * 360 / lampN}deg)"><i style="animation-delay:${(i * 1.1 / lampN).toFixed(2)}s"></i></div>`).join("");
       const labels = sectors.map((s, i) => {
         const a = (i + 0.5) * seg;
         return `<div class="wlabel" style="transform:rotate(${a}deg)"><span>${esc(s.label)}</span></div>`;
@@ -1702,6 +1714,7 @@
         <div class="wheel-stage">
           <div class="wheel-ptr"></div>
           <div class="wheel ${canSpin ? 'ready' : ''}" id="wheelEl">${labels}<div class="wheel-hub ${canSpin ? 'ready' : ''}" id="wheelHub">GO</div></div>
+          <div class="wheel-lamps">${lamps}</div>
         </div>
         <div class="game-result" id="wheelResult"></div>
         <div class="wheel-prog-top"><span>Прогресс до прокрута</span><span>${wheel.progress}/${wheel.step}</span></div>
@@ -1738,6 +1751,19 @@
       if (btn) { btn.disabled = !canSpin || spinning; btn.textContent = canSpin ? "Крутить 🎡" : "Накопите товаров для прокрута"; }
       if ($("wheelHub")) $("wheelHub").classList.toggle("ready", canSpin && !spinning);
       if ($("wheelEl")) $("wheelEl").classList.toggle("ready", canSpin && !spinning);
+    }
+    // Конфетти-салют на крупный выигрыш.
+    function confetti(container, n) {
+      const colors = ["#35e0e0", "#ffd23f", "#ff3d81", "#5ff2f2", "#8fd694", "#ffffff"];
+      for (let i = 0; i < (n || 26); i++) {
+        const p = document.createElement("div");
+        p.className = "confetti"; p.style.background = colors[i % colors.length];
+        p.style.setProperty("--dx", ((Math.random() * 2 - 1) * 170).toFixed(0) + "px");
+        p.style.setProperty("--dy", (110 + Math.random() * 170).toFixed(0) + "px");
+        p.style.setProperty("--rot", (Math.random() * 720 - 360).toFixed(0) + "deg");
+        p.style.animation = `confFall ${(1 + Math.random() * 0.7).toFixed(2)}s ease-out forwards`;
+        container.appendChild(p); setTimeout(() => p.remove(), 1900);
+      }
     }
     async function spinWheel() {
       if (spinning || wheel.spins <= 0) return;
@@ -1781,6 +1807,7 @@
         if (stage) {
           const pop = document.createElement("div"); pop.className = "winpop"; pop.textContent = `+${res.coins} 🪙`;
           stage.appendChild(pop); setTimeout(() => pop.remove(), 1500);
+          if (res.coins >= 1000) confetti(stage);              // джекпот — салют
         }
         setTimeout(() => {                                        // неон гаснет через ~1.5 сек
           el.classList.remove("won");
