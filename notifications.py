@@ -27,8 +27,17 @@ def notify_sellers(bot, order_id):
     for it in items:
         lines.append(f"• {it['name']} × {it['qty']} = {it['price'] * it['qty']:.2f} BYN")
     lines.append("")
+    # Способ получения + адрес + оплата
+    method = order["delivery_method"] or ""
+    if method:
+        addr = order["delivery_address"] or ""
+        fee = order["delivery_fee"] or 0
+        lines.append(f"🚚 {method}" + (f": {addr}" if addr else "") + (f" (+{fee:.2f} BYN)" if fee else ""))
+    pm = order["payment_method"] or ""
+    pm_ru = {"card": "💳 картой (чек)", "cash": "💵 наличными", "none": "🚕 при получении"}.get(pm, pm)
+    if pm_ru:
+        lines.append(f"Оплата: {pm_ru}")
     lines.append(f"<b>Итого: {order['total']:.2f} BYN</b>")
-    lines.append(f"⏰ Забрать: {order['pickup_time']}")
 
     uname = order["username"] or ""
     if uname and not uname.isdigit():

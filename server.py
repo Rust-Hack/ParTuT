@@ -173,6 +173,24 @@ def api_locations():
     return jsonify([{"id": r["id"], "name": r["name"]} for r in db.get_locations()])
 
 
+def _delivery_json(m):
+    return {
+        "id": m["id"], "name": m["name"],
+        "needs_address": bool(m["needs_address"]),
+        "address_label": m["address_label"] or "Адрес",
+        "pickup_address": m["pickup_address"] or "",
+        "fee": round(m["fee"] or 0, 2),
+        "needs_payment": bool(m["needs_payment"]),
+    }
+
+
+@app.route("/api/delivery")
+def api_delivery():
+    """Способы получения для точки (для оформления заказа)."""
+    city = request.args.get("city", "")
+    return jsonify([_delivery_json(m) for m in db.get_delivery_methods(city)])
+
+
 # ============================================================
 #  ТОВАРЫ
 # ============================================================
@@ -266,7 +284,6 @@ def api_order():
         return jsonify({"ok": False, "error": "age"}), 403
 
     username = user.get("username") or user.get("first_name") or str(user_id)
-    pickup = (data.get("pickup_time") or "как можно скорее").strip()
 
     # Цены и наличие берём из БАЗЫ, а не из того, что прислал клиент.
     items, total, cities = [], 0.0, set()
@@ -301,20 +318,43 @@ def api_order():
         return jsonify({"ok": False, "error": "multi_city"}), 400
 
     city = cities.pop()
-    total = round(total, 2)
+    subtotal = round(total, 2)
 
-    # Списание монет: 1 монета = COIN_VALUE Br, но не больше суммы заказа.
+    # 1. Способ получения (доставка/самовывоз) — берём метод точки по id.
+    method = None
+    try:
+        method = db.get_delivery_method(int(data.get("delivery_method_id")))
+    except (TypeError, ValueError):
+        method = None
+    if not method or method["city"] != city:
+        return jsonify({"ok": False, "error": "bad_delivery"}), 400
+    address = (data.get("delivery_address") or "").strip()
+    if method["needs_address"] and not address:
+        return jsonify({"ok": False, "error": "no_address"}), 400
+    fee = round(method["fee"] or 0, 2)
+
+    # 2. Способ оплаты. Если способу оплата не нужна (такси) — payment = none.
+    if method["needs_payment"]:
+        payment = data.get("payment_method")
+        if payment not in ("card", "cash"):
+            return jsonify({"ok": False, "error": "bad_payment"}), 400
+    else:
+        payment = "none"
+
+    # 3. Списание монет: 1 монета = COIN_VALUE Br, но не больше суммы товаров.
     coins_used, discount = 0, 0.0
-    if data.get("use_coins") and total > 0:
+    if data.get("use_coins") and subtotal > 0:
         have = db.get_coins(user_id)
-        spend = min(have, int(total / COIN_VALUE))     # столько монет реально можно списать
+        spend = min(have, int(subtotal / COIN_VALUE))
         if spend > 0:
             coins_used = spend
             discount = round(spend * COIN_VALUE, 2)
-            total = round(total - discount, 2)
-            db.add_coins(user_id, -spend)              # списываем сразу
+            db.add_coins(user_id, -spend)
 
-    order_id = db.create_order(user_id, username, city, items, total, pickup)
+    total = round(subtotal - discount + fee, 2)   # товары − скидка + доставка
+
+    order_id = db.create_order(user_id, username, city, items, total, "")
+    db.set_order_delivery(order_id, method["name"], address, fee, payment)
     if coins_used:
         db.set_order_coins_used(order_id, coins_used)
     for it in items:
@@ -323,13 +363,24 @@ def api_order():
         else:
             db.change_stock(it["id"], -it["qty"])
 
-    # Реквизиты и итог отдаём приложению — оно покажет экран оплаты.
+    # Карта → клиент грузит чек (как раньше). Наличные/такси → сразу продавцу.
+    needs_receipt = (payment == "card")
+    if not needs_receipt:
+        db.set_order_status(order_id, "confirmed")     # оплаты онлайн нет — сразу к выдаче
+        notifications.notify_sellers(tg, order_id)
+
     return jsonify({
         "ok": True,
         "order_id": order_id,
         "total": total,
+        "subtotal": subtotal,
+        "fee": fee,
         "coins_used": coins_used,
         "discount": discount,
+        "delivery_method": method["name"],
+        "delivery_address": address,
+        "payment_method": payment,
+        "needs_receipt": needs_receipt,
         "payment_info": _payment_info(),
         "confirm_minutes": _confirm_minutes(),
     })
@@ -650,6 +701,10 @@ def _order_json(o):
         "pickup_time": o["pickup_time"] or "",
         "status": o["status"],
         "created_at": o["created_at"],
+        "delivery_method": (o["delivery_method"] or ""),
+        "delivery_address": (o["delivery_address"] or ""),
+        "delivery_fee": round(o["delivery_fee"] or 0, 2),
+        "payment_method": (o["payment_method"] or ""),
         "receipt_url": (f"/api/photo?file_id={o['receipt_file_id']}" if o["receipt_file_id"] else None),
     }
 

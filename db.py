@@ -138,12 +138,28 @@ def init_db():
         )
     """)
 
+    # Способы получения на точку: самовывоз/доставка/метро/такси (настраивает админ).
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS delivery_methods (
+            id             {ID_COL},
+            city           TEXT    NOT NULL,
+            name           TEXT    NOT NULL,
+            needs_address  INTEGER NOT NULL DEFAULT 0,
+            address_label  TEXT,
+            pickup_address TEXT,
+            fee            REAL    NOT NULL DEFAULT 0,
+            needs_payment  INTEGER NOT NULL DEFAULT 1,
+            sort           INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     conn.commit()
     conn.close()
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
     _ensure_user_columns()      # coins / referred_by у пользователей
-    _ensure_order_columns()     # coins_used у заказов
+    _ensure_order_columns()     # coins_used / доставка у заказов
     seed_locations()            # добавит стартовые точки, если таблица пустая
+    seed_delivery()             # дефолтные способы получения для Минск/Туров
 
 
 def _table_columns(cur, table):
@@ -185,20 +201,98 @@ def _ensure_user_columns():
 
 
 def _ensure_order_columns():
-    """coins_used — сколько монет списано в счёт заказа (для возврата при отмене)."""
+    """coins_used + поля доставки у заказа."""
     conn = connect()
     cur = conn.cursor()
     cols = _table_columns(cur, "orders")
     if "coins_used" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN coins_used INTEGER DEFAULT 0")
+    if "delivery_method" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN delivery_method TEXT")
+    if "delivery_address" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN delivery_address TEXT")
+    if "delivery_fee" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN delivery_fee REAL DEFAULT 0")
+    if "payment_method" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN payment_method TEXT")
     conn.commit()
     conn.close()
+
+
+# ---------- Способы получения (доставка/самовывоз) ----------
+
+def get_delivery_methods(city):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM delivery_methods WHERE city = %s ORDER BY sort, id"), (city,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def add_delivery_method(city, name, needs_address, address_label, pickup_address, fee, needs_payment, sort=0):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("""INSERT INTO delivery_methods
+        (city, name, needs_address, address_label, pickup_address, fee, needs_payment, sort)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""),
+        (city, name, 1 if needs_address else 0, address_label or "", pickup_address or "",
+         float(fee or 0), 1 if needs_payment else 0, int(sort)))
+    conn.commit()
+    conn.close()
+
+
+def get_delivery_method(method_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM delivery_methods WHERE id = %s"), (method_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def delete_delivery_method(method_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM delivery_methods WHERE id = %s"), (method_id,))
+    conn.commit()
+    conn.close()
+
+
+def seed_delivery():
+    """Дефолтные способы получения — только если таблица пуста."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM delivery_methods")
+    if cur.fetchone()["c"] != 0:
+        conn.close()
+        return
+    conn.close()
+    defaults = [
+        ("Туров", "Самовывоз", 0, "", "Уточните адрес самовывоза в настройках", 0, 1, 0),
+        ("Туров", "Доставка", 1, "Адрес", "", 0, 1, 1),
+        ("Минск", "Самовывоз", 0, "", "Уточните адрес самовывоза в настройках", 0, 1, 0),
+        ("Минск", "Доставка по метро", 1, "Станция метро", "", 2, 1, 1),
+        ("Минск", "Доставка такси", 1, "Адрес", "", 0, 0, 2),
+    ]
+    for d in defaults:
+        add_delivery_method(*d)
 
 
 def set_order_coins_used(order_id, coins):
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("UPDATE orders SET coins_used = %s WHERE id = %s"), (int(coins), order_id))
+    conn.commit()
+    conn.close()
+
+
+def set_order_delivery(order_id, method, address, fee, payment):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("""UPDATE orders SET delivery_method = %s, delivery_address = %s,
+                      delivery_fee = %s, payment_method = %s WHERE id = %s"""),
+                (method, address, float(fee or 0), payment, order_id))
     conn.commit()
     conn.close()
 

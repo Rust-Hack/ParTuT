@@ -160,6 +160,11 @@
     .sheet::before { content: ""; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
     .sheet h2 { margin: 0 0 14px; font-size: 18px; }
     .opt { width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: none; padding: 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
+    .dlabel { font-weight: 700; color: var(--hint); font-size: 13px; margin: 14px 0 8px; }
+    .paypick { display: flex; gap: 8px; }
+    .paypick .opt { flex: 1; text-align: center; margin-bottom: 0; }
+    .dpickup { background: var(--surface-2); border-radius: 13px; padding: 14px; font-size: 14px; font-weight: 600; }
+    .dnote { color: var(--hint); font-size: 13.5px; padding: 4px 2px; }
     .opt.active { background: var(--accent-soft); color: var(--accent); }
     .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
 
@@ -244,6 +249,7 @@
     .ocard-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .ocard-id { font-weight: 800; font-size: 15px; }
     .ocard-sub { color: var(--hint); font-size: 12.5px; margin-top: 2px; }
+    .odeliv { font-size: 13px; margin-top: 8px; padding: 8px 10px; background: var(--surface-2); border-radius: 10px; }
     .obadge { font-size: 11.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; white-space: nowrap; flex: 0 0 auto; }
     .obadge.new { background: var(--surface-2); color: var(--hint); }
     .obadge.paid { background: var(--accent-soft); color: var(--accent); }
@@ -445,13 +451,10 @@
     </div>
   </div>
 
-  <div class="overlay" id="pickupOverlay">
-    <div class="sheet"><h2>⏰ Когда заберёте?</h2>
-      <button class="opt" data-t="через 30 минут">Через 30 минут</button>
-      <button class="opt" data-t="через 1 час">Через 1 час</button>
-      <button class="opt" data-t="через 2 часа">Через 2 часа</button>
-      <button class="opt" data-t="как можно скорее">Как можно скорее</button>
-      <button class="closebtn" id="pickupClose">Отмена</button></div>
+  <div class="overlay" id="deliveryOverlay">
+    <div class="sheet"><h2>Оформление</h2>
+      <div id="deliveryBody"></div>
+      <button class="closebtn" id="deliveryClose">Отмена</button></div>
   </div>
 
   <div class="view" id="ageView">
@@ -1152,7 +1155,7 @@
           <button class="bigbtn" id="checkout">Оформить · ${payable.toFixed(2)} ${CUR}</button></div>`;
       bindCardButtons($("tab-cart"));
       if ($("useCoinsChk")) $("useCoinsChk").onchange = () => { useCoins = $("useCoinsChk").checked; renderCart(); };
-      $("checkout").onclick = () => $("pickupOverlay").classList.add("show");
+      $("checkout").onclick = openDelivery;
     }
     // Допродажа: доступные товары этой точки (хиты вперёд), которых ещё нет в корзине
     function upsellProducts() {
@@ -1331,28 +1334,87 @@
       }, 4400);
     }
 
-    $("pickupClose").onclick = () => closeOverlay($("pickupOverlay"));
-    document.querySelectorAll("#pickupOverlay .opt").forEach(b => b.onclick = () => submitOrder(b.dataset.t));
-    async function submitOrder(pickup) {
+    // ----- Оформление: способ получения + оплата -----
+    let deliveryMethods = [], selMethod = null, selPayment = null, selAddress = "";
+    $("deliveryClose").onclick = () => closeOverlay($("deliveryOverlay"));
+    async function openDelivery() {
+      if (!Object.keys(cart).length) return;
+      selMethod = null; selPayment = null; selAddress = "";
+      $("deliveryBody").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      $("deliveryOverlay").classList.add("show");
+      try {
+        const r = await fetch(`/api/delivery?city=${encodeURIComponent(city)}`);
+        deliveryMethods = await r.json();
+      } catch (e) { deliveryMethods = []; }
+      renderDelivery();
+    }
+    function renderDelivery() {
+      if (!deliveryMethods.length) {
+        $("deliveryBody").innerHTML = `<p style="color:var(--hint)">Для «${esc(city)}» способы получения ещё не настроены.</p>`;
+        return;
+      }
+      const methodBtns = deliveryMethods.map((m, i) =>
+        `<button class="opt ${selMethod === i ? 'active' : ''}" data-dm="${i}">${esc(m.name)}${m.fee ? ` · +${m.fee.toFixed(2)} Br` : ''}</button>`).join("");
+      let extra = "";
+      let canSubmit = false;
+      if (selMethod !== null) {
+        const m = deliveryMethods[selMethod];
+        if (m.needs_address)
+          extra += `<div class="dlabel">${esc(m.address_label)}</div><input id="delAddr" class="admsearch" placeholder="${esc(m.address_label)}" value="${esc(selAddress)}">`;
+        else if (m.pickup_address)
+          extra += `<div class="dpickup">📍 ${esc(m.pickup_address)}</div>`;
+        if (m.needs_payment) {
+          extra += `<div class="dlabel">Оплата</div><div class="paypick">
+            <button class="opt ${selPayment === 'card' ? 'active' : ''}" data-pm="card">💳 Картой</button>
+            <button class="opt ${selPayment === 'cash' ? 'active' : ''}" data-pm="cash">💵 Наличными</button></div>`;
+          canSubmit = !!selPayment;
+        } else {
+          extra += `<div class="dnote">Оплата не нужна — продавец свяжется с вами.</div>`;
+          canSubmit = true;
+        }
+      }
+      const fee = selMethod !== null ? deliveryMethods[selMethod].fee : 0;
+      const btn = `<button class="bigbtn" id="delSubmit" ${canSubmit ? "" : "disabled"} style="margin-top:14px">Оформить${fee ? ` · +${fee.toFixed(2)} Br` : ""}</button>`;
+      $("deliveryBody").innerHTML = `<div class="dlabel">Способ получения</div>${methodBtns}${extra}${btn}`;
+      $("deliveryBody").querySelectorAll("[data-dm]").forEach(b => b.onclick = () => { selMethod = +b.dataset.dm; selPayment = null; selAddress = ""; renderDelivery(); });
+      $("deliveryBody").querySelectorAll("[data-pm]").forEach(b => b.onclick = () => { selPayment = b.dataset.pm; renderDelivery(); });
+      if ($("delAddr")) $("delAddr").oninput = () => { selAddress = $("delAddr").value; };
+      if ($("delSubmit")) $("delSubmit").onclick = doSubmitOrder;
+    }
+    async function doSubmitOrder() {
+      const m = deliveryMethods[selMethod]; if (!m) return;
+      if (m.needs_address && !selAddress.trim()) { alertMsg("Введите " + (m.address_label || "адрес").toLowerCase()); return; }
+      if (m.needs_payment && !selPayment) { alertMsg("Выберите способ оплаты."); return; }
       const items = Object.values(cart).map(it => ({ id: it.product_id, qty: it.qty, flavor: it.flavor || undefined }));
       if (!items.length) return;
-      closeOverlay($("pickupOverlay"));
+      closeOverlay($("deliveryOverlay"));
       try {
-        const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, city, items, pickup_time: pickup, use_coins: useCoins }) });
+        const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+          initData, city, items, use_coins: useCoins,
+          delivery_method_id: m.id, delivery_address: selAddress.trim(),
+          payment_method: m.needs_payment ? selPayment : "none" }) });
         const d = await r.json();
-        if (d.ok) {
-          currentOrder = d;
-          if (d.coins_used) bonus.coins = Math.max(0, (bonus.coins || 0) - d.coins_used);   // баланс обновился
-          useCoins = false;
+        if (!d.ok) {
+          const errs = { auth: "Откройте магазин из бота.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек.", bad_delivery: "Выберите способ получения.", no_address: "Введите адрес.", bad_payment: "Выберите оплату." };
+          alertMsg(errs[d.error] || "Ошибка оформления."); return;
+        }
+        currentOrder = d;
+        if (d.coins_used) bonus.coins = Math.max(0, (bonus.coins || 0) - d.coins_used);
+        useCoins = false;
+        if (d.needs_receipt) {
           $("payTitle").textContent = `Оплата заказа #${d.order_id}`;
           const disc = d.discount ? `Списано ${d.coins_used} 🪙 (−${d.discount.toFixed(2)} Br)\n` : "";
-          $("payReq").textContent = `${disc}К оплате: ${d.total.toFixed(2)} Br\n\n${d.payment_info}`;
+          const feeLine = d.fee ? `Доставка: +${d.fee.toFixed(2)} Br\n` : "";
+          $("payReq").textContent = `${disc}${feeLine}К оплате: ${d.total.toFixed(2)} Br\n\n${d.payment_info}`;
           $("payView").classList.add("show");
-          fetchBonus();
         } else {
-          const errs = { auth: "Откройте магазин из бота.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек." };
-          alertMsg(errs[d.error] || "Ошибка оформления.");
+          $("doneText").textContent = d.payment_method === "cash"
+            ? `Заказ #${d.order_id} принят! Оплата наличными при получении. Продавец свяжется с вами.`
+            : `Заказ #${d.order_id} принят! Продавец скоро свяжется с вами.`;
+          $("doneView").classList.add("show");
+          for (const k in cart) delete cart[k]; renderNav();
         }
+        fetchBonus();
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
     $("uploadBtn").onclick = () => $("receiptFile").click();
@@ -1693,6 +1755,10 @@
           `<div class="oitem"><span>${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} Br</span></div>`).join("");
         const receipt = o.receipt_url ? `<div class="oreceipt"><img src="${o.receipt_url}" alt="чек"></div>` : "";
         const who = o.username ? "@" + esc(o.username) : "id " + o.user_id;
+        const PM = { card: "💳 картой", cash: "💵 наличными", none: "🚕 при получении" };
+        const deliv = o.delivery_method
+          ? `<div class="odeliv">🚚 ${esc(o.delivery_method)}${o.delivery_address ? ": " + esc(o.delivery_address) : ""}${o.delivery_fee ? ` (+${o.delivery_fee.toFixed(2)} Br)` : ""}${o.payment_method ? " · " + (PM[o.payment_method] || o.payment_method) : ""}</div>`
+          : "";
         let acts = "";
         if (o.status === "paid") acts = `<button class="ok" data-oact="confirm" data-oid="${o.id}">✅ Подтвердить</button><button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отклонить</button>`;
         else if (o.status === "confirmed") acts = `<button class="issue" data-oact="issued" data-oid="${o.id}">📦 Выдан</button><button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отклонить</button>`;
@@ -1700,9 +1766,10 @@
         return `<div class="ocard">
           <div class="ocard-top">
             <div><div class="ocard-id">Заказ #${o.id}</div>
-              <div class="ocard-sub">${esc(o.city)} · ${who}${o.pickup_time ? " · " + esc(o.pickup_time) : ""}<br>${esc(o.created_at)}</div></div>
+              <div class="ocard-sub">${esc(o.city)} · ${who}<br>${esc(o.created_at)}</div></div>
             <span class="obadge ${st.cls}">${st.label}</span>
           </div>
+          ${deliv}
           <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} Br</span></div></div>
           ${receipt}
           <div class="oacts">${acts}</div>
