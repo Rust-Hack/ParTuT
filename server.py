@@ -550,15 +550,17 @@ def api_wheel_spin():
 # ------------------- Слот «Вэйп Удача» -------------------
 
 SLOT_COST = 50   # монет за прокрут
+# Экономика: суммарный шанс выигрыша = 30%, EV приза ≈ 40 монет → RTP ≈ 80% (мягкий house edge).
+# Символы от частых/дешёвых к редким/дорогим; минимальный приз (60) > ставки — «выиграл меньше ставки» не бывает.
 SLOT_SYMBOLS = [
-    {"key": "disp",   "emoji": "💨", "label": "Одноразка", "coins": 100, "percent": 2},
-    {"key": "cart",   "emoji": "🔋", "label": "Картридж",  "coins": 50,  "percent": 3},
-    {"key": "pod",    "emoji": "📦", "label": "Под",       "coins": 150, "percent": 2},
-    {"key": "snus",   "emoji": "🟤", "label": "Снюс",      "coins": 50,  "percent": 3},
-    {"key": "cig",    "emoji": "🚬", "label": "Сигарета",  "coins": 50,  "percent": 3},
-    {"key": "liquid", "emoji": "🧪", "label": "Жижа",      "coins": 75,  "percent": 3},
-    {"key": "coin",   "emoji": "🪙", "label": "Монетка",   "coins": 200, "percent": 1},
-    {"key": "crown",  "emoji": "👑", "label": "Корона",    "coins": 250, "percent": 1},
+    {"key": "cart",   "emoji": "🔋", "label": "Картридж",  "coins": 60,  "percent": 7},
+    {"key": "cig",    "emoji": "🚬", "label": "Сигарета",  "coins": 60,  "percent": 6},
+    {"key": "snus",   "emoji": "🟤", "label": "Снюс",      "coins": 80,  "percent": 5},
+    {"key": "liquid", "emoji": "🧪", "label": "Жижа",      "coins": 100, "percent": 4},
+    {"key": "disp",   "emoji": "💨", "label": "Одноразка", "coins": 150, "percent": 3},
+    {"key": "pod",    "emoji": "📦", "label": "Под",       "coins": 250, "percent": 2.5},
+    {"key": "coin",   "emoji": "🪙", "label": "Монетка",   "coins": 400, "percent": 1.5},
+    {"key": "crown",  "emoji": "👑", "label": "Корона",    "coins": 750, "percent": 1},
 ]
 
 
