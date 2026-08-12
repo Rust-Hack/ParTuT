@@ -1374,16 +1374,18 @@
     }
     // Приятная восходящая мелодия при выигрыше (E-мажор арпеджио).
     const winSound = () => [659.25, 830.61, 987.77, 1318.51].forEach((f, i) => setTimeout(() => tone(f, 0.32, 0.05), i * 95));
-    // Трещотка: частые сухие тики, замедляющиеся к остановке (как колесо фортуны).
+    // Тик храповика: короткий металлический «клац» — шумовой импульс через резонансный фильтр.
     function ratchetTick() {
       if (!soundOn) return;
       try {
-        const ctx = ac(), o = ctx.createOscillator(), g = ctx.createGain();
-        o.type = "triangle"; o.frequency.value = 820 + Math.random() * 260;
-        const t = ctx.currentTime;
-        g.gain.setValueAtTime(0.045, t);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.026);
-        o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.032);
+        const ctx = ac(), len = Math.floor(ctx.sampleRate * 0.018);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 6);   // очень резкое затухание = «клац»
+        const src = ctx.createBufferSource(); src.buffer = buf;
+        const bp = ctx.createBiquadFilter(); bp.type = "bandpass";
+        bp.frequency.value = 2200 + Math.random() * 700; bp.Q.value = 3.2;                          // металлический призвук
+        const g = ctx.createGain(); g.gain.value = 0.32;
+        src.connect(bp); bp.connect(g); g.connect(ctx.destination); src.start();
       } catch (e) {}
     }
     let ratchetTimer = 0;
@@ -1395,7 +1397,7 @@
         const p = (performance.now() - start) / total;
         if (p >= 1) return;
         ratchetTick();
-        ratchetTimer = setTimeout(step, 40 + p * p * 200);   // старт частый → плавно реже
+        ratchetTimer = setTimeout(step, 26 + p * p * 230);   // быстрый «тр-р-р» → плавно отдельные «клац»
       };
       step();
     }
