@@ -299,19 +299,24 @@
       -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent);
               mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent); }
     .reel-strip { will-change: transform; }
-    .reel-strip.reel-spinning { animation: reelSpin .45s linear infinite; filter: blur(.6px); }
-    @keyframes reelSpin { from { transform: translateY(-50%); } to { transform: translateY(0); } }
+    .reel-strip.blur { filter: blur(1px); }                 /* размытие во время быстрого движения */
+    .reel-col.antic { animation: reelAntic .42s ease-in-out infinite; }   /* предвкушение на 3-м барабане */
+    @keyframes reelAntic {
+      0%,100% { box-shadow: 0 0 12px var(--brand-glow), inset 0 0 20px rgba(0,0,0,.6); }
+      50%     { box-shadow: 0 0 26px var(--brand-neon), 0 0 8px var(--brand-neon), inset 0 0 20px rgba(0,0,0,.6); }
+    }
     .reel-cell { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; font-size: 40px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
     .reel-cell.hit { border-radius: 12px; text-shadow: 0 0 10px var(--brand-neon); animation: neonPulse 1s ease-in-out infinite; }
     @keyframes neonPulse {
       0%,100% { box-shadow: inset 0 0 0 3px var(--brand-neon), 0 0 10px var(--brand-neon), 0 0 20px var(--brand-neon); }
       50%     { box-shadow: inset 0 0 0 3px var(--brand-neon), 0 0 20px var(--brand-neon), 0 0 44px var(--brand-neon); }
     }
+    .wheel-hist .hchip.miss { color: var(--hint); border-color: var(--line); text-shadow: none; opacity: .65; }
     .slotpays { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 16px; }
     .slotpay { background: rgba(14,34,43,.7); border: 1px solid rgba(74,222,255,.25); border-radius: 12px; box-shadow: inset 0 0 12px rgba(0,0,0,.4); padding: 8px 4px; text-align: center; }
     .slotpay span { font-size: 22px; display: block; }
     .slotpay small { color: var(--brand-neon); font-size: 11px; text-shadow: 0 0 6px var(--brand-glow); }
-    .slotlines { display: flex; gap: 16px; justify-content: center; margin: 6px 0 2px; }
+    .slotlines { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin: 6px 0 2px; }
     .lineitem { text-align: center; }
     .lineitem small { display: block; color: var(--hint); font-size: 10px; margin-top: 4px; }
     .miniboard { display: grid; grid-template-columns: repeat(3, 13px); grid-template-rows: repeat(3, 13px); gap: 3px; }
@@ -1347,7 +1352,9 @@
     }
     let bonusTab = "wheel", gameMode = "wheel";
     let wheel = { sectors: [], spins: 0, progress: 0, step: 5 };
-    let slot = { cost: 50, balance: 0, symbols: [] };
+    let slot = { cost: 50, balance: 0, symbols: [], lines: [] };
+    let slotHistory = [];   // последние результаты слота (сессия): >0 выигрыш, 0 промах
+    let _anticHb = null;    // таймер пульс-хаптика на предвкушении
     async function fetchWheel() {
       try {
         const r = await fetch("/api/wheel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
@@ -1441,6 +1448,22 @@
       setTimeout(() => tone(1568, 0.55, 0.05, "sine"), 90);
       [523.25, 659.25, 783.99].forEach(f => setTimeout(() => tone(f, 0.6, 0.028, "triangle"), 130));
     };
+    // Нарастающий «саспенс» на предвкушении выигрыша — пила с плавным подъёмом частоты.
+    function anticipationSound(durSec) {
+      if (!soundOn || durSec <= 0) return;
+      try {
+        const ctx = ac(), o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "sawtooth";
+        const t = ctx.currentTime;
+        o.frequency.setValueAtTime(160, t);
+        o.frequency.exponentialRampToValueAtTime(880, t + durSec);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(0.032, t + 0.12);
+        g.gain.setValueAtTime(0.032, Math.max(t + 0.13, t + durSec - 0.15));
+        g.gain.exponentialRampToValueAtTime(0.0001, t + durSec);
+        o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + durSec + 0.03);
+      } catch (e) {}
+    }
     // Шумовой буфер для «клаца» создаём ОДИН раз и переиспользуем (без нагрузки на каждый тик).
     let _ratchetBuf = null;
     function ratchetBuffer(ctx) {
@@ -1478,36 +1501,29 @@
     function initStrip(el) {   // стартовое состояние барабана — 3 случайных символа
       const em = slotEmojis();
       const cells = [0, 1, 2].map(() => em[Math.floor(Math.random() * em.length)] || "❔");
-      el.classList.remove("reel-spinning");
+      el.classList.remove("blur");
       el.style.transition = "none"; el.style.transform = "translateY(0)";
       el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
     }
-    // Мгновенная бесконечная прокрутка: две одинаковых «колоды» + CSS-анимация на -50% = бесшовный цикл.
-    function startReel(el) {
-      const em = slotEmojis();
-      const block = [...em].sort(() => Math.random() - 0.5);
-      el.classList.remove("reel-spinning");
-      el.style.transition = "none"; el.style.transform = "translateY(0)";
-      el.innerHTML = [...block, ...block].map(e => `<div class="reel-cell">${e}</div>`).join("");
-      void el.offsetHeight;
-      el.classList.add("reel-spinning");
-    }
-    // Остановка барабана на результате [верх, середина, низ] с лёгким «отскоком».
-    // Крутится СВЕРХУ ВНИЗ: результат в начале ленты, стартуем снизу и едем вниз к нему.
-    function landReel(el, three, N, dur) {
+    // Единый плавный прокрут барабана: ОДИН transition с мягким ease-in-out —
+    // плавный разгон и плавное затихание, без переключений анимаций (не «багает»).
+    // Крутится СВЕРХУ ВНИЗ: результат [верх,середина,низ] в начале ленты, филлер снизу.
+    const REEL_EASE = "cubic-bezier(.28,0,.14,1)";   // быстрый разгон, долгое мягкое торможение
+    function runReel(el, three, K, dur) {
       const em = slotEmojis();
       const cells = [three[0], three[1], three[2]];
-      for (let i = 0; i < N; i++) cells.push(em[Math.floor(Math.random() * em.length)] || "❔");
-      el.classList.remove("reel-spinning");
-      el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
+      for (let i = 0; i < K; i++) cells.push(em[Math.floor(Math.random() * em.length)] || "❔");
       const cellH = el.parentElement.clientHeight / 3;
+      el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
       el.style.transition = "none";
-      el.style.transform = `translateY(${-(N) * cellH}px)`;   // старт: видны нижние (случайные) ячейки
-      void el.offsetHeight;
+      el.style.transform = `translateY(${-K * cellH}px)`;      // старт: виден нижний филлер
+      el.classList.add("blur");
+      void el.offsetHeight;                                     // зафиксировать старт до анимации
       requestAnimationFrame(() => {
-        el.style.transition = `transform ${dur}s cubic-bezier(.2,.85,.28,1.06)`;   // overshoot в конце
-        el.style.transform = "translateY(0)";                  // едем вниз до результата (сверху)
+        el.style.transition = `transform ${dur}s ${REEL_EASE}`;
+        el.style.transform = "translateY(0)";                  // плавно съезжает к результату (сверху)
       });
+      setTimeout(() => el.classList.remove("blur"), Math.max(0, dur * 1000 - 280));  // резкость к остановке
     }
     function renderSlot() {
       const canSpin = (bonus.coins || 0) >= slot.cost;
@@ -1521,26 +1537,40 @@
           <div class="reel-col"><div class="reel-strip" id="strip1"></div></div>
           <div class="reel-col"><div class="reel-strip" id="strip2"></div></div>
         </div>
-        <div class="game-result" id="slotResult">3 одинаковых в линию — ряд или диагональ</div>
+        <div class="game-result" id="slotResult">3 одинаковых в линию — ряд, диагональ или зигзаг</div>
+        <div class="wheel-hist" id="slotHist"></div>
         <button class="bigbtn" id="slotBtn" ${canSpin ? "" : "disabled"}>${slotBtnText()}</button>
         <div class="wheel-hint">Прокрут ${slot.cost} монет.</div>
         <div class="slotpays">${pay}</div>`;
       [0, 1, 2].forEach(c => initStrip($("strip" + c)));
+      renderSlotHist();
       $("slotBtn").onclick = spinSlot;
       $("soundTgl").onclick = () => { toggleSound(); $("soundTgl").textContent = soundOn ? "🔊" : "🔇"; };
       $("slotInfo").onclick = () => {
         const pay = (slot.symbols || []).map(s => `<div class="statrow"><span>${s.emoji} ${esc(s.label)} × 3</span><b>+${s.coins} 🪙</b></div>`).join("");
-        const board = (on) => `<div class="miniboard">${[0,1,2,3,4,5,6,7,8].map(i => `<i class="${on.includes(i) ? "on" : ""}"></i>`).join("")}</div>`;
+        const board = (cells) => {                          // cells: [[r,c],...] → плоские индексы 0..8
+          const on = cells.map(([r, c]) => r * 3 + c);
+          return `<div class="miniboard">${[0,1,2,3,4,5,6,7,8].map(i => `<i class="${on.includes(i) ? "on" : ""}"></i>`).join("")}</div>`;
+        };
+        const lines = (slot.lines || []).map(l => `<div class="lineitem">${board(l.cells)}<small>${esc(l.name)}</small></div>`).join("");
         showInfo("🎰 Вэйп Удача", `
-          <p>Прокрут стоит <b>${slot.cost} 🪙</b>. Соберите <b>3 одинаковых</b> символа по одной из <b>3 линий</b> и заберите монеты.</p>
-          <div class="slotlines">
-            <div class="lineitem">${board([3,4,5])}<small>Центр</small></div>
-            <div class="lineitem">${board([0,4,8])}<small>Диагональ ↘</small></div>
-            <div class="lineitem">${board([2,4,6])}<small>Диагональ ↙</small></div>
-          </div>
+          <p>Прокрут стоит <b>${slot.cost} 🪙</b>. Соберите <b>3 одинаковых</b> символа по одной из <b>${(slot.lines || []).length} линий</b> и заберите монеты.</p>
+          <div class="slotlines">${lines}</div>
           <div style="font-weight:800;margin:14px 0 4px">Призы за 3 в линию:</div>${pay}
           <p style="color:var(--hint);margin-top:12px">Шанс выигрыша за прокрут ≈ <b>30%</b>. Чем реже символ — тем крупнее приз. Монеты тратятся скидкой в корзине (100 монет = 1 Br).</p>`);
       };
+    }
+    function renderSlotHist() {
+      const el = $("slotHist"); if (!el) return;
+      if (!slotHistory.length) { el.innerHTML = ""; return; }
+      let slots = "";                                        // всегда 5 слотов фикс. ширины — ряд не «прыгает»
+      for (let i = 0; i < 5; i++) {
+        if (i < slotHistory.length) {
+          const v = slotHistory[i];
+          slots += v > 0 ? `<span class="hchip">+${v}</span>` : `<span class="hchip miss">—</span>`;
+        } else slots += `<span class="hchip ph">+0</span>`;
+      }
+      el.innerHTML = `<span class="hlabel">Последние:</span>` + slots;
     }
     // Звук — общий тумблер для слота и колеса.
     function toggleSound() {
@@ -1557,35 +1587,46 @@
       if (slotSpinning || (bonus.coins || 0) < slot.cost) return;
       slotSpinning = true; $("slotBtn").disabled = true;
       const stage = document.querySelector(".slot3"); if (stage) stage.classList.remove("win");
+      [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) [...s.children].forEach(ch => ch.classList.remove("hit")); });
       haptic("impact", "medium");
-      scheduleRatchet(42, 2.9);        // трещотка на всё время прокрутки (замедляется к концу)
-      // 1) Мгновенно крутим все три барабана (не ждём сеть).
-      [0, 1, 2].forEach(c => startReel($("strip" + c)));
-      // 2) Параллельно — результат (1 запрос).
+      // 1) Сначала результат (быстрый запрос), затем — единый плавный прокрут.
       let res;
       try {
         const r = await fetch("/api/slot/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         res = await r.json();
-      } catch (e) { [0, 1, 2].forEach(c => initStrip($("strip" + c))); slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
-      if (!res.ok) { [0, 1, 2].forEach(c => initStrip($("strip" + c))); slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
+      } catch (e) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
+      if (!res.ok) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
       bonus.coins = res.balance;
-      const N = 20;
+      const isWin = !!res.win;
+      const K = 22;
       const cols = [0, 1, 2].map(c => [res.grid[0][c], res.grid[1][c], res.grid[2][c]]);
-      const durs = [1.1, 1.4, 1.9];    // последний барабан тормозит дольше — «предвкушение»
-      let maxEnd = 0;
-      // 3) Барабаны крутятся ещё чуть-чуть и тормозят по очереди на результате.
-      [0, 1, 2].forEach(c => {
-        const delay = 300 + c * 340, dur = durs[c];
-        maxEnd = Math.max(maxEnd, delay + dur * 1000);
-        setTimeout(() => landReel($("strip" + c), cols[c], N, dur), delay);
-        setTimeout(() => { haptic("impact", "light"); clickSound(); }, delay + dur * 1000);   // «клац» на остановке
-      });
+      const durs = isWin ? [1.6, 2.05, 2.95] : [1.6, 2.05, 2.45];   // 3-й тормозит дольше — предвкушение
+      const maxEnd = durs[2] * 1000;
+      // 2) Трещотка на всё время самого длинного барабана (замедляется к концу).
+      scheduleRatchet(Math.round(durs[2] * 16), durs[2]);
+      // 3) Барабаны стартуют одновременно, останавливаются по очереди (разные dur), каждый — плавно.
+      [0, 1, 2].forEach(c => runReel($("strip" + c), cols[c], K, durs[c]));
+      [0, 1, 2].forEach(c => setTimeout(() => { haptic("impact", "light"); clickSound(); }, durs[c] * 1000));
+      // 4) Предвкушение на 3-м барабане при выигрыше: свечение колонки + нарастающий звук + пульс.
+      if (isWin) {
+        const col2 = document.querySelectorAll(".reel-col")[2];
+        const from = durs[1] * 1000, to = durs[2] * 1000;
+        setTimeout(() => {
+          if (col2) col2.classList.add("antic");
+          anticipationSound((to - from) / 1000);
+          _anticHb = setInterval(() => haptic("impact", "medium"), 240);
+        }, from);
+        setTimeout(() => {
+          if (col2) col2.classList.remove("antic");
+          if (_anticHb) { clearInterval(_anticHb); _anticHb = null; }
+        }, to);
+      }
       setTimeout(() => {
         slotSpinning = false;
         if ($("slotHead")) $("slotHead").textContent = `🪙 ${bonus.coins} монет`;
         const btn = $("slotBtn");
         if (btn) { btn.disabled = (bonus.coins || 0) < slot.cost; btn.textContent = slotBtnText(); }
-        if (res.win) {
+        if (isWin) {
           (res.win_cells || []).forEach(([r, c]) => {              // подсветить выигрышные клетки (результат сверху)
             const cell = $("strip" + c) && $("strip" + c).children[r];
             if (cell) cell.classList.add("hit");
@@ -1595,11 +1636,15 @@
             const pop = document.createElement("div");
             pop.className = "winpop"; pop.textContent = `+${res.coins} 🪙`;
             stage.appendChild(pop); setTimeout(() => pop.remove(), 1500);
+            if (res.coins >= 400) confetti(stage, 30);            // крупный выигрыш — конфетти
           }
           haptic("notify", "success"); winSound();
         }
         const rl = $("slotResult");
-        if (rl) rl.innerHTML = res.win ? `<span class="winbadge">+${res.coins} 🪙</span>` : "Не повезло — крути ещё";
+        if (rl) rl.innerHTML = isWin ? `<span class="winbadge">+${res.coins} 🪙</span>` : "Не повезло — крути ещё";
+        slotHistory.unshift(isWin ? res.coins : 0);
+        if (slotHistory.length > 5) slotHistory.pop();
+        renderSlotHist();
       }, maxEnd + 120);
     }
 

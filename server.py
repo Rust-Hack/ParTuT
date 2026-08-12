@@ -569,12 +569,17 @@ SLOT_SYMBOLS = [
 ]
 
 
-# Линии слота: центральный ряд + две диагонали (клетки [row, col]).
+# Линии слота (клетки [row, col]): 3 ряда, 2 диагонали и 2 зигзага (галочка ∨ / крышка ∧).
 SLOT_LINES = [
+    [[0, 0], [0, 1], [0, 2]],   # верхний ряд
     [[1, 0], [1, 1], [1, 2]],   # центральный ряд
+    [[2, 0], [2, 1], [2, 2]],   # нижний ряд
     [[0, 0], [1, 1], [2, 2]],   # диагональ ↘
     [[0, 2], [1, 1], [2, 0]],   # диагональ ↙
+    [[0, 0], [2, 1], [0, 2]],   # галочка ∨ (слева-сверху → центр-снизу → справа-сверху)
+    [[2, 0], [0, 1], [2, 2]],   # крышка ∧ (слева-снизу → центр-сверху → справа-снизу)
 ]
+SLOT_LINE_NAMES = ["Верхний ряд", "Центр", "Нижний ряд", "Диагональ ↘", "Диагональ ↙", "Галочка ∨", "Крышка ∧"]
 
 
 def _line_vals(grid, line):
@@ -582,16 +587,29 @@ def _line_vals(grid, line):
 
 
 def _slot_grid(win_emoji, line_idx):
-    """Строит 3×3. Если win_emoji задан — выкладывает его по линии line_idx.
-    При проигрыше гарантирует, что НИ ОДНА линия не совпала (чтобы не показать неоплаченный «выигрыш»)."""
+    """Строит 3×3. Если win_emoji задан — выкладывает его по линии line_idx и ломает
+    любые ДРУГИЕ случайно совпавшие линии. При проигрыше — гарантирует, что НИ ОДНА
+    линия не совпала (чтобы не показать неоплаченный «выигрыш»)."""
     emojis = [s["emoji"] for s in SLOT_SYMBOLS]
     grid = [[random.choice(emojis) for _ in range(3)] for _ in range(3)]
     if win_emoji is not None:
         for r, c in SLOT_LINES[line_idx]:
             grid[r][c] = win_emoji
+        target = {(r, c) for r, c in SLOT_LINES[line_idx]}
+        for _ in range(50):     # убрать ЧУЖИЕ совпадения, не трогая целевую линию
+            bad = [i for i, ln in enumerate(SLOT_LINES)
+                   if i != line_idx and len(set(_line_vals(grid, ln))) == 1]
+            if not bad:
+                break
+            free = [(r, c) for r, c in SLOT_LINES[bad[0]] if (r, c) not in target]
+            if not free:
+                break
+            r, c = random.choice(free)
+            cur = grid[r][c]
+            grid[r][c] = random.choice([e for e in emojis if e != cur] or emojis)
         return grid
     # проигрыш — ломаем любые случайно совпавшие линии
-    for _ in range(30):
+    for _ in range(50):
         bad = [i for i, ln in enumerate(SLOT_LINES) if len(set(_line_vals(grid, ln))) == 1]
         if not bad:
             break
@@ -609,7 +627,8 @@ def api_slot():
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
     return jsonify({"ok": True, "cost": SLOT_COST, "balance": db.get_coins(uid),
-                    "symbols": [{"emoji": s["emoji"], "label": s["label"], "coins": s["coins"]} for s in SLOT_SYMBOLS]})
+                    "symbols": [{"emoji": s["emoji"], "label": s["label"], "coins": s["coins"]} for s in SLOT_SYMBOLS],
+                    "lines": [{"name": n, "cells": ln} for n, ln in zip(SLOT_LINE_NAMES, SLOT_LINES)]})
 
 
 @app.route("/api/slot/spin", methods=["POST"])
