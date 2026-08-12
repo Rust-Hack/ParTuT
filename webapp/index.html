@@ -1578,9 +1578,10 @@
     }
     $("productsClose").onclick = () => $("productsView").classList.remove("show");
 
-    function openLocations() {
-      renderLocList();
+    async function openLocations() {
       $("locationsView").classList.add("show");
+      await loadDelivery();
+      renderLocList();
     }
     $("locationsClose").onclick = () => $("locationsView").classList.remove("show");
 
@@ -1893,12 +1894,73 @@
     }
 
     // Управление локациями
+    let deliveryByCity = {};
+    async function loadDelivery() {
+      deliveryByCity = {};
+      await Promise.all(locations.map(async l => {
+        try { const r = await fetch(`/api/delivery?city=${encodeURIComponent(l.name)}`); deliveryByCity[l.name] = await r.json(); }
+        catch (e) { deliveryByCity[l.name] = []; }
+      }));
+    }
     function renderLocList() {
-      $("locList").innerHTML = locations.map(l =>
-        `<div class="admrow"><div class="an">${esc(l.name)}</div>
-          <button class="iconbtn danger" data-locdel="${l.id}">🗑</button></div>`).join("")
-        || `<p style="color:var(--hint)">Локаций пока нет.</p>`;
+      if (!locations.length) { $("locList").innerHTML = `<p style="color:var(--hint)">Локаций пока нет.</p>`; return; }
+      $("locList").innerHTML = locations.map(l => {
+        const methods = deliveryByCity[l.name] || [];
+        const mrows = methods.map(m => {
+          const info = m.needs_address ? `вводит «${esc(m.address_label)}»`
+                     : (m.pickup_address ? esc(m.pickup_address) : "самовывоз");
+          const tail = `${m.fee ? " · +" + m.fee.toFixed(2) + " Br" : ""} · ${m.needs_payment ? "оплата" : "без оплаты"}`;
+          return `<div class="admrow" style="background:var(--surface-2);box-shadow:none">
+              <div class="an">${esc(m.name)}<small>${info}${tail}</small></div>
+              <button class="iconbtn danger" data-dmdel="${m.id}">🗑</button></div>`;
+        }).join("") || `<p style="color:var(--hint);font-size:13px;margin:4px 0">Способов ещё нет.</p>`;
+        return `<div class="card-block">
+          <div class="admrow" style="padding:0;background:none;box-shadow:none">
+            <div class="an" style="font-weight:800;font-size:15px">${esc(l.name)}</div>
+            <button class="iconbtn danger" data-locdel="${l.id}">🗑</button></div>
+          <div class="dlabel" style="margin:10px 0 6px">Способы получения</div>
+          ${mrows}
+          <details class="sect" style="margin:8px 0 0;background:var(--surface-2);box-shadow:none">
+            <summary class="secthead" style="font-size:14px">➕ Добавить способ</summary>
+            <div class="sectbody form" data-city="${esc(l.name)}">
+              <label>Название</label><input class="dm-name" placeholder="Самовывоз / Доставка">
+              <div class="chk"><input type="checkbox" class="dm-addr"><label style="margin:0">Спрашивать адрес у клиента</label></div>
+              <label>Метка поля адреса</label><input class="dm-alabel" placeholder="Адрес / Станция метро">
+              <label>Адрес самовывоза (показать клиенту)</label><input class="dm-pickup" placeholder="ул. …, где отдаёте товар">
+              <label>Доплата за доставку (Br)</label><input class="dm-fee" inputmode="decimal" placeholder="0">
+              <div class="chk"><input type="checkbox" class="dm-pay" checked><label style="margin:0">Нужна оплата (карта/наличные)</label></div>
+              <button class="bigbtn dm-add" style="margin-top:12px">Добавить способ</button>
+            </div>
+          </details>
+        </div>`;
+      }).join("");
       $("locList").querySelectorAll("[data-locdel]").forEach(b => b.onclick = () => delLocation(+b.dataset.locdel));
+      $("locList").querySelectorAll("[data-dmdel]").forEach(b => b.onclick = () => delDeliveryMethod(+b.dataset.dmdel));
+      $("locList").querySelectorAll(".dm-add").forEach(b => b.onclick = () => addDeliveryMethod(b));
+    }
+    async function addDeliveryMethod(btn) {
+      const body = btn.closest(".sectbody");
+      const name = body.querySelector(".dm-name").value.trim();
+      if (!name) { alertMsg("Введите название способа."); return; }
+      const payload = { initData, city: body.dataset.city, name,
+        needs_address: body.querySelector(".dm-addr").checked,
+        address_label: body.querySelector(".dm-alabel").value.trim(),
+        pickup_address: body.querySelector(".dm-pickup").value.trim(),
+        fee: body.querySelector(".dm-fee").value || 0,
+        needs_payment: body.querySelector(".dm-pay").checked };
+      try {
+        const r = await fetch("/api/admin/delivery", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось добавить способ."); return; }
+        await loadDelivery(); renderLocList();
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+    async function delDeliveryMethod(id) {
+      if (!confirm("Удалить способ получения?")) return;
+      try {
+        await fetch("/api/admin/delivery/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
+        await loadDelivery(); renderLocList();
+      } catch (e) { alertMsg("Сеть недоступна."); }
     }
     $("locAdd").onclick = async () => {
       const name = $("locName").value.trim();
@@ -1909,6 +1971,7 @@
         if (!d.ok) { alertMsg("Не удалось добавить локацию."); return; }
         $("locName").value = "";
         await refreshProducts();
+        await loadDelivery(); renderLocList();
         $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
       } catch (e) { alertMsg("Сеть недоступна."); }
     };

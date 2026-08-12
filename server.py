@@ -850,6 +850,46 @@ def api_admin_location_add():
     return jsonify({"ok": True, "id": lid})
 
 
+@app.route("/api/admin/delivery", methods=["POST"])
+def api_admin_delivery_add():
+    """Добавить способ получения к точке."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    city = (data.get("city") or "").strip()
+    name = (data.get("name") or "").strip()
+    if not city or not name:
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+    try:
+        fee = float(str(data.get("fee") or 0).replace(",", "."))
+    except (TypeError, ValueError):
+        fee = 0.0
+    db.add_delivery_method(
+        city, name,
+        bool(data.get("needs_address")),
+        (data.get("address_label") or "").strip(),
+        (data.get("pickup_address") or "").strip(),
+        max(0.0, fee),
+        bool(data.get("needs_payment", True)),
+        int(data.get("sort") or 0),
+    )
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/delivery/delete", methods=["POST"])
+def api_admin_delivery_delete():
+    """Удалить способ получения."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        mid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    db.delete_delivery_method(mid)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/admin/location/delete", methods=["POST"])
 def api_admin_location_delete():
     """Удалить локацию. Нельзя, если в ней есть товары."""
