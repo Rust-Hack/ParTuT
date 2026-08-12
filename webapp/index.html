@@ -944,13 +944,14 @@
         me = await r.json();
         if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
         renderNav();
-        fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle();   // прогреваем всё — вкладки открываются мгновенно
-        if (me.age_ok) loadCatalog(); else $("ageView").classList.add("show");
+        // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
+        if (me.age_ok) loadCatalog().then(prefetchBonuses); else $("ageView").classList.add("show");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
+    function prefetchBonuses() { fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle(); }
     $("ageYes").onclick = async () => {
       await fetch("/api/age", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
-      $("ageView").classList.remove("show"); loadCatalog();
+      $("ageView").classList.remove("show"); loadCatalog().then(prefetchBonuses);
     };
     $("ageNo").onclick = () => { if (tg) tg.close(); };
 
@@ -1109,7 +1110,7 @@
     function cartKey(id, flavor) { return flavor ? id + "::" + flavor : "" + id; }
 
     function cardHtml(p) {
-      const photo = p.photo_url ? `<img src="${p.photo_url}" alt="" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
+      const photo = p.photo_url ? `<img src="${p.photo_url}" alt="" loading="lazy" decoding="async" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
       const isFav = favs.includes(p.id);
       const sub = [p.brand, p.flavor].filter(Boolean).join(" · ");
       let ctrl;
@@ -1157,7 +1158,12 @@
       localStorage.setItem("favs", JSON.stringify(favs));
       renderGrid(); if (activeTab === "fav") renderFav();
     }
-    $("searchInput").oninput = (e) => { search = e.target.value; renderGrid(); };
+    let searchTimer = 0;
+    $("searchInput").oninput = (e) => {
+      search = e.target.value;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(renderGrid, 160);   // перерисовать после паузы в наборе
+    };
 
     $("pointBtn").onclick = () => {
       $("pointList").innerHTML = cityList.map(c => `<button class="opt ${c===city?'active':''}" data-city="${esc(c)}">${esc(c)}</button>`).join("");
@@ -1179,7 +1185,7 @@
       if (!entries.length) { $("tab-cart").innerHTML = `<div class="empty"><div class="circ">🛒</div><h3>Корзина пуста</h3><p>Добавьте товары из ассортимента.</p></div>`; return; }
       const rows = entries.map(it => {
         const p = allProducts.find(x => x.id === it.product_id); if (!p) return "";
-        const thumb = p.photo_url ? `<img src="${p.photo_url}">` : (CAT_EMOJI[p.category] || "🛒");
+        const thumb = p.photo_url ? `<img src="${p.photo_url}" loading="lazy" decoding="async">` : (CAT_EMOJI[p.category] || "🛒");
         const fattr = it.flavor ? ` data-flavor="${esc(it.flavor)}"` : "";
         return `<div class="citem"><div class="thumb">${thumb}</div>
           <div style="flex:1"><div class="ci-name">${esc(p.name)}${it.flavor ? ` — ${esc(it.flavor)}` : ""}</div><div class="ci-price">${(p.price*it.qty).toFixed(2)} ${CUR}</div></div>
@@ -1217,7 +1223,7 @@
     }
     function ucard(p) {
       const photo = p.photo_url
-        ? `<img src="${p.photo_url}" alt="" data-open="${p.id}">`
+        ? `<img src="${p.photo_url}" alt="" loading="lazy" decoding="async" data-open="${p.id}">`
         : `<div class="uph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
       const btn = hasVariants(p)
         ? `<button class="uadd" data-pick="${p.id}">Выбрать</button>`

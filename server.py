@@ -139,7 +139,7 @@ def api_me():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    db.ensure_user(uid)
+    age_ok = db.ensure_user_get_age(uid)      # создать + узнать 18+ за одно подключение
 
     # Реферал: friend открыл приложение по ссылке ...startapp=refN.
     # Только ЗАПОМИНАЕМ пригласившего — монеты дадим, когда друг сделает заказ.
@@ -150,7 +150,7 @@ def api_me():
         except (TypeError, ValueError):
             pass
 
-    return jsonify({"ok": True, "age_ok": db.is_age_ok(uid), "is_admin": is_admin(uid)})
+    return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid)})
 
 
 @app.route("/api/age", methods=["POST"])

@@ -532,6 +532,21 @@ def is_age_ok(user_id):
     return bool(row and row["age_ok"] == 1)
 
 
+def ensure_user_get_age(user_id):
+    """Создаёт пользователя (если нет) и возвращает его 18+ — за одно подключение."""
+    conn = connect()
+    cur = conn.cursor()
+    if USE_PG:
+        cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+    else:
+        cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cur.execute(_q("SELECT age_ok FROM users WHERE user_id = %s"), (user_id,))
+    row = cur.fetchone()
+    conn.commit()
+    conn.close()
+    return bool(row and row["age_ok"] == 1)
+
+
 def set_age_ok(user_id):
     conn = connect()
     cur = conn.cursor()
