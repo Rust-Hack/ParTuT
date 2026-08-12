@@ -499,6 +499,34 @@ def api_admin_wheel_grant():
     return jsonify({"ok": True, "spins": db.get_wheel(uid)["spins"]})
 
 
+@app.route("/api/admin/grant", methods=["POST"])
+def api_admin_grant():
+    """Начислить пользователю монеты и/или прокруты колеса (по id)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        target = int(data.get("user_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    coins = spins = 0
+    try:
+        coins = int(data.get("coins") or 0)
+    except (TypeError, ValueError):
+        coins = 0
+    try:
+        spins = int(data.get("spins") or 0)
+    except (TypeError, ValueError):
+        spins = 0
+    db.ensure_user(target)
+    if coins:
+        db.add_coins(target, coins)
+    if spins:
+        db.add_spins(target, spins)
+    w = db.get_wheel(target)
+    return jsonify({"ok": True, "coins": db.get_coins(target), "spins": w["spins"]})
+
+
 @app.route("/api/wheel/spin", methods=["POST"])
 def api_wheel_spin():
     """Прокрут колеса: списываем прокрут, выбираем приз по весам, начисляем монеты."""

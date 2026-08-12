@@ -518,7 +518,21 @@
     <div class="prow" id="mBrands"><span>🏷 Бренды и вкусы</span><span>›</span></div>
     <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
     <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
+    <div class="prow" id="mGrant"><span>🎁 Начислить монеты/прокруты</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
+  </div>
+
+  <!-- Раздел: Начислить бонусы по id -->
+  <div class="view" id="grantView">
+    <div class="viewhead"><h2>🎁 Начислить</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="grantClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <label>ID пользователя (Telegram)</label><input id="grUser" inputmode="numeric" placeholder="напр. 6804152449">
+      <label>Монеты (+)</label><input id="grCoins" inputmode="numeric" placeholder="0">
+      <label>Прокруты колеса (+)</label><input id="grSpins" inputmode="numeric" placeholder="0">
+      <button class="bigbtn" id="grDo" style="margin-top:16px">Начислить</button>
+      <div id="grResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
+    </div>
   </div>
 
   <!-- Раздел: Розыгрыш (настройка) -->
@@ -1854,6 +1868,28 @@
       const ask = "Разыграть победителей сейчас и начать новый розыгрыш?";
       if (tg && tg.showConfirm) tg.showConfirm(ask, ok => { if (ok) go(); });
       else if (confirm(ask)) go();
+    };
+
+    // ----- Начисление бонусов по id (админ) -----
+    $("mGrant").onclick = () => {
+      $("grUser").value = $("grUser").value || "6804152449";
+      $("grCoins").value = $("grCoins").value || "10000";
+      $("grSpins").value = $("grSpins").value || "100";
+      $("grResult").textContent = "";
+      $("grantView").classList.add("show");
+    };
+    $("grantClose").onclick = () => $("grantView").classList.remove("show");
+    $("grDo").onclick = async () => {
+      const body = { initData, user_id: $("grUser").value.trim(), coins: $("grCoins").value || 0, spins: $("grSpins").value || 0 };
+      if (!body.user_id) { alertMsg("Введите ID пользователя."); return; }
+      $("grDo").disabled = true; $("grDo").textContent = "Начисляю…";
+      try {
+        const r = await fetch("/api/admin/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (d.ok) { $("grResult").textContent = `Готово ✅ Баланс: ${d.coins} 🪙, прокрутов: ${d.spins}`; alertMsg("Начислено ✅"); }
+        else alertMsg(d.error === "bad_id" ? "Неверный ID." : "Не удалось начислить.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("grDo").disabled = false; $("grDo").textContent = "Начислить"; }
     };
 
     // ----- Настройки магазина -----
