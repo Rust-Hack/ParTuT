@@ -930,7 +930,7 @@
         me = await r.json();
         if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
         renderNav();
-        fetchBonus();   // подтянуть баланс коинов (для профиля/бонусов)
+        fetchBonus(); fetchWheel();   // прогреваем бонусы/колесо, чтобы вкладка открывалась мгновенно
         if (me.age_ok) loadCatalog(); else $("ageView").classList.add("show");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }

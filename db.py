@@ -23,6 +23,7 @@ USE_PG = bool(DATABASE_URL)           # True = Postgres, False = локальн�
 
 if USE_PG:
     import psycopg2
+    from psycopg2 import pool as _pgpool
     from psycopg2.extras import RealDictCursor
 else:
     import sqlite3
@@ -33,10 +34,60 @@ ID_COL = "SERIAL PRIMARY KEY" if USE_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
 GREATEST = "GREATEST" if USE_PG else "max"   # ограничение остатка снизу нулём
 
 
+# --- Пул соединений к Postgres (Neon): держим их «тёплыми» и переиспользуем ---
+_POOL = None
+
+
+def _get_pool():
+    global _POOL
+    if _POOL is None:
+        # keepalives — чтобы ОС замечала «мёртвые» соединения (Neon рвёт простаивающие)
+        _POOL = _pgpool.ThreadedConnectionPool(
+            1, 20, DATABASE_URL, cursor_factory=RealDictCursor,
+            keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3)
+    return _POOL
+
+
+class _PooledConn:
+    """Обёртка: .close() возвращает соединение в пул, а не закрывает его."""
+    def __init__(self, raw):
+        self._raw = raw
+
+    def cursor(self, *a, **k):
+        return self._raw.cursor(*a, **k)
+
+    def commit(self):
+        return self._raw.commit()
+
+    def rollback(self):
+        return self._raw.rollback()
+
+    def close(self):
+        try:
+            self._raw.rollback()          # сброс любой незавершённой транзакции
+        except Exception:
+            pass
+        try:
+            _get_pool().putconn(self._raw)
+        except Exception:
+            try:
+                self._raw.close()
+            except Exception:
+                pass
+
+
 def connect():
     """Открывает соединение с нужной базой. Строки возвращаются как словари."""
     if USE_PG:
-        return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        pool = _get_pool()
+        raw = pool.getconn()
+        if getattr(raw, "closed", 0):     # уже закрыто — берём другое
+            try:
+                pool.putconn(raw, close=True)
+            except Exception:
+                pass
+            raw = pool.getconn()
+        return _PooledConn(raw)
     conn = sqlite3.connect(SQLITE_FILE)
     conn.row_factory = sqlite3.Row        # доступ к колонкам по имени: row["name"]
     return conn
