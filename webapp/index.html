@@ -239,6 +239,10 @@
     .wheel-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin-bottom: 8px; }
     .wheel-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s; }
     .wheel-hint { text-align: center; color: var(--hint); font-size: 13px; margin-bottom: 14px; }
+    .slot-top { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 12px; }
+    .soundtgl { width: 34px; height: 34px; border: none; border-radius: 10px; background: var(--surface-2); font-size: 16px; line-height: 1; }
+    .winpop { position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%); font-size: 24px; font-weight: 800; color: var(--warn); text-shadow: 0 2px 10px rgba(0,0,0,.5); pointer-events: none; z-index: 4; animation: winPop 1.5s ease forwards; }
+    @keyframes winPop { 0% { opacity: 0; transform: translate(-50%,-25%) scale(.5); } 22% { opacity: 1; transform: translate(-50%,-50%) scale(1.15); } 100% { opacity: 0; transform: translate(-50%,-140%) scale(1); } }
     .slot3 { position: relative; display: flex; gap: 8px; justify-content: center; margin: 6px 0 16px; padding: 6px; border-radius: 20px; }
     .slot3.win { animation: slotWin .7s ease; }
     @keyframes slotWin { 0%,100% { box-shadow: none; } 40% { box-shadow: 0 0 0 3px var(--warn), 0 0 26px var(--warn); } }
@@ -1333,6 +1337,23 @@
     let slotSpinning = false;
     const slotEmojis = () => (slot.symbols || []).map(s => s.emoji);
     const haptic = (kind, style) => { try { const h = tg && tg.HapticFeedback; if (!h) return; kind === "notify" ? h.notificationOccurred(style || "success") : h.impactOccurred(style || "light"); } catch (e) {} };
+    // ---- Звук (Web Audio, без внешних файлов) ----
+    let audioCtx = null, soundOn = localStorage.getItem("slotSound") !== "0";
+    function beep(freq, dur, type, vol) {
+      if (!soundOn) return;
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = type || "triangle"; o.frequency.value = freq;
+        g.gain.value = vol || 0.05; o.connect(g); g.connect(audioCtx.destination);
+        o.start();
+        g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + (dur || 0.08));
+        o.stop(audioCtx.currentTime + (dur || 0.08));
+      } catch (e) {}
+    }
+    const tick = () => beep(200 + Math.random() * 60, 0.05, "square", 0.035);
+    const winSound = () => [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.2, "triangle", 0.06), i * 110));
     function slotBtnText() {
       const can = (bonus.coins || 0) >= slot.cost;
       return can ? `Крутить · ${slot.cost} 🪙` : "Недостаточно монет";
@@ -1374,7 +1395,8 @@
       const canSpin = (bonus.coins || 0) >= slot.cost;
       const pay = (slot.symbols || []).map(s => `<div class="slotpay"><span>${s.emoji}</span><small>${s.coins} 🪙</small></div>`).join("");
       $("gameWrap").innerHTML = `
-        <div class="wheel-head" id="slotHead">🪙 ${bonus.coins || 0} монет</div>
+        <div class="slot-top"><div class="wheel-head" id="slotHead" style="margin:0">🪙 ${bonus.coins || 0} монет</div>
+          <button class="soundtgl" id="soundTgl" aria-label="Звук">${soundOn ? "🔊" : "🔇"}</button></div>
         <div class="slot3">
           <div class="reel-col"><div class="reel-strip" id="strip0"></div></div>
           <div class="reel-col"><div class="reel-strip" id="strip1"></div></div>
@@ -1385,6 +1407,11 @@
         <div class="slotpays">${pay}</div>`;
       [0, 1, 2].forEach(c => initStrip($("strip" + c)));
       $("slotBtn").onclick = spinSlot;
+      $("soundTgl").onclick = () => {
+        soundOn = !soundOn; localStorage.setItem("slotSound", soundOn ? "1" : "0");
+        $("soundTgl").textContent = soundOn ? "🔊" : "🔇";
+        if (soundOn) beep(660, 0.08, "triangle", 0.05);
+      };
     }
     async function spinSlot() {
       if (slotSpinning || (bonus.coins || 0) < slot.cost) return;
@@ -1403,14 +1430,14 @@
       bonus.coins = res.balance;
       const N = 20;
       const cols = [0, 1, 2].map(c => [res.grid[0][c], res.grid[1][c], res.grid[2][c]]);
-      const dur = 1.25;
+      const durs = [1.1, 1.4, 1.9];    // последний барабан тормозит дольше — «предвкушение»
       let maxEnd = 0;
       // 3) Барабаны крутятся ещё чуть-чуть и тормозят по очереди на результате.
       [0, 1, 2].forEach(c => {
-        const delay = 300 + c * 380;
+        const delay = 300 + c * 340, dur = durs[c];
         maxEnd = Math.max(maxEnd, delay + dur * 1000);
         setTimeout(() => landReel($("strip" + c), cols[c], N, dur), delay);
-        setTimeout(() => haptic("impact", "light"), delay + dur * 1000);   // «клац» при остановке
+        setTimeout(() => { haptic("impact", "light"); tick(); }, delay + dur * 1000);   // «клац» + тик
       });
       setTimeout(() => {
         slotSpinning = false;
@@ -1422,8 +1449,13 @@
             const cell = $("strip" + c) && $("strip" + c).children[N + r];
             if (cell) cell.classList.add("hit");
           });
-          if (stage) stage.classList.add("win");
-          haptic("notify", "success");
+          if (stage) {
+            stage.classList.add("win");
+            const pop = document.createElement("div");
+            pop.className = "winpop"; pop.textContent = `+${res.coins} 🪙`;
+            stage.appendChild(pop); setTimeout(() => pop.remove(), 1500);
+          }
+          haptic("notify", "success"); winSound();
         }
         setTimeout(() => alertMsg(res.win ? `🎉 Три ${res.label}! +${res.coins} 🪙` : "Не повезло — крути ещё!"), 250);
       }, maxEnd + 120);
