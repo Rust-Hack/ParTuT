@@ -315,7 +315,7 @@
     .slotpays { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 16px; }
     .slotpay { background: rgba(14,34,43,.7); border: 1px solid rgba(74,222,255,.25); border-radius: 12px; box-shadow: inset 0 0 12px rgba(0,0,0,.4); padding: 8px 4px; text-align: center; }
     .slotpay span { font-size: 22px; display: block; }
-    .slotpay small { color: var(--brand-neon); font-size: 11px; text-shadow: 0 0 6px var(--brand-glow); }
+    .slotpay small { color: var(--brand-neon); font-size: 11px; text-shadow: 0 0 6px var(--brand-glow); white-space: nowrap; }
     .betsel { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 4px 0 10px; }
     .betlbl { color: var(--hint); font-size: 13px; margin-right: 2px; }
     .betbtn { min-width: 38px; padding: 7px 0; border-radius: 10px; border: 1px solid rgba(74,222,255,.3); background: rgba(14,34,43,.6); color: var(--text); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
@@ -1530,10 +1530,15 @@
       });
       setTimeout(() => el.classList.remove("blur"), Math.max(0, dur * 1000 - 280));  // резкость к остановке
     }
-    // Пейтабл показывает реальный выигрыш в монетах для ТЕКУЩЕЙ ставки (обновляется вживую).
+    // Пейтабл показывает реальный выигрыш в монетах для ТЕКУЩЕЙ ставки.
     function slotPayHtml() {
       return (slot.symbols || []).map(s =>
         `<div class="slotpay"><span>${s.emoji}</span><small>${slotBet * s.mult} 🪙</small></div>`).join("");
+    }
+    // Обновление сумм НА МЕСТЕ (без перестройки разметки — не «прыгает»).
+    function updateSlotPays() {
+      const smalls = document.querySelectorAll("#slotPays .slotpay small");
+      (slot.symbols || []).forEach((s, i) => { if (smalls[i]) smalls[i].textContent = `${slotBet * s.mult} 🪙`; });
     }
     function renderSlot() {
       if (!(slot.bets || []).includes(slotBet)) slotBet = (slot.bets || [2])[0];   // защита от stale-значения
@@ -1553,7 +1558,7 @@
         <div class="wheel-hist" id="slotHist"></div>
         <div class="betsel"><span class="betlbl">Ставка</span>${bets}</div>
         <button class="bigbtn" id="slotBtn" ${canSpin ? "" : "disabled"}>${slotBtnText()}</button>
-        <div class="wheel-hint" id="slotHint">Возможный выигрыш за 3 в линию (ставка ${slotBet} 🪙):</div>
+        <div class="wheel-hint">Возможный выигрыш за 3 в линию:</div>
         <div class="slotpays" id="slotPays">${pay}</div>`;
       [0, 1, 2].forEach(c => initStrip($("strip" + c)));
       renderSlotHist();
@@ -1563,8 +1568,7 @@
         localStorage.setItem("slotBet", slotBet);
         document.querySelectorAll(".betsel .betbtn").forEach(b => b.classList.toggle("on", parseInt(b.dataset.bet, 10) === slotBet));
         const sb = $("slotBtn"); if (sb) { sb.disabled = (bonus.coins || 0) < slotBet; sb.textContent = slotBtnText(); }
-        if ($("slotPays")) $("slotPays").innerHTML = slotPayHtml();          // выигрыши пересчитываются вживую
-        if ($("slotHint")) $("slotHint").textContent = `Возможный выигрыш за 3 в линию (ставка ${slotBet} 🪙):`;
+        updateSlotPays();          // суммы пересчитываются на месте (без рефлоу)
         haptic("impact", "light");
       });
       $("slotBtn").onclick = spinSlot;
