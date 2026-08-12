@@ -1690,6 +1690,22 @@
     }
 
     // ----- Колесо фортуны -----
+    // Лёгкое авто-вращение в покое (медленно, только когда колесо на экране и не крутится).
+    let idleStarted = false;
+    function ensureIdleLoop() {
+      if (idleStarted) return; idleStarted = true;
+      let prev = performance.now();
+      const step = (t) => {
+        const dt = Math.min(50, t - prev); prev = t;
+        const we = $("wheelEl");
+        if (we && we.offsetParent && !spinning && bonusTab === "wheel" && gameMode === "wheel" && !document.hidden) {
+          wheelDeg += dt * 0.006;                            // ~60 сек на оборот
+          we.style.transform = `rotate(${wheelDeg}deg)`;
+        }
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
     let wheelHistory = [];   // последние выигрыши (сессия)
     function renderWheelHist() {
       const el = $("wheelHist"); if (!el) return;
@@ -1740,7 +1756,9 @@
       const we = $("wheelEl");                                 // фон задаём из JS (url с кавычками)
       we.style.backgroundImage = wheelBgImage;
       we.style.backgroundSize = "auto, auto, 88px 44px";
+      we.style.transform = `rotate(${wheelDeg}deg)`;           // сохранить текущий угол при перерисовке
       renderWheelHist();
+      ensureIdleLoop();
       $("spinBtn").onclick = spinWheel;
       if ($("wheelHub")) $("wheelHub").onclick = spinWheel;   // тап по центру = крутить
       $("wheelSound").onclick = () => { toggleSound(); $("wheelSound").textContent = soundOn ? "🔊" : "🔇"; };
