@@ -230,7 +230,7 @@
     .bseg button.on { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
     .wheel-head { text-align: center; font-weight: 800; font-size: 18px; margin-bottom: 12px; }
     .wheel-stage { position: relative; width: 288px; max-width: 84vw; aspect-ratio: 1; margin: 0 auto 16px; }
-    .wheel-ptr { position: absolute; top: -4px; left: 50%; transform: translateX(-50%); transform-origin: 50% 0; z-index: 3; width: 0; height: 0; border-left: 13px solid transparent; border-right: 13px solid transparent; border-top: 22px solid var(--warn); filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); transition: filter .6s ease, border-top-color .6s ease; }
+    .wheel-ptr { position: absolute; top: -8px; left: 50%; transform: translateX(-50%); transform-origin: 50% 4px; z-index: 3; width: 0; height: 0; border-left: 9px solid transparent; border-right: 9px solid transparent; border-top: 34px solid var(--warn); filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); transition: filter .6s ease, border-top-color .6s ease; }
     .wheel-ptr.win { border-top-color: var(--brand-neon); filter: drop-shadow(0 0 8px var(--brand-neon)) drop-shadow(0 0 4px var(--brand-neon)); }
     .wheel-ptr.bump { animation: ptrBump .38s ease; }
     @keyframes ptrBump { 0%,100% { transform: translateX(-50%) translateY(0); } 35% { transform: translateX(-50%) translateY(5px); } }
@@ -1740,7 +1740,7 @@
       let phase = 1, running = true, prevT = performance.now(), kick = 0;
       let decelStart = 0, decelDur = 0, startAngle = 0, dist = 0, res = null;
       // Пройден сектор → тик трещотки + «удар» по флажку-указателю.
-      const tickCross = () => { const b = Math.floor(angle / seg); if (b !== lastBucket) { ratchetTick(); kick = 15; lastBucket = b; } };
+      const tickCross = () => { const b = Math.floor(angle / seg); if (b !== lastBucket) { ratchetTick(); kick = 10; lastBucket = b; } };
       const flickPointer = () => { if (ptr) ptr.style.transform = `translateX(-50%) rotate(${kick.toFixed(1)}deg)`; kick *= 0.7; };   // отскок к нулю
 
       function finishWheelSpin() {
