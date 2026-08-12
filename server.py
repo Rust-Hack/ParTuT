@@ -598,8 +598,13 @@ def api_slot_spin():
     balance = db.do_slot_spin(uid, SLOT_COST, prize_coins)   # списание+приз за 1 запрос
     if balance is None:
         return jsonify({"ok": False, "error": "no_coins"}), 400
-    reels = [win["emoji"]] * 3 if win else _losing_reels()
-    return jsonify({"ok": True, "win": bool(win), "reels": reels,
+
+    # Сетка 3×3: средний ряд — результат (выигрыш = 3 одинаковых), верх/низ — случайные.
+    emojis = [s["emoji"] for s in SLOT_SYMBOLS]
+    mid = [win["emoji"]] * 3 if win else _losing_reels()
+    rand_row = lambda: [random.choice(emojis) for _ in range(3)]
+    grid = [rand_row(), mid, rand_row()]
+    return jsonify({"ok": True, "win": bool(win), "grid": grid,
                     "coins": prize_coins, "label": win["label"] if win else "",
                     "balance": balance})
 

@@ -239,10 +239,13 @@
     .wheel-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin-bottom: 8px; }
     .wheel-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s; }
     .wheel-hint { text-align: center; color: var(--hint); font-size: 13px; margin-bottom: 14px; }
-    .slot { display: flex; gap: 10px; justify-content: center; margin: 6px 0 16px; }
-    .reel { width: 84px; height: 96px; max-width: 27vw; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow), inset 0 0 0 3px var(--accent); display: flex; align-items: center; justify-content: center; font-size: 46px; }
-    .reel.hit { animation: reelHit .5s ease; box-shadow: var(--shadow), inset 0 0 0 3px var(--warn), 0 0 18px var(--warn); }
-    @keyframes reelHit { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+    .slot3 { position: relative; display: flex; gap: 8px; justify-content: center; margin: 6px 0 16px; }
+    .reel-col { width: 84px; max-width: 27vw; aspect-ratio: 1 / 3; overflow: hidden; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow), inset 0 0 0 3px var(--accent); }
+    .reel-strip { will-change: transform; }
+    .reel-cell { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; font-size: 40px; }
+    .slot-line { position: absolute; top: 33.33%; height: 33.33%; left: -4px; right: -4px; border: 2px solid var(--warn); border-radius: 12px; pointer-events: none; opacity: .55; }
+    .slot-line.win { opacity: 1; box-shadow: 0 0 16px var(--warn); animation: lineWin .5s ease; }
+    @keyframes lineWin { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
     .slotpays { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 16px; }
     .slotpay { background: var(--surface); border-radius: 10px; box-shadow: var(--shadow); padding: 8px 4px; text-align: center; }
     .slotpay span { font-size: 22px; display: block; }
@@ -1321,48 +1324,74 @@
       else if (bonusTab === "raffle") renderRaffle();
     }
 
-    // ----- Слот «Вэйп Удача» -----
+    // ----- Слот «Вэйп Удача» (сетка 3×3, барабаны прокручиваются) -----
     let slotSpinning = false;
+    const slotEmojis = () => (slot.symbols || []).map(s => s.emoji);
+    function slotBtnText() {
+      const can = (bonus.coins || 0) >= slot.cost;
+      return can ? `Крутить · ${slot.cost} 🪙` : "Недостаточно монет";
+    }
+    function initStrip(el) {   // стартовое состояние барабана — 3 случайных символа
+      const em = slotEmojis();
+      const cells = [0, 1, 2].map(() => em[Math.floor(Math.random() * em.length)] || "❔");
+      el.style.transition = "none"; el.style.transform = "translateY(0)";
+      el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
+    }
     function renderSlot() {
       const canSpin = (bonus.coins || 0) >= slot.cost;
       const pay = (slot.symbols || []).map(s => `<div class="slotpay"><span>${s.emoji}</span><small>${s.coins} 🪙</small></div>`).join("");
       $("gameWrap").innerHTML = `
         <div class="wheel-head" id="slotHead">🪙 ${bonus.coins || 0} монет</div>
-        <div class="slot"><div class="reel" id="reel0">❔</div><div class="reel" id="reel1">❔</div><div class="reel" id="reel2">❔</div></div>
-        <button class="bigbtn" id="slotBtn" ${canSpin ? "" : "disabled"}>${canSpin ? `Крутить · ${slot.cost} 🪙` : "Недостаточно монет"}</button>
-        <div class="wheel-hint">Совпали 3 символа — приз! Прокрут ${slot.cost} монет.</div>
+        <div class="slot3">
+          <div class="reel-col"><div class="reel-strip" id="strip0"></div></div>
+          <div class="reel-col"><div class="reel-strip" id="strip1"></div></div>
+          <div class="reel-col"><div class="reel-strip" id="strip2"></div></div>
+          <div class="slot-line" id="slotLine"></div>
+        </div>
+        <button class="bigbtn" id="slotBtn" ${canSpin ? "" : "disabled"}>${slotBtnText()}</button>
+        <div class="wheel-hint">Средний ряд — 3 одинаковых = приз. Прокрут ${slot.cost} монет.</div>
         <div class="slotpays">${pay}</div>`;
+      [0, 1, 2].forEach(c => initStrip($("strip" + c)));
       $("slotBtn").onclick = spinSlot;
     }
     async function spinSlot() {
       if (slotSpinning || (bonus.coins || 0) < slot.cost) return;
       slotSpinning = true; $("slotBtn").disabled = true;
-      // 1) Сразу мелькаем барабанами, не дожидаясь сети.
-      const emojis = (slot.symbols || []).map(s => s.emoji);
-      const reels = [$("reel0"), $("reel1"), $("reel2")];
-      reels.forEach(r => r.classList.remove("hit"));
-      const ivs = reels.map(reel => setInterval(() => { reel.textContent = emojis[Math.floor(Math.random() * emojis.length)] || "❔"; }, 70));
-      // 2) Параллельно — результат (1 запрос).
+      $("slotLine").classList.remove("win");
       let res;
       try {
         const r = await fetch("/api/slot/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         res = await r.json();
-      } catch (e) { ivs.forEach(clearInterval); slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
-      if (!res.ok) { ivs.forEach(clearInterval); slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
+      } catch (e) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
+      if (!res.ok) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
       bonus.coins = res.balance;
-      // 3) Барабаны останавливаются по очереди на результате.
-      reels.forEach((reel, i) => setTimeout(() => {
-        clearInterval(ivs[i]);
-        reel.textContent = res.reels[i];
-        reel.classList.toggle("hit", !!res.win);
-        if (i === 2) {
-          slotSpinning = false;
-          if ($("slotHead")) $("slotHead").textContent = `🪙 ${bonus.coins} монет`;
-          const btn = $("slotBtn"), can = bonus.coins >= slot.cost;
-          if (btn) { btn.disabled = !can; btn.textContent = can ? `Крутить · ${slot.cost} 🪙` : "Недостаточно монет"; }
-          setTimeout(() => alertMsg(res.win ? `🎉 Три ${res.label}! +${res.coins} 🪙` : "Не повезло — крути ещё!"), 250);
-        }
-      }, 450 + i * 300));
+      const em = slotEmojis(), N = 24;                       // 24 случайных ячейки прокрутки перед результатом
+      const cols = [0, 1, 2].map(c => [res.grid[0][c], res.grid[1][c], res.grid[2][c]]);
+      let maxDur = 0;
+      [0, 1, 2].forEach(c => {
+        const el = $("strip" + c);
+        const cells = [];
+        for (let i = 0; i < N; i++) cells.push(em[Math.floor(Math.random() * em.length)] || "❔");
+        cells.push(cols[c][0], cols[c][1], cols[c][2]);      // верх, СЕРЕДИНА(результат), низ
+        el.style.transition = "none"; el.style.transform = "translateY(0)";
+        el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
+        void el.offsetHeight;                                 // reflow, чтобы старт с 0
+        const cellH = el.parentElement.clientHeight / 3;
+        const dur = 1.5 + c * 0.4;                            // каскад: барабаны стопаются по очереди
+        maxDur = Math.max(maxDur, dur);
+        requestAnimationFrame(() => {
+          el.style.transition = `transform ${dur}s cubic-bezier(.16,.62,.2,1)`;
+          el.style.transform = `translateY(${-(N) * cellH}px)`;  // прокрутить до последних трёх ячеек
+        });
+      });
+      setTimeout(() => {
+        slotSpinning = false;
+        if ($("slotHead")) $("slotHead").textContent = `🪙 ${bonus.coins} монет`;
+        const btn = $("slotBtn");
+        if (btn) { btn.disabled = (bonus.coins || 0) < slot.cost; btn.textContent = slotBtnText(); }
+        if (res.win && $("slotLine")) $("slotLine").classList.add("win");
+        setTimeout(() => alertMsg(res.win ? `🎉 Три ${res.label}! +${res.coins} 🪙` : "Не повезло — крути ещё!"), 250);
+      }, maxDur * 1000 + 150);
     }
 
     // ----- Розыгрыши -----
