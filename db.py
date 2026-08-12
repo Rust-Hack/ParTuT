@@ -610,6 +610,33 @@ def get_coins(user_id):
     return row["coins"] if row and row["coins"] is not None else 0
 
 
+def spend_coins(user_id, amount):
+    """Атомарно списывает amount монет — только если хватает баланса.
+    Возвращает True при успехе, False если монет мало (защита от гонки/двойного списания)."""
+    amount = int(amount)
+    if amount <= 0:
+        return True
+    conn = connect()
+    cur = conn.cursor()
+    if USE_PG:
+        cur.execute("""UPDATE users SET coins = COALESCE(coins,0) - %s
+                       WHERE user_id = %s AND COALESCE(coins,0) >= %s
+                       RETURNING 1""", (amount, user_id, amount))
+        ok = cur.fetchone() is not None
+        conn.commit()
+        conn.close()
+        return ok
+    cur.execute("SELECT COALESCE(coins,0) AS c FROM users WHERE user_id = ?", (user_id,))
+    r = cur.fetchone()
+    if not r or r["c"] < amount:
+        conn.close()
+        return False
+    cur.execute("UPDATE users SET coins = coins - ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
 def count_referrals(user_id):
     conn = connect()
     cur = conn.cursor()

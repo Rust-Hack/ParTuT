@@ -341,18 +341,23 @@ def api_order():
         payment = "none"
 
     # 3. Списание монет: 1 монета = COIN_VALUE Br, но не больше суммы товаров.
+    #    round() убирает float-погрешность (25/0.01 = 2499.999…), spend_coins списывает атомарно.
     coins_used, discount = 0, 0.0
     if data.get("use_coins") and subtotal > 0:
-        have = db.get_coins(user_id)
-        spend = min(have, int(subtotal / COIN_VALUE))
-        if spend > 0:
+        max_spend = int(round(subtotal / COIN_VALUE))
+        spend = min(db.get_coins(user_id), max_spend)
+        if spend > 0 and db.spend_coins(user_id, spend):   # атомарно, защищает от гонки
             coins_used = spend
             discount = round(spend * COIN_VALUE, 2)
-            db.add_coins(user_id, -spend)
 
     total = round(subtotal - discount + fee, 2)   # товары − скидка + доставка
 
-    order_id = db.create_order(user_id, username, city, items, total, "")
+    try:
+        order_id = db.create_order(user_id, username, city, items, total, "")
+    except Exception:
+        if coins_used:                             # заказ не создан — вернём списанные монеты
+            db.add_coins(user_id, coins_used)
+        raise
     db.set_order_delivery(order_id, method["name"], address, fee, payment)
     if coins_used:
         db.set_order_coins_used(order_id, coins_used)
