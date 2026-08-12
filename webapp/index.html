@@ -1378,46 +1378,35 @@
       setTimeout(() => tone(1568, 0.55, 0.05, "sine"), 90);
       [523.25, 659.25, 783.99].forEach(f => setTimeout(() => tone(f, 0.6, 0.028, "triangle"), 130));
     };
-    // Тик храповика: короткий металлический «клац», НИЗКИЙ — шумовой импульс через резонансный фильтр.
+    // Шумовой буфер для «клаца» создаём ОДИН раз и переиспользуем (без нагрузки на каждый тик).
+    let _ratchetBuf = null;
+    function ratchetBuffer(ctx) {
+      if (_ratchetBuf) return _ratchetBuf;
+      const len = Math.floor(ctx.sampleRate * 0.022);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 5);
+      _ratchetBuf = buf; return buf;
+    }
     function ratchetTick() {
       if (!soundOn) return;
       try {
-        const ctx = ac(), len = Math.floor(ctx.sampleRate * 0.022);
-        const buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
-        for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 5);
-        const src = ctx.createBufferSource(); src.buffer = buf;
+        const ctx = ac();
+        const src = ctx.createBufferSource(); src.buffer = ratchetBuffer(ctx);
         const bp = ctx.createBiquadFilter(); bp.type = "bandpass";
-        bp.frequency.value = 520 + Math.random() * 220; bp.Q.value = 2.4;    // ниже тон
+        bp.frequency.value = 500 + Math.random() * 200; bp.Q.value = 2.4;     // низкий металлический «клац»
         const g = ctx.createGain(); g.gain.value = 0.3;
         src.connect(bp); bp.connect(g); g.connect(ctx.destination); src.start();
       } catch (e) {}
     }
-    // Текущий сдвиг/угол из CSS-трансформа (matrix) — чтобы трещотка шла в такт РЕАЛЬНОЙ прокрутке.
-    function matrixTranslateY(el) {
-      const t = getComputedStyle(el).transform;
-      if (!t || t === "none") return 0;
-      const m = t.match(/matrix\(([^)]+)\)/); if (!m) return 0;
-      return -parseFloat(m[1].split(",")[5] || 0);
-    }
-    function matrixAngle(el) {
-      const t = getComputedStyle(el).transform;
-      if (!t || t === "none") return 0;
-      const m = t.match(/matrix\(([^)]+)\)/); if (!m) return 0;
-      const p = m[1].split(",").map(Number);
-      return (Math.atan2(p[1], p[0]) * 180 / Math.PI + 360) % 360;
-    }
-    // Трещотка «по позиции»: тик при каждом прохождении шага (сектора/ячейки). Частота = скорость прокрута.
-    function positionRatchet(readFn, step, maxMs) {
-      if (!soundOn || !step) return;
-      const start = performance.now();
-      let last = Math.floor(readFn() / step);
-      const loop = () => {
-        if (!soundOn || performance.now() - start > maxMs) return;
-        const b = Math.floor(readFn() / step);
-        if (b !== last) { ratchetTick(); last = b; }
-        requestAnimationFrame(loop);
-      };
-      requestAnimationFrame(loop);
+    // Трещотка: тики ПЛАНИРУЕМ заранее по кривой замедления (ease-out) — без чтения DOM в кадре.
+    let _ratchetTimers = [];
+    function scheduleRatchet(ticks, durSec) {
+      _ratchetTimers.forEach(clearTimeout); _ratchetTimers = [];
+      if (!soundOn || ticks < 1) return;
+      for (let k = 1; k <= ticks; k++) {
+        const tsec = durSec * (1 - Math.pow(1 - k / ticks, 1 / 3));   // инверсия ease-out: часто → редко
+        _ratchetTimers.push(setTimeout(ratchetTick, tsec * 1000));
+      }
     }
     function slotBtnText() {
       const can = (bonus.coins || 0) >= slot.cost;
@@ -1485,11 +1474,9 @@
       slotSpinning = true; $("slotBtn").disabled = true;
       const stage = document.querySelector(".slot3"); if (stage) stage.classList.remove("win");
       haptic("impact", "medium");
+      scheduleRatchet(42, 2.9);        // трещотка на всё время прокрутки (замедляется к концу)
       // 1) Мгновенно крутим все три барабана (не ждём сеть).
       [0, 1, 2].forEach(c => startReel($("strip" + c)));
-      // Трещотка в такт последнему барабану (он крутится дольше всех).
-      const s2 = $("strip2"), cellH2 = s2.parentElement.clientHeight / 3;
-      positionRatchet(() => matrixTranslateY(s2), cellH2, 3200);
       // 2) Параллельно — результат (1 запрос).
       let res;
       try {
@@ -1725,7 +1712,8 @@
       wheelDeg += 360 * 3 + delta;                    // 3 оборота + доводка
       el.style.transition = "transform 2.4s cubic-bezier(.12,.72,.2,1)";
       el.style.transform = `rotate(${wheelDeg}deg)`;
-      positionRatchet(() => matrixAngle(el), seg, 2600);   // тик при каждом секторе — в такт скорости
+      scheduleRatchet(Math.round((360 * 3 + delta) / seg), 2.4);   // тик на каждый сектор, замедляется
+
       setTimeout(() => {
         bonus.coins = res.balance; wheel.spins = res.spins; spinning = false;
         refreshWheelInfo();
