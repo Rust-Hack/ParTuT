@@ -1341,21 +1341,39 @@
     const haptic = (kind, style) => { try { const h = tg && tg.HapticFeedback; if (!h) return; kind === "notify" ? h.notificationOccurred(style || "success") : h.impactOccurred(style || "light"); } catch (e) {} };
     // ---- Звук (Web Audio, без внешних файлов) ----
     let audioCtx = null, soundOn = localStorage.getItem("slotSound") !== "0";
-    function beep(freq, dur, type, vol) {
+    function ac() {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      return audioCtx;
+    }
+    // Мягкая нота: синус с плавной атакой и экспоненциальным затуханием (не режет слух).
+    function tone(freq, dur, vol, type) {
       if (!soundOn) return;
       try {
-        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === "suspended") audioCtx.resume();
-        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-        o.type = type || "triangle"; o.frequency.value = freq;
-        g.gain.value = vol || 0.05; o.connect(g); g.connect(audioCtx.destination);
-        o.start();
-        g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + (dur || 0.08));
-        o.stop(audioCtx.currentTime + (dur || 0.08));
+        const ctx = ac(), o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = type || "sine"; o.frequency.value = freq;
+        const t = ctx.currentTime;
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(vol, t + 0.015);           // мягкая атака
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + dur + 0.02);
       } catch (e) {}
     }
-    const tick = () => beep(200 + Math.random() * 60, 0.05, "square", 0.035);
-    const winSound = () => [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.2, "triangle", 0.06), i * 110));
+    // Щелчок остановки барабана — короткий затухающий шум через полосовой фильтр.
+    function clickSound() {
+      if (!soundOn) return;
+      try {
+        const ctx = ac(), len = Math.floor(ctx.sampleRate * 0.045);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+        const src = ctx.createBufferSource(); src.buffer = buf;
+        const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 1100; bp.Q.value = 0.8;
+        const g = ctx.createGain(); g.gain.value = 0.22;
+        src.connect(bp); bp.connect(g); g.connect(ctx.destination); src.start();
+      } catch (e) {}
+    }
+    // Приятная восходящая мелодия при выигрыше (E-мажор арпеджио).
+    const winSound = () => [659.25, 830.61, 987.77, 1318.51].forEach((f, i) => setTimeout(() => tone(f, 0.32, 0.05), i * 95));
     function slotBtnText() {
       const can = (bonus.coins || 0) >= slot.cost;
       return can ? `Крутить · ${slot.cost} 🪙` : "Недостаточно монет";
@@ -1413,7 +1431,7 @@
       $("soundTgl").onclick = () => {
         soundOn = !soundOn; localStorage.setItem("slotSound", soundOn ? "1" : "0");
         $("soundTgl").textContent = soundOn ? "🔊" : "🔇";
-        if (soundOn) beep(660, 0.08, "triangle", 0.05);
+        if (soundOn) tone(660, 0.15, 0.05);
       };
     }
     async function spinSlot() {
@@ -1440,7 +1458,7 @@
         const delay = 300 + c * 340, dur = durs[c];
         maxEnd = Math.max(maxEnd, delay + dur * 1000);
         setTimeout(() => landReel($("strip" + c), cols[c], N, dur), delay);
-        setTimeout(() => { haptic("impact", "light"); tick(); }, delay + dur * 1000);   // «клац» + тик
+        setTimeout(() => { haptic("impact", "light"); clickSound(); }, delay + dur * 1000);   // «клац» на остановке
       });
       setTimeout(() => {
         slotSpinning = false;
