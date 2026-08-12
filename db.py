@@ -409,6 +409,28 @@ def spent_since(user_id, since):
     return float(s or 0)
 
 
+def get_raffle_state(user_id):
+    """Активный розыгрыш + участники/участвую/потрачено/прошлые победители — за ОДНО подключение."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM raffles WHERE status = 'active' ORDER BY id DESC LIMIT 1"))
+    r = cur.fetchone()
+    if not r:
+        conn.close()
+        return None
+    cur.execute(_q("SELECT COUNT(*) AS c, COALESCE(MAX(CASE WHEN user_id = %s THEN 1 ELSE 0 END), 0) AS mine "
+                   "FROM raffle_entries WHERE raffle_id = %s"), (user_id, r["id"]))
+    e = cur.fetchone()
+    cur.execute(_q("SELECT COALESCE(SUM(total), 0) AS s FROM orders WHERE user_id = %s AND status = 'issued' AND created_at >= %s"),
+                (user_id, r["starts_at"]))
+    spent = cur.fetchone()["s"]
+    cur.execute(_q("SELECT winners FROM raffles WHERE status = 'finished' ORDER BY id DESC LIMIT 1"))
+    lw = cur.fetchone()
+    conn.close()
+    return {"raffle": r, "participants": e["c"], "entered": bool(e["mine"]),
+            "spent": float(spent or 0), "last_winners_raw": (lw["winners"] if lw else None)}
+
+
 # ---------- Способы получения (доставка/самовывоз) ----------
 
 def get_delivery_methods(city):
@@ -725,6 +747,57 @@ def use_spin(user_id):
     conn.commit()
     conn.close()
     return True
+
+
+def do_wheel_spin(user_id, prize_coins):
+    """Атомарно за ОДИН запрос: если есть прокрут — списать 1 и начислить приз.
+    Возвращает (coins, spins) или None, если прокрутов нет."""
+    conn = connect()
+    cur = conn.cursor()
+    if USE_PG:
+        cur.execute("""UPDATE users SET wheel_spins = wheel_spins - 1, coins = COALESCE(coins,0) + %s
+                       WHERE user_id = %s AND COALESCE(wheel_spins,0) > 0
+                       RETURNING COALESCE(coins,0) AS coins, wheel_spins""", (prize_coins, user_id))
+        row = cur.fetchone()
+        conn.commit()
+        conn.close()
+        return (row["coins"], row["wheel_spins"]) if row else None
+    # SQLite (локально, быстро) — проверка + обновление в одном подключении
+    cur.execute("SELECT COALESCE(wheel_spins,0) AS s, COALESCE(coins,0) AS c FROM users WHERE user_id = ?", (user_id,))
+    r = cur.fetchone()
+    if not r or r["s"] <= 0:
+        conn.close()
+        return None
+    new_coins = r["c"] + prize_coins
+    cur.execute("UPDATE users SET wheel_spins = wheel_spins - 1, coins = ? WHERE user_id = ?", (new_coins, user_id))
+    conn.commit()
+    conn.close()
+    return (new_coins, r["s"] - 1)
+
+
+def do_slot_spin(user_id, cost, prize_coins):
+    """Атомарно за ОДИН запрос: если хватает монет — списать cost и начислить приз.
+    Возвращает новый баланс или None, если монет мало."""
+    conn = connect()
+    cur = conn.cursor()
+    if USE_PG:
+        cur.execute("""UPDATE users SET coins = COALESCE(coins,0) - %s + %s
+                       WHERE user_id = %s AND COALESCE(coins,0) >= %s
+                       RETURNING COALESCE(coins,0) AS coins""", (cost, prize_coins, user_id, cost))
+        row = cur.fetchone()
+        conn.commit()
+        conn.close()
+        return row["coins"] if row else None
+    cur.execute("SELECT COALESCE(coins,0) AS c FROM users WHERE user_id = ?", (user_id,))
+    r = cur.fetchone()
+    if not r or r["c"] < cost:
+        conn.close()
+        return None
+    new_coins = r["c"] - cost + prize_coins
+    cur.execute("UPDATE users SET coins = ? WHERE user_id = ?", (new_coins, user_id))
+    conn.commit()
+    conn.close()
+    return new_coins
 
 
 def set_referrer_once(user_id, ref_id):

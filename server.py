@@ -507,16 +507,15 @@ def api_wheel_spin():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    if not db.use_spin(uid):
-        return jsonify({"ok": False, "error": "no_spins"}), 400
-
     weights = [s["weight"] for s in WHEEL_SECTORS]
     idx = random.choices(range(len(WHEEL_SECTORS)), weights=weights, k=1)[0]
     prize = WHEEL_SECTORS[idx]
-    db.add_coins(uid, prize["coins"])
-    w = db.get_wheel(uid)
+    res = db.do_wheel_spin(uid, prize["coins"])     # списание+начисление за 1 запрос
+    if res is None:
+        return jsonify({"ok": False, "error": "no_spins"}), 400
+    coins, spins = res
     return jsonify({"ok": True, "index": idx, "coins": prize["coins"], "label": prize["label"],
-                    "balance": db.get_coins(uid), "spins": w["spins"]})
+                    "balance": coins, "spins": spins})
 
 
 # ------------------- Слот «Вэйп Удача» -------------------
@@ -561,10 +560,6 @@ def api_slot_spin():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    if db.get_coins(uid) < SLOT_COST:
-        return jsonify({"ok": False, "error": "no_coins"}), 400
-    db.add_coins(uid, -SLOT_COST)
-
     roll = random.random() * 100.0
     cum, win = 0.0, None
     for s in SLOT_SYMBOLS:
@@ -572,15 +567,14 @@ def api_slot_spin():
         if roll < cum:
             win = s
             break
-    if win:
-        db.add_coins(uid, win["coins"])
-        reels = [win["emoji"]] * 3
-    else:
-        reels = _losing_reels()
+    prize_coins = win["coins"] if win else 0
+    balance = db.do_slot_spin(uid, SLOT_COST, prize_coins)   # списание+приз за 1 запрос
+    if balance is None:
+        return jsonify({"ok": False, "error": "no_coins"}), 400
+    reels = [win["emoji"]] * 3 if win else _losing_reels()
     return jsonify({"ok": True, "win": bool(win), "reels": reels,
-                    "coins": win["coins"] if win else 0,
-                    "label": win["label"] if win else "",
-                    "balance": db.get_coins(uid)})
+                    "coins": prize_coins, "label": win["label"] if win else "",
+                    "balance": balance})
 
 
 # ------------------- Розыгрыши (раз в месяц) -------------------
@@ -616,21 +610,21 @@ def _ensure_raffle():
         db.create_raffle()
 
 
-def _raffle_public(r, uid):
-    spent = db.spent_since(uid, r["starts_at"])
+def _raffle_public_from_state(st):
+    r = st["raffle"]
     threshold = round(r["threshold"] or 0, 2)
-    last = db.get_last_finished_raffle()
+    spent = round(st["spent"], 2)
     try:
-        last_winners = json.loads(last["winners"]) if last and last["winners"] else []
+        last_winners = json.loads(st["last_winners_raw"]) if st["last_winners_raw"] else []
     except (TypeError, ValueError):
         last_winners = []
     return {
         "id": r["id"], "title": r["title"] or "Розыгрыш месяца",
         "prize1": r["prize1"] or "", "prize2": r["prize2"] or "", "prize3_coins": r["prize3_coins"],
         "ends_at": r["ends_at"], "threshold": threshold,
-        "participants": db.count_entries(r["id"]),
-        "spent": round(spent, 2), "remaining": round(max(0, threshold - spent), 2),
-        "eligible": spent >= threshold, "entered": db.is_entered(r["id"], uid),
+        "participants": st["participants"],
+        "spent": spent, "remaining": round(max(0, threshold - spent), 2),
+        "eligible": spent >= threshold, "entered": st["entered"],
         "last_winners": last_winners,
     }
 
@@ -642,9 +636,11 @@ def api_raffle():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    db.ensure_user(uid)
     _ensure_raffle()
-    return jsonify({"ok": True, "raffle": _raffle_public(db.get_active_raffle(), uid)})
+    st = db.get_raffle_state(uid)      # всё за одно подключение
+    if not st:
+        return jsonify({"ok": False, "error": "no_raffle"}), 404
+    return jsonify({"ok": True, "raffle": _raffle_public_from_state(st)})
 
 
 @app.route("/api/raffle/join", methods=["POST"])
