@@ -320,6 +320,16 @@
     .betlbl { color: var(--hint); font-size: 13px; margin-right: 2px; }
     .betbtn { min-width: 38px; padding: 7px 0; border-radius: 10px; border: 1px solid rgba(74,222,255,.3); background: rgba(14,34,43,.6); color: var(--text); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
     .betbtn.on { background: var(--brand-neon); color: #06222b; border-color: var(--brand-neon); box-shadow: 0 0 12px var(--brand-glow); }
+    .autobtn { width: 100%; margin-top: 8px; padding: 11px; border-radius: 12px; border: 1px solid rgba(74,222,255,.35); background: rgba(14,34,43,.6); color: var(--brand-neon); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
+    .autobtn.on { background: rgba(255,61,129,.15); border-color: #ff3d81; color: #ff6b9d; box-shadow: 0 0 12px rgba(255,61,129,.4); }
+    .winbanner { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); text-align: center; pointer-events: none; z-index: 6; }
+    .winbanner .wt { font-size: 26px; font-weight: 900; letter-spacing: 1px; color: #fff; text-shadow: 0 0 10px var(--brand-neon), 0 0 22px var(--brand-neon); animation: wtPop .5s ease; }
+    .winbanner .wc { margin-top: 2px; font-size: 19px; font-weight: 800; color: var(--brand-neon); text-shadow: 0 0 8px var(--brand-glow); }
+    .winbanner.mega .wt { color: #ffd23f; text-shadow: 0 0 12px #ffd23f, 0 0 26px #ff8a00; }
+    .winbanner.mega .wc { color: #ffd23f; text-shadow: 0 0 10px #ffb020; }
+    @keyframes wtPop { 0% { transform: translate(-50%,-50%) scale(.4); opacity: 0; } 55% { transform: translate(-50%,-50%) scale(1.18); } 100% { transform: translate(-50%,-50%) scale(1); opacity: 1; } }
+    .slot3.mega-flash { animation: megaFlash .7s ease; }
+    @keyframes megaFlash { 0%,100% { box-shadow: 0 0 18px var(--brand-glow), inset 0 0 30px rgba(0,0,0,.5); } 30% { box-shadow: 0 0 60px #ffd23f, 0 0 30px #ffd23f, inset 0 0 30px rgba(0,0,0,.3); } }
     .slotlines { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin: 6px 0 2px; }
     .lineitem { text-align: center; }
     .lineitem small { display: block; color: var(--hint); font-size: 10px; margin-top: 4px; }
@@ -1360,6 +1370,10 @@
     let slotBet = parseInt(localStorage.getItem("slotBet") || "2", 10) || 2;   // текущая ставка
     let slotHistory = [];   // последние результаты слота (сессия): >0 выигрыш, 0 промах
     let _anticHb = null;    // таймер пульс-хаптика на предвкушении
+    let slotAuto = false;   // авто-прокрут вкл/выкл
+    let _slotStats = (() => { try { return JSON.parse(localStorage.getItem("slotStats") || "{}"); } catch (e) { return {}; } })();
+    const slotStats = { spins: _slotStats.spins || 0, won: _slotStats.won || 0, wagered: _slotStats.wagered || 0, best: _slotStats.best || 0 };
+    const saveSlotStats = () => { try { localStorage.setItem("slotStats", JSON.stringify(slotStats)); } catch (e) {} };
     async function fetchWheel() {
       try {
         const r = await fetch("/api/wheel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
@@ -1452,6 +1466,16 @@
       tone(1046.5, 0.12, 0.05, "sine");
       setTimeout(() => tone(1568, 0.55, 0.05, "sine"), 90);
       [523.25, 659.25, 783.99].forEach(f => setTimeout(() => tone(f, 0.6, 0.028, "triangle"), 130));
+    };
+    // Крупный выигрыш — восходящее арпеджио + звон.
+    const bigWinSound = () => {
+      [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => setTimeout(() => tone(f, 0.3, 0.05, "triangle"), i * 85));
+      setTimeout(winSound, 120);
+    };
+    // Мега-выигрыш — фанфара.
+    const megaWinSound = () => {
+      [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => setTimeout(() => tone(f, 0.34, 0.055, "triangle"), i * 80));
+      [783.99, 987.77, 1318.5].forEach((f, i) => setTimeout(() => tone(f, 0.6, 0.04, "sine"), 420 + i * 70));
     };
     // Нарастающий «саспенс» на предвкушении выигрыша — пила с плавным подъёмом частоты.
     function anticipationSound(durSec) {
@@ -1558,10 +1582,13 @@
         <div class="wheel-hist" id="slotHist"></div>
         <div class="betsel"><span class="betlbl">Ставка</span>${bets}</div>
         <button class="bigbtn" id="slotBtn" ${canSpin ? "" : "disabled"}>${slotBtnText()}</button>
+        <button class="autobtn" id="slotAutoBtn">🔄 Авто-прокрут</button>
         <div class="wheel-hint">Возможный выигрыш за 3 в линию:</div>
         <div class="slotpays" id="slotPays">${pay}</div>`;
+      slotAuto = false;                       // при каждом заходе на слот — авто выключено
       [0, 1, 2].forEach(c => initStrip($("strip" + c)));
-      renderSlotHist();
+      renderSlotHist(); updateAutoBtn();
+      $("slotAutoBtn").onclick = toggleAuto;
       document.querySelectorAll(".betsel .betbtn").forEach(btn => btn.onclick = () => {
         if (slotSpinning) return;
         slotBet = parseInt(btn.dataset.bet, 10);
@@ -1580,11 +1607,18 @@
           return `<div class="miniboard">${[0,1,2,3,4,5,6,7,8].map(i => `<i class="${on.includes(i) ? "on" : ""}"></i>`).join("")}</div>`;
         };
         const lines = (slot.lines || []).map(l => `<div class="lineitem">${board(l.cells)}<small>${esc(l.name)}</small></div>`).join("");
+        const net = slotStats.won - slotStats.wagered;
+        const stats = slotStats.spins ? `
+          <div style="font-weight:800;margin:14px 0 4px">Ваша статистика</div>
+          <div class="statrow"><span>Прокрутов</span><b>${slotStats.spins}</b></div>
+          <div class="statrow"><span>Выиграно</span><b>${slotStats.won} 🪙</b></div>
+          <div class="statrow"><span>Лучший выигрыш</span><b>${slotStats.best} 🪙</b></div>
+          <div class="statrow"><span>Баланс игры</span><b style="color:${net >= 0 ? 'var(--brand-neon)' : 'var(--hint)'}">${net >= 0 ? '+' : ''}${net} 🪙</b></div>` : "";
         showInfo("🎰 Облако Монет", `
           <p>Выберите <b>ставку</b> (${(slot.bets || []).join(" / ")} 🪙) и соберите <b>3 одинаковых</b> символа по одной из <b>${(slot.lines || []).length} линий</b>. Приз = <b>ставка × множитель</b>.</p>
           <div class="slotlines">${lines}</div>
           <div style="font-weight:800;margin:14px 0 4px">Выигрыш за 3 в линию (ставка ${slotBet} 🪙):</div>${pay}
-          <p style="color:var(--hint);margin-top:12px">Шанс выигрыша за прокрут ≈ <b>30%</b>. Чем реже символ — тем крупнее множитель. Монеты тратятся скидкой в корзине (100 монет = 1 Br).</p>`);
+          <p style="color:var(--hint);margin:12px 0">Шанс выигрыша за прокрут ≈ <b>30%</b>. Чем реже символ — тем крупнее множитель. Монеты тратятся скидкой в корзине (100 монет = 1 Br).</p>${stats}`);
       };
     }
     function renderSlotHist() {
@@ -1598,6 +1632,40 @@
         } else slots += `<span class="hchip ph">+0</span>`;
       }
       el.innerHTML = `<span class="hlabel">Последние:</span>` + slots;
+    }
+    // Уровень выигрыша по множителю (coins/bet): small <5, big 5–14, mega ≥15.
+    function slotWinFx(coins, bet, stage) {
+      const mult = bet ? coins / bet : 0;
+      const tier = mult >= 15 ? "mega" : (mult >= 5 ? "big" : "small");
+      if (tier === "small") {
+        const pop = document.createElement("div");
+        pop.className = "winpop"; pop.textContent = `+${coins} 🪙`;
+        stage.appendChild(pop); setTimeout(() => pop.remove(), 1500);
+        winSound(); haptic("notify", "success");
+        return;
+      }
+      const b = document.createElement("div");
+      b.className = "winbanner " + tier;
+      b.innerHTML = `<div class="wt">${tier === "mega" ? "MEGA WIN" : "BIG WIN"}</div><div class="wc">+${coins} 🪙</div>`;
+      stage.appendChild(b); setTimeout(() => b.remove(), 2200);
+      confetti(stage, tier === "mega" ? 60 : 34);
+      if (tier === "mega") {
+        stage.classList.add("mega-flash"); setTimeout(() => stage.classList.remove("mega-flash"), 700);
+        megaWinSound(); haptic("notify", "success"); setTimeout(() => haptic("impact", "heavy"), 260);
+      } else {
+        bigWinSound(); haptic("notify", "success");
+      }
+    }
+    function updateAutoBtn() {
+      const b = $("slotAutoBtn"); if (!b) return;
+      b.textContent = slotAuto ? "⏹ Остановить авто" : "🔄 Авто-прокрут";
+      b.classList.toggle("on", slotAuto);
+    }
+    function toggleAuto() {
+      slotAuto = !slotAuto;
+      updateAutoBtn();
+      if (slotAuto && !slotSpinning && (bonus.coins || 0) >= slotBet) spinSlot();
+      else if (slotAuto) { slotAuto = false; updateAutoBtn(); }   // нет монет — не запускаем
     }
     // Звук — общий тумблер для слота и колеса.
     function toggleSound() {
@@ -1627,7 +1695,8 @@
       const isWin = !!res.win;
       const K = 22;
       const cols = [0, 1, 2].map(c => [res.grid[0][c], res.grid[1][c], res.grid[2][c]]);
-      const durs = isWin ? [1.6, 2.05, 2.95] : [1.6, 2.05, 2.45];   // 3-й тормозит дольше — предвкушение
+      const base = isWin ? [1.6, 2.05, 2.95] : [1.6, 2.05, 2.45];   // 3-й тормозит дольше — предвкушение
+      const durs = slotAuto ? base.map(d => d * 0.55) : base;       // авто-прокрут — быстрее
       const maxEnd = durs[2] * 1000;
       // 2) Трещотка на всё время самого длинного барабана (замедляется к концу).
       scheduleRatchet(Math.round(durs[2] * 16), durs[2]);
@@ -1658,20 +1727,21 @@
             const cell = $("strip" + c) && $("strip" + c).children[r];
             if (cell) cell.classList.add("hit");
           });
-          if (stage) {
-            stage.classList.add("win");
-            const pop = document.createElement("div");
-            pop.className = "winpop"; pop.textContent = `+${res.coins} 🪙`;
-            stage.appendChild(pop); setTimeout(() => pop.remove(), 1500);
-            if (res.coins >= (res.bet || slotBet) * 8) confetti(stage, 30);   // крупный выигрыш (×8+) — конфетти
-          }
-          haptic("notify", "success"); winSound();
+          if (stage) { stage.classList.add("win"); slotWinFx(res.coins, res.bet || slotBet, stage); }
         }
         const rl = $("slotResult");
         if (rl) rl.innerHTML = isWin ? `<span class="winbadge">+${res.coins} 🪙</span>` : "Не повезло — крути ещё";
         slotHistory.unshift(isWin ? res.coins : 0);
         if (slotHistory.length > 5) slotHistory.pop();
         renderSlotHist();
+        // Моя статистика (локально).
+        slotStats.spins++; slotStats.wagered += (res.bet || slotBet);
+        if (isWin) { slotStats.won += res.coins; slotStats.best = Math.max(slotStats.best, res.coins); }
+        saveSlotStats();
+        // Авто-прокрут: продолжаем, если ещё включён, хватает монет и слот на экране.
+        if (slotAuto && document.querySelector(".slot3") && (bonus.coins || 0) >= slotBet) {
+          setTimeout(() => { if (slotAuto) spinSlot(); }, isWin ? 900 : 350);
+        } else if (slotAuto) { slotAuto = false; updateAutoBtn(); }
       }, maxEnd + 120);
     }
 
