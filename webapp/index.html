@@ -1737,11 +1737,17 @@
       const n = (wheel.sectors || []).length, seg = 360 / n;
       const v0 = 0.9;                                  // °/мс — постоянная скорость раскрутки
       let angle = wheelDeg, lastBucket = Math.floor(angle / seg);
-      let phase = 1, running = true, prevT = performance.now(), kick = 0;
+      let phase = 1, running = true, prevT = performance.now();
       let decelStart = 0, decelDur = 0, startAngle = 0, dist = 0, res = null;
-      // Пройден сектор → тик трещотки + «удар» по флажку-указателю.
-      const tickCross = () => { const b = Math.floor(angle / seg); if (b !== lastBucket) { ratchetTick(); kick = 10; lastBucket = b; } };
-      const flickPointer = () => { if (ptr) ptr.style.transform = `translateX(-50%) rotate(${kick.toFixed(1)}deg)`; kick *= 0.7; };   // отскок к нулю
+      // Пройден сектор → тик трещотки.
+      const tickCross = () => { const b = Math.floor(angle / seg); if (b !== lastBucket) { ratchetTick(); lastBucket = b; } };
+      // Флажок: резкий толчок по ходу вращения сразу после штырька, плавно к нулю.
+      const flickPointer = () => {
+        if (!ptr) return;
+        const frac = (((angle % seg) + seg) % seg) / seg;      // 0..1 — позиция внутри сектора
+        const defl = -11 * Math.exp(-frac * 7);                // толчок после штырька, затухает
+        ptr.style.transform = `translateX(-50%) rotate(${defl.toFixed(2)}deg)`;
+      };
 
       function finishWheelSpin() {
         running = false; wheelDeg = angle; spinning = false;
