@@ -944,7 +944,7 @@
         me = await r.json();
         if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
         renderNav();
-        fetchBonus(); fetchWheel(); fetchSlot();   // прогреваем бонусы/колесо/слот — вкладка открывается мгновенно
+        fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle();   // прогреваем всё — вкладки открываются мгновенно
         if (me.age_ok) loadCatalog(); else $("ageView").classList.add("show");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
@@ -1285,6 +1285,7 @@
       if (!bonusReady) jobs.push(fetchBonus());
       if (bonusTab === "wheel" && gameMode === "wheel" && !wheelReady) jobs.push(fetchWheel());
       if (bonusTab === "wheel" && gameMode === "slot" && !slotReady) jobs.push(fetchSlot());
+      if (bonusTab === "raffle" && !raffleReady) jobs.push(fetchRaffle());
       if (jobs.length) {
         if (!bonusReady) $("tab-bonus").innerHTML = `<div class="bonuswrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
         await Promise.all(jobs);
@@ -1359,7 +1360,7 @@
     }
 
     // ----- Розыгрыши -----
-    let raffle = null;
+    let raffle = null, raffleReady = false;
     const maskId = (id) => "•••" + ("" + id).slice(-3);
     function raffleTimeLeft(ends) {
       if (!ends) return "—";
@@ -1368,12 +1369,14 @@
       const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000);
       return d > 0 ? `${d} д ${h} ч` : `${h} ч`;
     }
-    async function renderRaffle() {
+    async function fetchRaffle() {
       try {
         const r = await fetch("/api/raffle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         const d = await r.json();
-        raffle = d.ok ? d.raffle : null;
+        raffle = d.ok ? d.raffle : null; raffleReady = true;
       } catch (e) { raffle = null; }
+    }
+    function renderRaffle() {
       if (!raffle) { if ($("raffleWrap")) $("raffleWrap").innerHTML = `<p style="color:var(--hint)">Розыгрыш недоступен.</p>`; return; }
       const r = raffle;
       const prizeRows = [
@@ -1408,7 +1411,7 @@
       try {
         const r = await fetch("/api/raffle/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         const d = await r.json();
-        if (d.ok) { alertMsg("Поздравляем! Вы участвуете в розыгрыше 🎉"); renderRaffle(); }
+        if (d.ok) { alertMsg("Поздравляем! Вы участвуете в розыгрыше 🎉"); await fetchRaffle(); renderRaffle(); }
         else alertMsg(d.error === "not_eligible" ? "Ещё не набрана сумма для участия." : "Не удалось.");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
