@@ -230,15 +230,16 @@
     .bseg button.on { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
     .wheel-head { text-align: center; font-weight: 800; font-size: 18px; margin-bottom: 12px; }
     .wheel-stage { position: relative; width: 288px; max-width: 84vw; aspect-ratio: 1; margin: 0 auto 16px; }
-    .wheel-ptr { position: absolute; top: -4px; left: 50%; transform: translateX(-50%); z-index: 3; width: 0; height: 0; border-left: 13px solid transparent; border-right: 13px solid transparent; border-top: 22px solid var(--warn); filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
+    .wheel-ptr { position: absolute; top: -4px; left: 50%; transform: translateX(-50%); z-index: 3; width: 0; height: 0; border-left: 13px solid transparent; border-right: 13px solid transparent; border-top: 22px solid var(--warn); filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); transition: filter .6s ease, border-top-color .6s ease; }
     .wheel-ptr.win { border-top-color: var(--brand-neon); filter: drop-shadow(0 0 8px var(--brand-neon)) drop-shadow(0 0 4px var(--brand-neon)); }
     .wheel-ptr.bump { animation: ptrBump .38s ease; }
     @keyframes ptrBump { 0%,100% { transform: translateX(-50%) translateY(0); } 35% { transform: translateX(-50%) translateY(5px); } }
     .wlabel.win span { text-shadow: 0 0 12px var(--brand-neon), 0 0 22px var(--brand-neon); animation: labelWin .8s ease; }
     @keyframes labelWin { 0%,100% { transform: scale(1); } 45% { transform: scale(1.35); } }
-    .wheel { position: absolute; inset: 0; border-radius: 50%; border: 6px solid var(--accent); box-shadow: 0 6px 26px rgba(0,0,0,.28); }
+    .wheel { position: absolute; inset: 0; border-radius: 50%; border: 6px solid var(--accent); box-shadow: 0 6px 26px rgba(0,0,0,.28); transition: box-shadow .7s ease; }
+    .wheel.won { box-shadow: 0 6px 26px rgba(0,0,0,.28), 0 0 0 4px var(--brand-neon), 0 0 34px var(--brand-neon); }
     .wlabel { position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; pointer-events: none; }
-    .wlabel span { margin-top: 15px; color: #10202a; font-weight: 800; font-size: 14px; white-space: nowrap; }
+    .wlabel span { margin-top: 15px; color: #10202a; font-weight: 800; font-size: 14px; white-space: nowrap; transition: text-shadow .6s ease; }
     .wheel-hub { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 72px; height: 72px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; box-shadow: 0 2px 10px rgba(0,0,0,.35); cursor: pointer; }
     .wheel-hub.ready { animation: hubPulse 1.4s ease-in-out infinite; }
     @keyframes hubPulse { 0%,100% { box-shadow: 0 2px 10px rgba(0,0,0,.35); } 50% { box-shadow: 0 2px 10px rgba(0,0,0,.35), 0 0 20px var(--brand-neon); } }
@@ -1699,52 +1700,69 @@
       const el = $("wheelEl");
       const ptr = document.querySelector(".wheel-ptr");
       if (ptr) ptr.classList.remove("win", "bump");
-      el.querySelectorAll(".wlabel.win").forEach(l => l.classList.remove("win"));   // сброс прошлой подсветки
-      // 1) Сразу крутим (равномерно), не дожидаясь сети.
-      let landing = false, raf = 0;
-      const base = wheelDeg, t0 = performance.now();
+      el.classList.remove("won");
+      el.querySelectorAll(".wlabel.win").forEach(l => l.classList.remove("win"));
       el.style.transition = "none";
-      const frame = (t) => {
-        if (landing) return;
-        wheelDeg = base + (t - t0) * 0.9;             // ~0.9°/мс
-        el.style.transform = `rotate(${wheelDeg}deg)`;
-        raf = requestAnimationFrame(frame);
-      };
-      raf = requestAnimationFrame(frame);
-      // 2) Параллельно — запрос результата (теперь 1 запрос, быстрый).
-      let res;
-      try {
-        const r = await fetch("/api/wheel/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
-        res = await r.json();
-      } catch (e) { landing = true; cancelAnimationFrame(raf); spinning = false; $("spinBtn").disabled = false; if ($("wheelResult")) $("wheelResult").textContent = "Сеть недоступна."; return; }
-      landing = true; cancelAnimationFrame(raf);
-      if (!res.ok) { spinning = false; refreshWheelInfo(); return; }
-      // 3) Плавно тормозим на нужном секторе.
-      const n = (wheel.sectors || []).length, seg = 360 / n;
-      const desiredMod = ((360 - (res.index + 0.5) * seg) % 360 + 360) % 360;
-      const curMod = ((wheelDeg % 360) + 360) % 360;
-      let delta = desiredMod - curMod; if (delta < 0) delta += 360;
-      wheelDeg += 360 * 3 + delta;                    // 3 оборота + доводка
-      el.style.transition = "transform 2.6s cubic-bezier(.16,.83,.28,1.03)";   // лёгкий отскок в конце
-      el.style.transform = `rotate(${wheelDeg}deg)`;
-      scheduleRatchet(Math.round((360 * 3 + delta) / seg), 2.5);   // тик на каждый сектор, замедляется
 
-      setTimeout(() => {
-        bonus.coins = res.balance; wheel.spins = res.spins; spinning = false;
+      const n = (wheel.sectors || []).length, seg = 360 / n;
+      const v0 = 0.9;                                  // °/мс — постоянная скорость раскрутки
+      let angle = wheelDeg, lastBucket = Math.floor(angle / seg);
+      let phase = 1, running = true, prevT = performance.now();
+      let decelStart = 0, decelDur = 0, startAngle = 0, dist = 0, res = null;
+      const tickCross = () => { const b = Math.floor(angle / seg); if (b !== lastBucket) { ratchetTick(); lastBucket = b; } };
+
+      function finishWheelSpin() {
+        running = false; wheelDeg = angle; spinning = false;
+        bonus.coins = res.balance; wheel.spins = res.spins;
         refreshWheelInfo();
         haptic("notify", "success"); winSound();
         if (ptr) { ptr.classList.add("win", "bump"); setTimeout(() => ptr.classList.remove("bump"), 420); }
-        const wl = el.querySelectorAll(".wlabel")[res.index];   // подсветить выпавший сектор
-        if (wl) wl.classList.add("win");
-        const rl = $("wheelResult");
-        if (rl) { rl.textContent = `Выпало: ${res.label} — +${res.coins} 🪙`; rl.classList.add("win"); }
+        el.classList.add("won");                                  // неон по окружности
+        const wl = el.querySelectorAll(".wlabel")[res.index]; if (wl) wl.classList.add("win");
+        const rl = $("wheelResult"); if (rl) { rl.textContent = `+${res.coins} 🪙`; rl.classList.add("win"); }
         const stage = document.querySelector(".wheel-stage");
         if (stage) {
-          const pop = document.createElement("div");
-          pop.className = "winpop"; pop.textContent = `+${res.coins} 🪙`;
+          const pop = document.createElement("div"); pop.className = "winpop"; pop.textContent = `+${res.coins} 🪙`;
           stage.appendChild(pop); setTimeout(() => pop.remove(), 1500);
         }
-      }, 2700);
+        setTimeout(() => {                                        // неон гаснет через ~1.5 сек
+          el.classList.remove("won");
+          if (ptr) ptr.classList.remove("win");
+          if (wl) wl.classList.remove("win");
+        }, 1600);
+      }
+
+      const loop = (t) => {
+        if (!running) return;
+        const dt = t - prevT; prevT = t;
+        if (phase === 1) {
+          angle += v0 * dt;                            // равномерно, пока ждём сеть
+        } else {
+          const p = Math.min(1, (t - decelStart) / decelDur);
+          angle = startAngle + dist * (2 * p - p * p);  // линейное торможение (старт со скорости v0 — без рывка)
+          if (p >= 1) { el.style.transform = `rotate(${angle}deg)`; tickCross(); return finishWheelSpin(); }
+        }
+        el.style.transform = `rotate(${angle}deg)`;
+        tickCross();
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame((t) => { prevT = t; requestAnimationFrame(loop); });
+
+      try {
+        const r = await fetch("/api/wheel/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        res = await r.json();
+      } catch (e) { running = false; spinning = false; $("spinBtn").disabled = false; if ($("wheelResult")) $("wheelResult").textContent = "Сеть недоступна."; return; }
+      if (!res.ok) { running = false; spinning = false; refreshWheelInfo(); return; }
+
+      // Переход в торможение: стартуем ровно с текущей скорости v0 (без скачка).
+      const curMod = ((angle % 360) + 360) % 360;
+      const desiredMod = ((360 - (res.index + 0.5) * seg) % 360 + 360) % 360;
+      const delta = (desiredMod - curMod + 360) % 360;
+      dist = 360 * 3 + delta;                          // ≥3 оборота + доводка до сектора
+      startAngle = angle;
+      decelDur = 2 * dist / v0;                        // время линейного торможения от v0 до 0
+      decelStart = performance.now();
+      phase = 2;
     }
 
     // ----- Оформление: способ получения + оплата -----
