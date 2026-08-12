@@ -258,6 +258,9 @@
     .wlabel .lcoin { font-size: .62em; font-weight: 400; margin-left: 1px; }
     .wlabel .lstar { color: #ffd23f; font-size: 1.4em; text-shadow: 0 0 10px #ffd23f, 0 1px 2px #000; }
     .hub-logo { width: 40px; height: 32px; color: var(--on-accent); }
+    .wheel-hist { display: flex; gap: 6px; justify-content: center; align-items: center; flex-wrap: wrap; min-height: 24px; margin: 0 0 8px; }
+    .wheel-hist .hlabel { color: var(--hint); font-size: 12px; }
+    .wheel-hist .hchip { font-size: 12px; font-weight: 700; color: var(--brand-neon); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; text-shadow: 0 0 6px var(--brand-glow); }
     .wheel-hub { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 72px; height: 72px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; box-shadow: 0 2px 10px rgba(0,0,0,.35); cursor: pointer; }
     .wheel-hub.ready { animation: hubPulse 1.4s ease-in-out infinite; }
     @keyframes hubPulse { 0%,100% { box-shadow: 0 2px 10px rgba(0,0,0,.35); } 50% { box-shadow: 0 2px 10px rgba(0,0,0,.35), 0 0 20px var(--brand-neon); } }
@@ -1687,6 +1690,13 @@
     }
 
     // ----- Колесо фортуны -----
+    let wheelHistory = [];   // последние выигрыши (сессия)
+    function renderWheelHist() {
+      const el = $("wheelHist"); if (!el) return;
+      el.innerHTML = wheelHistory.length
+        ? `<span class="hlabel">Последние:</span>` + wheelHistory.map(c => `<span class="hchip">+${c}</span>`).join("")
+        : "";
+    }
     // Кирпичная стена (как на сплеше) — база каждого сектора.
     const WHEEL_BRICK = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23081419' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23163039' stroke-width='1' fill='none'/%3E%3C/svg%3E")`;
     let wheelDeg = 0, spinning = false;
@@ -1721,6 +1731,7 @@
           <div class="wheel-lamps">${lamps}</div>
         </div>
         <div class="game-result" id="wheelResult"></div>
+        <div class="wheel-hist" id="wheelHist"></div>
         <div class="wheel-prog-top"><span>Прогресс до прокрута</span><span>${wheel.progress}/${wheel.step}</span></div>
         <div class="wheel-bar"><i style="width:${pct}%"></i></div>
         <div class="wheel-hint" id="wheelHint">${canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} товаров до прокрута`}</div>
@@ -1729,6 +1740,7 @@
       const we = $("wheelEl");                                 // фон задаём из JS (url с кавычками)
       we.style.backgroundImage = wheelBgImage;
       we.style.backgroundSize = "auto, auto, 88px 44px";
+      renderWheelHist();
       $("spinBtn").onclick = spinWheel;
       if ($("wheelHub")) $("wheelHub").onclick = spinWheel;   // тап по центру = крутить
       $("wheelSound").onclick = () => { toggleSound(); $("wheelSound").textContent = soundOn ? "🔊" : "🔇"; };
@@ -1813,6 +1825,8 @@
           stage.appendChild(pop); setTimeout(() => pop.remove(), 1500);
           if (res.coins >= 1000) confetti(stage);              // джекпот — салют
         }
+        wheelHistory.unshift(res.coins); if (wheelHistory.length > 6) wheelHistory.pop();
+        renderWheelHist();
         setTimeout(() => {                                        // неон гаснет через ~1.5 сек
           el.classList.remove("won");
           if (ptr) ptr.classList.remove("win");
@@ -1846,9 +1860,12 @@
       const curMod = ((angle % 360) + 360) % 360;
       const desiredMod = ((360 - (res.index + 0.5) * seg) % 360 + 360) % 360;
       const delta = (desiredMod - curMod + 360) % 360;
-      dist = 360 * 3 + delta;                          // ≥3 оборота + доводка до сектора
+      // «Почти джекпот»: если выпал SUPER или соседний сектор — тормозим дольше и на оборот больше.
+      const superIdx = (wheel.sectors || []).findIndex(s => s.label === "SUPER");
+      const nearSuper = superIdx >= 0 && [0, 1, n - 1].includes((res.index - superIdx + n) % n);
+      dist = 360 * 3 + delta + (nearSuper ? 360 : 0);
       startAngle = angle;
-      decelDur = 2 * dist / v0;                        // время линейного торможения от v0 до 0
+      decelDur = 2 * dist / v0 * (nearSuper ? 1.3 : 1);   // у SUPER — драматичнее
       decelStart = performance.now();
       phase = 2;
     }
