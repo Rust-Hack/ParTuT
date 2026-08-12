@@ -184,27 +184,33 @@ def handle_order_action(call, chat_id, action, order_id):
         return
 
     client_id = order["user_id"]
+    OPEN = ["new", "paid", "confirmed"]                 # состояния до выдачи/отмены
 
     if action == "confirm":
-        db.set_order_status(order_id, "confirmed")
+        if not db.set_order_status_if(order_id, "confirmed", ["new", "paid"]):
+            bot.answer_callback_query(call.id, "Заказ уже закрыт", show_alert=True)
+            return
         bot.answer_callback_query(call.id, "Оплата подтверждена ✅")
         _safe_send(client_id,
                    f"✅ Оплата по заказу #{order_id} подтверждена!\n"
                    f"Ждём вас {order['pickup_time']}. Спасибо! 🌿")
     elif action == "issued":
-        if order["status"] != "issued":                # коины/прогресс один раз
-            db.add_coins(client_id, int(order["total"]))
-            db.add_wheel_progress(client_id, sum(int(i.get("qty", 0)) for i in json.loads(order["items"])))
-            rr = db.reward_referrer_for_order(client_id, order["total"])   # % и бонус пригласившему
-            if rr and rr["earned"] > 0:
-                _safe_send(rr["referrer"], f"🎉 Ваш реферал сделал заказ! +{rr['earned']} 🪙"
-                           + (f" (+{rr['bonus']} 🪙 за первый заказ)" if rr["first"] else ""))
-        db.set_order_status(order_id, "issued")
+        if not db.set_order_status_if(order_id, "issued", OPEN):   # коины/прогресс РОВНО один раз
+            bot.answer_callback_query(call.id, "Заказ уже выдан или отклонён", show_alert=True)
+            return
+        db.add_coins(client_id, int(order["total"]))
+        db.add_wheel_progress(client_id, sum(int(i.get("qty", 0)) for i in json.loads(order["items"])))
+        rr = db.reward_referrer_for_order(client_id, order["total"])   # % и бонус пригласившему
+        if rr and rr["earned"] > 0:
+            _safe_send(rr["referrer"], f"🎉 Ваш реферал сделал заказ! +{rr['earned']} 🪙"
+                       + (f" (+{rr['bonus']} 🪙 за первый заказ)" if rr["first"] else ""))
         bot.answer_callback_query(call.id, "Отмечено: выдан 📦")
         _safe_send(client_id,
                    f"Заказ #{order_id} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
-        db.set_order_status(order_id, "canceled")
+        if not db.set_order_status_if(order_id, "canceled", OPEN):   # возврат остатка/монет один раз
+            bot.answer_callback_query(call.id, "Заказ уже выдан или отклонён", show_alert=True)
+            return
         db.restore_order_stock(order)                  # вернуть товар на склад (с учётом вкусов)
         if order["coins_used"]:                         # вернуть списанные монеты
             db.add_coins(client_id, order["coins_used"])

@@ -747,6 +747,8 @@ def api_raffle_join():
     uid = int(user["id"])
     _ensure_raffle()
     r = db.get_active_raffle()
+    if not r:
+        return jsonify({"ok": False, "error": "no_raffle"}), 404
     if db.is_entered(r["id"], uid):
         return jsonify({"ok": True, "entered": True})
     if db.spent_since(uid, r["starts_at"]) < (r["threshold"] or 0):
@@ -993,20 +995,23 @@ def api_admin_order_status():
 
     action = data.get("action")
     client_id = order["user_id"]
+    OPEN = ["new", "paid", "confirmed"]        # состояния до выдачи/отмены
     if action == "confirm":
-        db.set_order_status(oid, "confirmed")
+        if not db.set_order_status_if(oid, "confirmed", ["new", "paid"]):
+            return jsonify({"ok": False, "error": "closed"}), 409
         _notify_client(client_id, f"✅ Оплата по заказу #{oid} подтверждена!\n"
                                   f"Ждём вас {order['pickup_time']}. Спасибо! 🌿")
     elif action == "issued":
-        if order["status"] != "issued":                 # начисляем один раз
-            db.add_coins(client_id, int(order["total"]) * COINS_PER_BYN)
-            db.add_wheel_progress(client_id, _order_item_count(order))   # прогресс колеса
-            _reward_referrer(client_id, order["total"])   # % и бонус пригласившему
-        db.set_order_status(oid, "issued")
+        if not db.set_order_status_if(oid, "issued", OPEN):   # переход применится один раз
+            return jsonify({"ok": False, "error": "closed"}), 409
+        db.add_coins(client_id, int(order["total"]) * COINS_PER_BYN)
+        db.add_wheel_progress(client_id, _order_item_count(order))   # прогресс колеса
+        _reward_referrer(client_id, order["total"])   # % и бонус пригласившему
         _notify_client(client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
-        db.set_order_status(oid, "canceled")
-        db.restore_order_stock(order)               # вернуть остаток (с учётом вкусов)
+        if not db.set_order_status_if(oid, "canceled", OPEN):   # нельзя отклонить выданный/уже отклонённый
+            return jsonify({"ok": False, "error": "closed"}), 409
+        db.restore_order_stock(order)               # вернуть остаток (с учётом вкусов) — ровно один раз
         if order["coins_used"]:                      # вернуть списанные монеты
             db.add_coins(client_id, order["coins_used"])
         _notify_client(client_id, f"К сожалению, заказ #{oid} отклонён продавцом. "

@@ -1106,6 +1106,21 @@ def set_order_status(order_id, status):
     conn.close()
 
 
+def set_order_status_if(order_id, new_status, allowed):
+    """Атомарно меняет статус ТОЛЬКО если текущий статус ∈ allowed.
+    Возвращает True, если переход применился (тогда вызывающий делает побочные эффекты
+    — начисление/возврат — РОВНО один раз; защита от двойного клика и гонки)."""
+    conn = connect()
+    cur = conn.cursor()
+    marks = ",".join(["%s"] * len(allowed))
+    cur.execute(_q(f"UPDATE orders SET status = %s WHERE id = %s AND status IN ({marks})"),
+                (new_status, order_id, *allowed))
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
 def set_order_receipt(order_id, file_id):
     """Сохраняет фото чека и переводит заказ в статус 'paid'."""
     conn = connect()
