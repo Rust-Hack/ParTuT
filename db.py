@@ -536,6 +536,29 @@ def ref_percent(active):
     return 2
 
 
+def get_bonus_stats(user_id):
+    """Всё для вкладки Бонусы за ОДНО подключение: баланс, рефералы, заработок, список."""
+    conn = connect()
+    cur = conn.cursor()
+    # создать пользователя при первом заходе
+    if USE_PG:
+        cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+    else:
+        cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cur.execute(_q("SELECT coins, ref_earned FROM users WHERE user_id = %s"), (user_id,))
+    row = cur.fetchone()
+    coins = (row["coins"] if row and row["coins"] else 0)
+    ref_earned = (row["ref_earned"] if row and row["ref_earned"] else 0)
+    cur.execute(_q("SELECT ref_activated FROM users WHERE referred_by = %s ORDER BY ref_activated DESC"), (user_id,))
+    refs = cur.fetchall()
+    conn.commit()
+    conn.close()
+    total = len(refs)
+    active = sum(1 for r in refs if r["ref_activated"])
+    return {"coins": coins, "ref_earned": ref_earned, "referrals": total, "active": active,
+            "referrals_list": [{"active": bool(r["ref_activated"])} for r in refs]}
+
+
 def count_active_referrals(user_id):
     conn = connect()
     cur = conn.cursor()

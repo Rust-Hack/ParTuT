@@ -448,27 +448,26 @@ def api_bonus():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    db.ensure_user(uid)
     link = f"https://t.me/{BOT_USERNAME}?startapp=ref{uid}" if BOT_USERNAME else ""
 
-    active = db.count_active_referrals(uid)
+    st = db.get_bonus_stats(uid)              # всё за одно подключение
+    active = st["active"]
     percent = db.ref_percent(active)
     next_need, next_pct = None, None
-    for m, p in sorted(db.REFERRAL_TIERS):        # ближайший тир выше текущего
+    for m, p in sorted(db.REFERRAL_TIERS):    # ближайший тир выше текущего
         if m > active:
             next_need, next_pct = m - active, p
             break
-    referrals = [{"active": bool(r["ref_activated"])} for r in db.list_referrals(uid)]
 
     return jsonify({"ok": True,
-                    "coins": db.get_coins(uid),
-                    "referrals": db.count_referrals(uid),
+                    "coins": st["coins"],
+                    "referrals": st["referrals"],
                     "active_referrals": active,
-                    "ref_earned": db.get_ref_earned(uid),
+                    "ref_earned": st["ref_earned"],
                     "ref_percent": percent,
                     "next_need": next_need,
                     "next_percent": next_pct,
-                    "referrals_list": referrals,
+                    "referrals_list": st["referrals_list"],
                     "ref_link": link,
                     "referral_bonus": db.REFERRAL_BONUS,
                     "coin_value": COIN_VALUE})

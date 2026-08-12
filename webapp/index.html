@@ -1240,11 +1240,12 @@
 
     // ---------- Бонусы (vapecoins + рефералы) ----------
     let bonus = { coins: 0, referrals: 0, ref_link: "", referral_bonus: 50 };
+    let bonusReady = false, wheelReady = false, slotReady = false;   // кэш: не перезапрашивать зря
     async function fetchBonus() {
       try {
         const r = await fetch("/api/bonus", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         const d = await r.json();
-        if (d.ok) bonus = d;
+        if (d.ok) { bonus = d; bonusReady = true; }
       } catch (e) {}
     }
     let bonusTab = "wheel", gameMode = "wheel";
@@ -1254,20 +1255,26 @@
       try {
         const r = await fetch("/api/wheel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         const d = await r.json();
-        if (d.ok) wheel = d;
+        if (d.ok) { wheel = d; wheelReady = true; }
       } catch (e) {}
     }
     async function fetchSlot() {
       try {
         const r = await fetch("/api/slot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         const d = await r.json();
-        if (d.ok) slot = d;
+        if (d.ok) { slot = d; slotReady = true; }
       } catch (e) {}
     }
     async function renderBonus() {
-      $("tab-bonus").innerHTML = `<div class="bonuswrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
-      await fetchBonus();
-      if (bonusTab === "wheel") { if (gameMode === "slot") await fetchSlot(); else await fetchWheel(); }
+      // Тянем только то, чего ещё нет — и параллельно.
+      const jobs = [];
+      if (!bonusReady) jobs.push(fetchBonus());
+      if (bonusTab === "wheel" && gameMode === "wheel" && !wheelReady) jobs.push(fetchWheel());
+      if (bonusTab === "wheel" && gameMode === "slot" && !slotReady) jobs.push(fetchSlot());
+      if (jobs.length) {
+        if (!bonusReady) $("tab-bonus").innerHTML = `<div class="bonuswrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
+        await Promise.all(jobs);
+      }
       const seg = `<div class="bseg">
         <button data-bt="wheel" class="${bonusTab === 'wheel' ? 'on' : ''}">🎡 Игры</button>
         <button data-bt="raffle" class="${bonusTab === 'raffle' ? 'on' : ''}">🏆 Розыгрыши</button>
