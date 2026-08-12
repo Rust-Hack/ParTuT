@@ -520,6 +520,70 @@ def api_wheel_spin():
                     "balance": db.get_coins(uid), "spins": w["spins"]})
 
 
+# ------------------- Слот «Вэйп Удача» -------------------
+
+SLOT_COST = 50   # монет за прокрут
+SLOT_SYMBOLS = [
+    {"key": "disp",   "emoji": "💨", "label": "Одноразка", "coins": 100, "percent": 2},
+    {"key": "cart",   "emoji": "🔋", "label": "Картридж",  "coins": 50,  "percent": 3},
+    {"key": "pod",    "emoji": "📦", "label": "Под",       "coins": 150, "percent": 2},
+    {"key": "snus",   "emoji": "🟤", "label": "Снюс",      "coins": 50,  "percent": 3},
+    {"key": "cig",    "emoji": "🚬", "label": "Сигарета",  "coins": 50,  "percent": 3},
+    {"key": "liquid", "emoji": "🧪", "label": "Жижа",      "coins": 75,  "percent": 3},
+    {"key": "coin",   "emoji": "🪙", "label": "Монетка",   "coins": 200, "percent": 1},
+    {"key": "crown",  "emoji": "👑", "label": "Корона",    "coins": 250, "percent": 1},
+]
+
+
+def _losing_reels():
+    emojis = [s["emoji"] for s in SLOT_SYMBOLS]
+    while True:
+        r = [random.choice(emojis) for _ in range(3)]
+        if not (r[0] == r[1] == r[2]):
+            return r
+
+
+@app.route("/api/slot", methods=["POST"])
+def api_slot():
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+    db.ensure_user(uid)
+    return jsonify({"ok": True, "cost": SLOT_COST, "balance": db.get_coins(uid),
+                    "symbols": [{"emoji": s["emoji"], "label": s["label"], "coins": s["coins"]} for s in SLOT_SYMBOLS]})
+
+
+@app.route("/api/slot/spin", methods=["POST"])
+def api_slot_spin():
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+    if db.get_coins(uid) < SLOT_COST:
+        return jsonify({"ok": False, "error": "no_coins"}), 400
+    db.add_coins(uid, -SLOT_COST)
+
+    roll = random.random() * 100.0
+    cum, win = 0.0, None
+    for s in SLOT_SYMBOLS:
+        cum += s["percent"]
+        if roll < cum:
+            win = s
+            break
+    if win:
+        db.add_coins(uid, win["coins"])
+        reels = [win["emoji"]] * 3
+    else:
+        reels = _losing_reels()
+    return jsonify({"ok": True, "win": bool(win), "reels": reels,
+                    "coins": win["coins"] if win else 0,
+                    "label": win["label"] if win else "",
+                    "balance": db.get_coins(uid)})
+
+
 # ------------------- Розыгрыши (раз в месяц) -------------------
 
 def _draw_raffle(raffle):
