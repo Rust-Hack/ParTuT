@@ -247,11 +247,12 @@
     .wheel-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin-bottom: 8px; }
     .wheel-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s; }
     .wheel-hint { text-align: center; color: var(--hint); font-size: 13px; margin-bottom: 14px; }
-    .game-result { text-align: center; font-weight: 700; font-size: 14px; color: var(--hint); min-height: 20px; margin-bottom: 10px; }
-    .game-result.win { color: var(--brand-neon); text-shadow: 0 0 8px var(--brand-glow); }
+    .game-result { text-align: center; font-weight: 700; font-size: 14px; color: var(--hint); min-height: 30px; margin-bottom: 10px; }
+    .winbadge { display: inline-block; padding: 7px 18px; border-radius: 999px; font-size: 17px; font-weight: 800; color: var(--brand-neon); border: 1.5px solid var(--brand-neon); box-shadow: 0 0 16px var(--brand-glow); text-shadow: 0 0 8px var(--brand-glow); animation: resPop .45s ease; }
+    @keyframes resPop { 0% { transform: scale(.6); opacity: 0; } 60% { transform: scale(1.12); } 100% { transform: scale(1); opacity: 1; } }
     .slot-top { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 12px; }
     .soundtgl { width: 34px; height: 34px; border: none; border-radius: 10px; background: var(--surface-2); font-size: 16px; line-height: 1; }
-    .winpop { position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%); font-size: 24px; font-weight: 800; color: var(--brand-neon); text-shadow: 0 0 14px var(--brand-neon), 0 0 26px var(--brand-neon); pointer-events: none; z-index: 4; animation: winPop 1.5s ease forwards; }
+    .winpop { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); font-size: 22px; font-weight: 800; color: #fff; background: rgba(8,16,20,.72); padding: 7px 16px; border-radius: 999px; box-shadow: 0 0 16px var(--brand-glow), inset 0 0 0 1.5px var(--brand-neon); text-shadow: 0 0 10px var(--brand-neon); pointer-events: none; z-index: 4; animation: winPop 1.5s ease forwards; }
     @keyframes winPop { 0% { opacity: 0; transform: translate(-50%,-25%) scale(.5); } 22% { opacity: 1; transform: translate(-50%,-50%) scale(1.15); } 100% { opacity: 0; transform: translate(-50%,-140%) scale(1); } }
     .slot3 { position: relative; display: flex; gap: 8px; justify-content: center; margin: 6px 0 16px; padding: 6px; border-radius: 20px; }
     .slot3.win { animation: slotWin .8s ease; }
@@ -1548,10 +1549,7 @@
           haptic("notify", "success"); winSound();
         }
         const rl = $("slotResult");
-        if (rl) {
-          rl.textContent = res.win ? `🎉 Три ${res.label} — +${res.coins} 🪙` : "Не повезло — крути ещё";
-          rl.classList.toggle("win", !!res.win);
-        }
+        if (rl) rl.innerHTML = res.win ? `<span class="winbadge">+${res.coins} 🪙</span>` : "Не повезло — крути ещё";
       }, maxEnd + 120);
     }
 
@@ -1751,7 +1749,7 @@
         if (ptr) { ptr.classList.add("win", "bump"); setTimeout(() => ptr.classList.remove("bump"), 420); }
         el.classList.add("won");                                  // неон по окружности
         const wl = el.querySelectorAll(".wlabel")[res.index]; if (wl) wl.classList.add("win");
-        const rl = $("wheelResult"); if (rl) { rl.textContent = `+${res.coins} 🪙`; rl.classList.add("win"); }
+        const rl = $("wheelResult"); if (rl) rl.innerHTML = `<span class="winbadge">+${res.coins} 🪙</span>`;
         const stage = document.querySelector(".wheel-stage");
         if (stage) {
           const pop = document.createElement("div"); pop.className = "winpop"; pop.textContent = `+${res.coins} 🪙`;
@@ -2093,7 +2091,20 @@
         <div class="stathead">Заказы по статусам</div><div class="statlist">${statusRows}</div>
         <div class="stathead">Топ товаров (по продажам)</div><div class="statlist">${topRows}</div>
         <div class="stathead">Выручка по точкам</div><div class="statlist">${cityRows}</div>
-        <div class="stathead">Мало на складе (≤3)</div><div class="statlist">${lowRows}</div>`;
+        <div class="stathead">Мало на складе (≤3)</div><div class="statlist">${lowRows}</div>
+        <div class="stathead">🎰 Игры (в монетах)</div><div class="statlist">${gamesRows(s.games || {})}</div>`;
+    }
+    function gamesRows(g) {
+      const w = { spins: g.wheel_spins || 0, paid: g.wheel_paid || 0 };
+      const sl = { spins: g.slot_spins || 0, bet: g.slot_bet || 0, paid: g.slot_paid || 0 };
+      const net = sl.bet - sl.paid;   // «прибыль казино» слота (ставки − выплаты)
+      return `
+        <div class="statrow"><span>🎡 Колесо — прокрутов</span><b>${w.spins}</b></div>
+        <div class="statrow"><span>🎡 Колесо — выплачено</span><b>${w.paid} 🪙</b></div>
+        <div class="statrow"><span>🎰 Слот — прокрутов</span><b>${sl.spins}</b></div>
+        <div class="statrow"><span>🎰 Слот — ставок</span><b>${sl.bet} 🪙</b></div>
+        <div class="statrow"><span>🎰 Слот — выплачено</span><b>${sl.paid} 🪙</b></div>
+        <div class="statrow"><span>🎰 Слот — баланс (ставки−выплаты)</span><b style="color:${net >= 0 ? '#2e9e4f' : 'var(--danger)'}">${net} 🪙</b></div>`;
     }
 
     // ----- Розыгрыш (админ) -----

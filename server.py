@@ -542,6 +542,7 @@ def api_wheel_spin():
     if res is None:
         return jsonify({"ok": False, "error": "no_spins"}), 400
     coins, spins = res
+    db.inc_stat("wheel_spins", 1); db.inc_stat("wheel_paid", prize["coins"])
     return jsonify({"ok": True, "index": idx, "coins": prize["coins"], "label": prize["label"],
                     "balance": coins, "spins": spins})
 
@@ -622,6 +623,7 @@ def api_slot_spin():
     balance = db.do_slot_spin(uid, SLOT_COST, prize_coins)   # списание+приз за 1 запрос
     if balance is None:
         return jsonify({"ok": False, "error": "no_coins"}), 400
+    db.inc_stat("slot_spins", 1); db.inc_stat("slot_bet", SLOT_COST); db.inc_stat("slot_paid", prize_coins)
 
     # Сетка 3×3. Выигрыш выкладывается по случайной линии (ряд или диагональ).
     if win:
@@ -1027,6 +1029,7 @@ def api_admin_stats():
         "low_stock": low,
         "out_of_stock": out_of_stock,
         "products_total": len(products),
+        "games": db.get_game_stats(),
     }})
 
 

@@ -213,6 +213,14 @@ def init_db():
         )
     """)
 
+    # Счётчики игр (колесо/слот): прокруты, ставки, выплаты.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS game_stats (
+            key TEXT PRIMARY KEY,
+            n   BIGINT NOT NULL DEFAULT 0
+        )
+    """)
+
     # Способы получения на точку: самовывоз/доставка/метро/такси (настраивает админ).
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS delivery_methods (
@@ -845,6 +853,29 @@ def get_setting(key, default=None):
     if not row or row["value"] is None:
         return default
     return row["value"]
+
+
+def inc_stat(key, delta=1):
+    """Увеличивает счётчик игры (прокруты/ставки/выплаты)."""
+    conn = connect()
+    cur = conn.cursor()
+    if USE_PG:
+        cur.execute("""INSERT INTO game_stats (key, n) VALUES (%s, %s)
+                       ON CONFLICT (key) DO UPDATE SET n = game_stats.n + EXCLUDED.n""", (key, int(delta)))
+    else:
+        cur.execute("INSERT INTO game_stats (key, n) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET n = n + ?",
+                    (key, int(delta), int(delta)))
+    conn.commit()
+    conn.close()
+
+
+def get_game_stats():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT key, n FROM game_stats")
+    rows = cur.fetchall()
+    conn.close()
+    return {r["key"]: r["n"] for r in rows}
 
 
 def set_setting(key, value):
