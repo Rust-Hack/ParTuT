@@ -1392,7 +1392,7 @@
       } else {
         body = `<div class="bseg" style="margin-bottom:14px">
             <button data-gm="wheel" class="${gameMode === 'wheel' ? 'on' : ''}">🎡 Колесо</button>
-            <button data-gm="slot" class="${gameMode === 'slot' ? 'on' : ''}">🎰 Вэйп Удача</button></div>
+            <button data-gm="slot" class="${gameMode === 'slot' ? 'on' : ''}">🎰 Облако Монет</button></div>
           <div id="gameWrap"></div>`;
       }
       $("tab-bonus").innerHTML = `<div class="bonuswrap">${seg}${body}</div>`;
@@ -1405,7 +1405,7 @@
       else if (bonusTab === "raffle") renderRaffle();
     }
 
-    // ----- Слот «Вэйп Удача» (сетка 3×3, барабаны прокручиваются) -----
+    // ----- Слот «Облако Монет» (сетка 3×3, барабаны прокручиваются) -----
     let slotSpinning = false;
     const slotEmojis = () => (slot.symbols || []).map(s => s.emoji);
     const haptic = (kind, style) => { try { const h = tg && tg.HapticFeedback; if (!h) return; kind === "notify" ? h.notificationOccurred(style || "success") : h.impactOccurred(style || "light"); } catch (e) {} };
@@ -1553,7 +1553,7 @@
           return `<div class="miniboard">${[0,1,2,3,4,5,6,7,8].map(i => `<i class="${on.includes(i) ? "on" : ""}"></i>`).join("")}</div>`;
         };
         const lines = (slot.lines || []).map(l => `<div class="lineitem">${board(l.cells)}<small>${esc(l.name)}</small></div>`).join("");
-        showInfo("🎰 Вэйп Удача", `
+        showInfo("🎰 Облако Монет", `
           <p>Прокрут стоит <b>${slot.cost} 🪙</b>. Соберите <b>3 одинаковых</b> символа по одной из <b>${(slot.lines || []).length} линий</b> и заберите монеты.</p>
           <div class="slotlines">${lines}</div>
           <div style="font-weight:800;margin:14px 0 4px">Призы за 3 в линию:</div>${pay}
@@ -1848,7 +1848,7 @@
         <ul style="margin:8px 0;padding-left:18px;color:var(--text)">
           <li><b>1 прокрут</b> — за каждые <b>${wheel.step} купленных товаров</b> (после выдачи заказа).</li>
           <li>Призы: от <b>100</b> до <b>1000</b> монет, сектор <b>SUPER</b> — 2000.</li>
-          <li>Монеты тратятся скидкой в корзине (100 монет = 1 Br) и на слот «Вэйп Удача».</li>
+          <li>Монеты тратятся скидкой в корзине (100 монет = 1 Br) и на слот «Облако Монет».</li>
         </ul>`);
       if ($("grantSpin")) $("grantSpin").onclick = async () => {
         try {
