@@ -554,18 +554,20 @@ def api_wheel_spin():
 
 # ------------------- Слот «Облако Монет» -------------------
 
-SLOT_COST = 50   # монет за прокрут
-# Экономика: суммарный шанс выигрыша = 30%, EV приза ≈ 40 монет → RTP ≈ 80% (мягкий house edge).
-# Символы от частых/дешёвых к редким/дорогим; минимальный приз (60) > ставки — «выиграл меньше ставки» не бывает.
+# Ставка регулируется игроком: 2..10 с шагом 2. Приз = ставка × множитель символа.
+SLOT_BETS = [2, 4, 6, 8, 10]
+SLOT_MIN_BET = SLOT_BETS[0]
+# Экономика: суммарный шанс выигрыша = 30%, средневзвеш. множитель ≈ 2.67 → RTP ≈ 79% (house edge ~21%).
+# Множители целые, а ставки чётные → приз всегда целый. Символы от частых/мелких к редким/крупным.
 SLOT_SYMBOLS = [
-    {"key": "cart",   "emoji": "🔋", "label": "Картридж",  "coins": 60,  "percent": 7},
-    {"key": "cig",    "emoji": "🚬", "label": "Сигарета",  "coins": 60,  "percent": 6},
-    {"key": "snus",   "emoji": "🟤", "label": "Снюс",      "coins": 80,  "percent": 5},
-    {"key": "liquid", "emoji": "🧪", "label": "Жижа",      "coins": 100, "percent": 4},
-    {"key": "disp",   "emoji": "💨", "label": "Одноразка", "coins": 150, "percent": 3},
-    {"key": "pod",    "emoji": "📦", "label": "Под",       "coins": 250, "percent": 2.5},
-    {"key": "coin",   "emoji": "🪙", "label": "Монетка",   "coins": 400, "percent": 1.5},
-    {"key": "crown",  "emoji": "👑", "label": "Корона",    "coins": 750, "percent": 1},
+    {"key": "cart",   "emoji": "🔋", "label": "Картридж",  "mult": 2,  "percent": 9},
+    {"key": "cig",    "emoji": "🚬", "label": "Сигарета",  "mult": 2,  "percent": 7},
+    {"key": "snus",   "emoji": "🟤", "label": "Снюс",      "mult": 2,  "percent": 5},
+    {"key": "liquid", "emoji": "🧪", "label": "Жижа",      "mult": 3,  "percent": 4},
+    {"key": "disp",   "emoji": "💨", "label": "Одноразка", "mult": 3,  "percent": 2.5},
+    {"key": "pod",    "emoji": "📦", "label": "Под",       "mult": 5,  "percent": 1.5},
+    {"key": "coin",   "emoji": "🪙", "label": "Монетка",   "mult": 8,  "percent": 0.7},
+    {"key": "crown",  "emoji": "👑", "label": "Корона",    "mult": 15, "percent": 0.3},
 ]
 
 
@@ -626,8 +628,8 @@ def api_slot():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    return jsonify({"ok": True, "cost": SLOT_COST, "balance": db.get_coins(uid),
-                    "symbols": [{"emoji": s["emoji"], "label": s["label"], "coins": s["coins"]} for s in SLOT_SYMBOLS],
+    return jsonify({"ok": True, "bets": SLOT_BETS, "balance": db.get_coins(uid),
+                    "symbols": [{"emoji": s["emoji"], "label": s["label"], "mult": s["mult"]} for s in SLOT_SYMBOLS],
                     "lines": [{"name": n, "cells": ln} for n, ln in zip(SLOT_LINE_NAMES, SLOT_LINES)]})
 
 
@@ -638,6 +640,12 @@ def api_slot_spin():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
+    try:
+        bet = int(data.get("bet", SLOT_MIN_BET))
+    except (TypeError, ValueError):
+        bet = SLOT_MIN_BET
+    if bet not in SLOT_BETS:
+        return jsonify({"ok": False, "error": "bad_bet"}), 400
     roll = random.random() * 100.0
     cum, win = 0.0, None
     for s in SLOT_SYMBOLS:
@@ -645,11 +653,11 @@ def api_slot_spin():
         if roll < cum:
             win = s
             break
-    prize_coins = win["coins"] if win else 0
-    balance = db.do_slot_spin(uid, SLOT_COST, prize_coins)   # списание+приз за 1 запрос
+    prize_coins = bet * win["mult"] if win else 0     # приз = ставка × множитель
+    balance = db.do_slot_spin(uid, bet, prize_coins)   # списание+приз за 1 запрос
     if balance is None:
         return jsonify({"ok": False, "error": "no_coins"}), 400
-    db.inc_stat("slot_spins", 1); db.inc_stat("slot_bet", SLOT_COST); db.inc_stat("slot_paid", prize_coins)
+    db.inc_stat("slot_spins", 1); db.inc_stat("slot_bet", bet); db.inc_stat("slot_paid", prize_coins)
 
     # Сетка 3×3. Выигрыш выкладывается по случайной линии (ряд или диагональ).
     if win:
@@ -661,7 +669,7 @@ def api_slot_spin():
         win_cells = []
     return jsonify({"ok": True, "win": bool(win), "grid": grid, "win_cells": win_cells,
                     "coins": prize_coins, "label": win["label"] if win else "",
-                    "balance": balance})
+                    "bet": bet, "balance": balance})
 
 
 # ------------------- Розыгрыши (раз в месяц) -------------------

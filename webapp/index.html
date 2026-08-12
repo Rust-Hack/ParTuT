@@ -316,6 +316,10 @@
     .slotpay { background: rgba(14,34,43,.7); border: 1px solid rgba(74,222,255,.25); border-radius: 12px; box-shadow: inset 0 0 12px rgba(0,0,0,.4); padding: 8px 4px; text-align: center; }
     .slotpay span { font-size: 22px; display: block; }
     .slotpay small { color: var(--brand-neon); font-size: 11px; text-shadow: 0 0 6px var(--brand-glow); }
+    .betsel { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 4px 0 10px; }
+    .betlbl { color: var(--hint); font-size: 13px; margin-right: 2px; }
+    .betbtn { min-width: 38px; padding: 7px 0; border-radius: 10px; border: 1px solid rgba(74,222,255,.3); background: rgba(14,34,43,.6); color: var(--text); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
+    .betbtn.on { background: var(--brand-neon); color: #06222b; border-color: var(--brand-neon); box-shadow: 0 0 12px var(--brand-glow); }
     .slotlines { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin: 6px 0 2px; }
     .lineitem { text-align: center; }
     .lineitem small { display: block; color: var(--hint); font-size: 10px; margin-top: 4px; }
@@ -1352,7 +1356,8 @@
     }
     let bonusTab = "wheel", gameMode = "wheel";
     let wheel = { sectors: [], spins: 0, progress: 0, step: 5 };
-    let slot = { cost: 50, balance: 0, symbols: [], lines: [] };
+    let slot = { bets: [2], balance: 0, symbols: [], lines: [] };
+    let slotBet = parseInt(localStorage.getItem("slotBet") || "2", 10) || 2;   // текущая ставка
     let slotHistory = [];   // последние результаты слота (сессия): >0 выигрыш, 0 промах
     let _anticHb = null;    // таймер пульс-хаптика на предвкушении
     async function fetchWheel() {
@@ -1495,8 +1500,8 @@
       }
     }
     function slotBtnText() {
-      const can = (bonus.coins || 0) >= slot.cost;
-      return can ? `Крутить · ${slot.cost} 🪙` : "Недостаточно монет";
+      const can = (bonus.coins || 0) >= slotBet;
+      return can ? `Крутить · ${slotBet} 🪙` : "Недостаточно монет";
     }
     function initStrip(el) {   // стартовое состояние барабана — 3 случайных символа
       const em = slotEmojis();
@@ -1526,8 +1531,10 @@
       setTimeout(() => el.classList.remove("blur"), Math.max(0, dur * 1000 - 280));  // резкость к остановке
     }
     function renderSlot() {
-      const canSpin = (bonus.coins || 0) >= slot.cost;
-      const pay = (slot.symbols || []).map(s => `<div class="slotpay"><span>${s.emoji}</span><small>${s.coins} 🪙</small></div>`).join("");
+      if (!(slot.bets || []).includes(slotBet)) slotBet = (slot.bets || [2])[0];   // защита от stale-значения
+      const canSpin = (bonus.coins || 0) >= slotBet;
+      const pay = (slot.symbols || []).map(s => `<div class="slotpay"><span>${s.emoji}</span><small>×${s.mult}</small></div>`).join("");
+      const bets = (slot.bets || []).map(b => `<button class="betbtn ${b === slotBet ? 'on' : ''}" data-bet="${b}">${b}</button>`).join("");
       $("gameWrap").innerHTML = `
         <div class="slot-top"><div class="wheel-head" id="slotHead" style="margin:0">🪙 ${bonus.coins || 0} монет</div>
           <button class="soundtgl" id="slotInfo" aria-label="Правила">ℹ️</button>
@@ -1539,25 +1546,34 @@
         </div>
         <div class="game-result" id="slotResult">3 одинаковых в линию — ряд, диагональ или зигзаг</div>
         <div class="wheel-hist" id="slotHist"></div>
+        <div class="betsel"><span class="betlbl">Ставка</span>${bets}</div>
         <button class="bigbtn" id="slotBtn" ${canSpin ? "" : "disabled"}>${slotBtnText()}</button>
-        <div class="wheel-hint">Прокрут ${slot.cost} монет.</div>
+        <div class="wheel-hint">Приз = ставка × множитель символа.</div>
         <div class="slotpays">${pay}</div>`;
       [0, 1, 2].forEach(c => initStrip($("strip" + c)));
       renderSlotHist();
+      document.querySelectorAll(".betsel .betbtn").forEach(btn => btn.onclick = () => {
+        if (slotSpinning) return;
+        slotBet = parseInt(btn.dataset.bet, 10);
+        localStorage.setItem("slotBet", slotBet);
+        document.querySelectorAll(".betsel .betbtn").forEach(b => b.classList.toggle("on", parseInt(b.dataset.bet, 10) === slotBet));
+        const sb = $("slotBtn"); if (sb) { sb.disabled = (bonus.coins || 0) < slotBet; sb.textContent = slotBtnText(); }
+        haptic("impact", "light");
+      });
       $("slotBtn").onclick = spinSlot;
       $("soundTgl").onclick = () => { toggleSound(); $("soundTgl").textContent = soundOn ? "🔊" : "🔇"; };
       $("slotInfo").onclick = () => {
-        const pay = (slot.symbols || []).map(s => `<div class="statrow"><span>${s.emoji} ${esc(s.label)} × 3</span><b>+${s.coins} 🪙</b></div>`).join("");
+        const pay = (slot.symbols || []).map(s => `<div class="statrow"><span>${s.emoji} ${esc(s.label)} × 3</span><b>×${s.mult} ставки</b></div>`).join("");
         const board = (cells) => {                          // cells: [[r,c],...] → плоские индексы 0..8
           const on = cells.map(([r, c]) => r * 3 + c);
           return `<div class="miniboard">${[0,1,2,3,4,5,6,7,8].map(i => `<i class="${on.includes(i) ? "on" : ""}"></i>`).join("")}</div>`;
         };
         const lines = (slot.lines || []).map(l => `<div class="lineitem">${board(l.cells)}<small>${esc(l.name)}</small></div>`).join("");
         showInfo("🎰 Облако Монет", `
-          <p>Прокрут стоит <b>${slot.cost} 🪙</b>. Соберите <b>3 одинаковых</b> символа по одной из <b>${(slot.lines || []).length} линий</b> и заберите монеты.</p>
+          <p>Выберите <b>ставку</b> (${(slot.bets || []).join(" / ")} 🪙) и соберите <b>3 одинаковых</b> символа по одной из <b>${(slot.lines || []).length} линий</b>. Приз = <b>ставка × множитель</b>.</p>
           <div class="slotlines">${lines}</div>
-          <div style="font-weight:800;margin:14px 0 4px">Призы за 3 в линию:</div>${pay}
-          <p style="color:var(--hint);margin-top:12px">Шанс выигрыша за прокрут ≈ <b>30%</b>. Чем реже символ — тем крупнее приз. Монеты тратятся скидкой в корзине (100 монет = 1 Br).</p>`);
+          <div style="font-weight:800;margin:14px 0 4px">Множители за 3 в линию:</div>${pay}
+          <p style="color:var(--hint);margin-top:12px">Шанс выигрыша за прокрут ≈ <b>30%</b>. Чем реже символ — тем крупнее множитель. Монеты тратятся скидкой в корзине (100 монет = 1 Br).</p>`);
       };
     }
     function renderSlotHist() {
@@ -1584,7 +1600,7 @@
     }
     $("infoClose").onclick = () => closeOverlay($("infoOverlay"));
     async function spinSlot() {
-      if (slotSpinning || (bonus.coins || 0) < slot.cost) return;
+      if (slotSpinning || (bonus.coins || 0) < slotBet) return;
       slotSpinning = true; $("slotBtn").disabled = true;
       const stage = document.querySelector(".slot3"); if (stage) stage.classList.remove("win");
       [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) [...s.children].forEach(ch => ch.classList.remove("hit")); });
@@ -1592,7 +1608,7 @@
       // 1) Сначала результат (быстрый запрос), затем — единый плавный прокрут.
       let res;
       try {
-        const r = await fetch("/api/slot/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const r = await fetch("/api/slot/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, bet: slotBet }) });
         res = await r.json();
       } catch (e) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
       if (!res.ok) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
@@ -1625,7 +1641,7 @@
         slotSpinning = false;
         if ($("slotHead")) $("slotHead").textContent = `🪙 ${bonus.coins} монет`;
         const btn = $("slotBtn");
-        if (btn) { btn.disabled = (bonus.coins || 0) < slot.cost; btn.textContent = slotBtnText(); }
+        if (btn) { btn.disabled = (bonus.coins || 0) < slotBet; btn.textContent = slotBtnText(); }
         if (isWin) {
           (res.win_cells || []).forEach(([r, c]) => {              // подсветить выигрышные клетки (результат сверху)
             const cell = $("strip" + c) && $("strip" + c).children[r];
@@ -1636,7 +1652,7 @@
             const pop = document.createElement("div");
             pop.className = "winpop"; pop.textContent = `+${res.coins} 🪙`;
             stage.appendChild(pop); setTimeout(() => pop.remove(), 1500);
-            if (res.coins >= 400) confetti(stage, 30);            // крупный выигрыш — конфетти
+            if (res.coins >= (res.bet || slotBet) * 8) confetti(stage, 30);   // крупный выигрыш (×8+) — конфетти
           }
           haptic("notify", "success"); winSound();
         }
