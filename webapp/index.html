@@ -242,6 +242,8 @@
     .slot3 { position: relative; display: flex; gap: 8px; justify-content: center; margin: 6px 0 16px; }
     .reel-col { width: 84px; max-width: 27vw; aspect-ratio: 1 / 3; overflow: hidden; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow), inset 0 0 0 3px var(--accent); }
     .reel-strip { will-change: transform; }
+    .reel-strip.reel-spinning { animation: reelSpin .45s linear infinite; }
+    @keyframes reelSpin { from { transform: translateY(0); } to { transform: translateY(-50%); } }
     .reel-cell { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; font-size: 40px; }
     .reel-cell.hit { background: rgba(255,176,32,.22); box-shadow: inset 0 0 0 3px var(--warn), 0 0 14px var(--warn); border-radius: 12px; animation: cellWin .5s ease; }
     @keyframes cellWin { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
@@ -1333,8 +1335,35 @@
     function initStrip(el) {   // стартовое состояние барабана — 3 случайных символа
       const em = slotEmojis();
       const cells = [0, 1, 2].map(() => em[Math.floor(Math.random() * em.length)] || "❔");
+      el.classList.remove("reel-spinning");
       el.style.transition = "none"; el.style.transform = "translateY(0)";
       el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
+    }
+    // Мгновенная бесконечная прокрутка: две одинаковых «колоды» + CSS-анимация на -50% = бесшовный цикл.
+    function startReel(el) {
+      const em = slotEmojis();
+      const block = [...em].sort(() => Math.random() - 0.5);
+      el.classList.remove("reel-spinning");
+      el.style.transition = "none"; el.style.transform = "translateY(0)";
+      el.innerHTML = [...block, ...block].map(e => `<div class="reel-cell">${e}</div>`).join("");
+      void el.offsetHeight;
+      el.classList.add("reel-spinning");
+    }
+    // Остановка барабана на результате [верх, середина, низ] с лёгким «отскоком».
+    function landReel(el, three, N, dur) {
+      const em = slotEmojis();
+      const cells = [];
+      for (let i = 0; i < N; i++) cells.push(em[Math.floor(Math.random() * em.length)] || "❔");
+      cells.push(three[0], three[1], three[2]);
+      el.classList.remove("reel-spinning");
+      el.style.transition = "none"; el.style.transform = "translateY(0)";
+      el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
+      void el.offsetHeight;
+      const cellH = el.parentElement.clientHeight / 3;
+      requestAnimationFrame(() => {
+        el.style.transition = `transform ${dur}s cubic-bezier(.2,.85,.28,1.06)`;   // overshoot в конце
+        el.style.transform = `translateY(${-(N) * cellH}px)`;
+      });
     }
     function renderSlot() {
       const canSpin = (bonus.coins || 0) >= slot.cost;
@@ -1355,44 +1384,37 @@
     async function spinSlot() {
       if (slotSpinning || (bonus.coins || 0) < slot.cost) return;
       slotSpinning = true; $("slotBtn").disabled = true;
+      // 1) Мгновенно крутим все три барабана (не ждём сеть).
+      [0, 1, 2].forEach(c => startReel($("strip" + c)));
+      // 2) Параллельно — результат (1 запрос).
       let res;
       try {
         const r = await fetch("/api/slot/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         res = await r.json();
-      } catch (e) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
-      if (!res.ok) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
+      } catch (e) { [0, 1, 2].forEach(c => initStrip($("strip" + c))); slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
+      if (!res.ok) { [0, 1, 2].forEach(c => initStrip($("strip" + c))); slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
       bonus.coins = res.balance;
-      const em = slotEmojis(), N = 24;                       // 24 случайных ячейки прокрутки перед результатом
+      const N = 20;
       const cols = [0, 1, 2].map(c => [res.grid[0][c], res.grid[1][c], res.grid[2][c]]);
-      let maxDur = 0;
+      const dur = 1.25;
+      let maxEnd = 0;
+      // 3) Барабаны крутятся ещё чуть-чуть и тормозят по очереди на результате.
       [0, 1, 2].forEach(c => {
-        const el = $("strip" + c);
-        const cells = [];
-        for (let i = 0; i < N; i++) cells.push(em[Math.floor(Math.random() * em.length)] || "❔");
-        cells.push(cols[c][0], cols[c][1], cols[c][2]);      // верх, СЕРЕДИНА(результат), низ
-        el.style.transition = "none"; el.style.transform = "translateY(0)";
-        el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
-        void el.offsetHeight;                                 // reflow, чтобы старт с 0
-        const cellH = el.parentElement.clientHeight / 3;
-        const dur = 1.5 + c * 0.4;                            // каскад: барабаны стопаются по очереди
-        maxDur = Math.max(maxDur, dur);
-        requestAnimationFrame(() => {
-          el.style.transition = `transform ${dur}s cubic-bezier(.16,.62,.2,1)`;
-          el.style.transform = `translateY(${-(N) * cellH}px)`;  // прокрутить до последних трёх ячеек
-        });
+        const delay = 300 + c * 380;
+        maxEnd = Math.max(maxEnd, delay + dur * 1000);
+        setTimeout(() => landReel($("strip" + c), cols[c], N, dur), delay);
       });
       setTimeout(() => {
         slotSpinning = false;
         if ($("slotHead")) $("slotHead").textContent = `🪙 ${bonus.coins} монет`;
         const btn = $("slotBtn");
         if (btn) { btn.disabled = (bonus.coins || 0) < slot.cost; btn.textContent = slotBtnText(); }
-        // Подсветить выигрышные клетки (ряд или диагональ)
-        if (res.win) (res.win_cells || []).forEach(([r, c]) => {
+        if (res.win) (res.win_cells || []).forEach(([r, c]) => {   // подсветить выигрышные клетки
           const cell = $("strip" + c) && $("strip" + c).children[N + r];
           if (cell) cell.classList.add("hit");
         });
         setTimeout(() => alertMsg(res.win ? `🎉 Три ${res.label}! +${res.coins} 🪙` : "Не повезло — крути ещё!"), 250);
-      }, maxDur * 1000 + 150);
+      }, maxEnd + 120);
     }
 
     // ----- Розыгрыши -----
