@@ -255,6 +255,9 @@
     }
     .wlabel { position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; pointer-events: none; }
     .wlabel span { margin-top: 15px; color: #eaffff; font-weight: 800; font-size: 14px; white-space: nowrap; text-shadow: 0 0 7px var(--brand-neon), 0 1px 2px #000; transition: text-shadow .6s ease; }
+    .wlabel .lcoin { font-size: .62em; font-weight: 400; margin-left: 1px; }
+    .wlabel .lstar { color: #ffd23f; font-size: 1.4em; text-shadow: 0 0 10px #ffd23f, 0 1px 2px #000; }
+    .hub-logo { width: 40px; height: 32px; color: var(--on-accent); }
     .wheel-hub { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 72px; height: 72px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; box-shadow: 0 2px 10px rgba(0,0,0,.35); cursor: pointer; }
     .wheel-hub.ready { animation: hubPulse 1.4s ease-in-out infinite; }
     @keyframes hubPulse { 0%,100% { box-shadow: 0 2px 10px rgba(0,0,0,.35); } 50% { box-shadow: 0 2px 10px rgba(0,0,0,.35), 0 0 20px var(--brand-neon); } }
@@ -1703,7 +1706,8 @@
         `<div class="lamp" style="transform:rotate(${i * 360 / lampN}deg)"><i style="animation-delay:${(i * 1.1 / lampN).toFixed(2)}s"></i></div>`).join("");
       const labels = sectors.map((s, i) => {
         const a = (i + 0.5) * seg;
-        return `<div class="wlabel" style="transform:rotate(${a}deg)"><span>${esc(s.label)}</span></div>`;
+        const inner = s.label === "SUPER" ? `<b class="lstar">★</b>` : `${esc(s.label)}<b class="lcoin">🪙</b>`;
+        return `<div class="wlabel ${s.label === 'SUPER' ? 'lsuper' : ''}" style="transform:rotate(${a}deg)"><span>${inner}</span></div>`;
       }).join("");
       const canSpin = wheel.spins > 0;
       const pct = Math.min(100, Math.round((wheel.progress / wheel.step) * 100));
@@ -1713,7 +1717,7 @@
           <button class="soundtgl" id="wheelSound">${soundOn ? "🔊" : "🔇"}</button></div>
         <div class="wheel-stage">
           <div class="wheel-ptr"></div>
-          <div class="wheel ${canSpin ? 'ready' : ''}" id="wheelEl">${labels}<div class="wheel-hub ${canSpin ? 'ready' : ''}" id="wheelHub">GO</div></div>
+          <div class="wheel ${canSpin ? 'ready' : ''}" id="wheelEl">${labels}<div class="wheel-hub ${canSpin ? 'ready' : ''}" id="wheelHub"><svg class="hub-logo" viewBox="-2 2 28 20" fill="none"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div></div>
           <div class="wheel-lamps">${lamps}</div>
         </div>
         <div class="game-result" id="wheelResult"></div>
