@@ -1740,8 +1740,9 @@
       const rays = `repeating-conic-gradient(from 0deg, rgba(120,245,245,.85) 0 1.1deg, transparent 1.1deg ${seg}deg)`;
       const wheelBgImage = `${rays}, conic-gradient(${tint}), ${WHEEL_BRICK}`;   // ставим из JS (кавычки в url ломают inline style)
       // Огоньки на внешних углах секторов (крутятся вместе с колесом).
+      // луч-разделитель имеет ширину 1.1° → его центр смещён на 0.55°; ставим огонёк ровно на центр линии
       const cornerLamps = sectors.map((_, i) =>
-        `<div class="clamp" style="transform:rotate(${i * seg}deg)"><i></i></div>`).join("");
+        `<div class="clamp" style="transform:rotate(${i * seg + 0.55}deg)"><i></i></div>`).join("");
       const labels = sectors.map((s, i) => {
         const a = (i + 0.5) * seg;
         const inner = s.label === "SUPER" ? `<b class="lstar">★</b>` : `${esc(s.label)}<b class="lcoin">🪙</b>`;
