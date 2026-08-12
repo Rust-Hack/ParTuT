@@ -196,6 +196,10 @@ def _ensure_user_columns():
         cur.execute("ALTER TABLE users ADD COLUMN wheel_spins INTEGER DEFAULT 0")
     if "wheel_progress" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN wheel_progress INTEGER DEFAULT 0")
+    if "ref_activated" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN ref_activated INTEGER DEFAULT 0")
+    if "ref_earned" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN ref_earned INTEGER DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -382,6 +386,82 @@ def count_referrals(user_id):
     c = cur.fetchone()["c"]
     conn.close()
     return c
+
+
+# --- Рефералы 2.0: активация, проценты, заработок ---
+
+REFERRAL_BONUS = 50                       # монет пригласившему за ПЕРВЫЙ заказ друга
+REFERRAL_TIERS = [(15, 5), (10, 4), (5, 3), (0, 2)]   # (мин. активных, процент)
+
+
+def ref_percent(active):
+    for min_active, pct in REFERRAL_TIERS:
+        if active >= min_active:
+            return pct
+    return 2
+
+
+def count_active_referrals(user_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COUNT(*) AS c FROM users WHERE referred_by = %s AND ref_activated = 1"), (user_id,))
+    c = cur.fetchone()["c"]
+    conn.close()
+    return c
+
+
+def list_referrals(user_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT user_id, ref_activated FROM users WHERE referred_by = %s ORDER BY ref_activated DESC, user_id"), (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_ref_earned(user_id):
+    row = get_user_row(user_id)
+    return row["ref_earned"] if row and row["ref_earned"] else 0
+
+
+def add_ref_earned(user_id, n):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET ref_earned = COALESCE(ref_earned, 0) + %s WHERE user_id = %s"), (int(n), user_id))
+    conn.commit()
+    conn.close()
+
+
+def reward_referrer_for_order(buyer_id, order_total):
+    """Начисляет пригласившему % от заказа + фикс за первый заказ друга.
+    Возвращает dict {referrer, percent, pct_coins, first, bonus, earned} или None."""
+    row = get_user_row(buyer_id)
+    if not row or not row["referred_by"]:
+        return None
+    ref = row["referred_by"]
+    percent = ref_percent(count_active_referrals(ref))
+    pct_coins = round((order_total or 0) * percent)   # X Br * p% = X*p монет (1 Br = 100 монет)
+    first = not row["ref_activated"]
+    earned = 0
+    if pct_coins > 0:
+        add_coins(ref, pct_coins)
+        earned += pct_coins
+    if first:
+        set_ref_activated(buyer_id)
+        add_coins(ref, REFERRAL_BONUS)
+        earned += REFERRAL_BONUS
+    if earned > 0:
+        add_ref_earned(ref, earned)
+    return {"referrer": ref, "percent": percent, "pct_coins": pct_coins,
+            "first": first, "bonus": REFERRAL_BONUS if first else 0, "earned": earned}
+
+
+def set_ref_activated(user_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET ref_activated = 1 WHERE user_id = %s"), (user_id,))
+    conn.commit()
+    conn.close()
 
 
 WHEEL_STEP = 5   # сколько купленных товаров нужно на один прокрут колеса

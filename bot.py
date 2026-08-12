@@ -195,6 +195,10 @@ def handle_order_action(call, chat_id, action, order_id):
         if order["status"] != "issued":                # коины/прогресс один раз
             db.add_coins(client_id, int(order["total"]))
             db.add_wheel_progress(client_id, sum(int(i.get("qty", 0)) for i in json.loads(order["items"])))
+            rr = db.reward_referrer_for_order(client_id, order["total"])   # % и бонус пригласившему
+            if rr and rr["earned"] > 0:
+                _safe_send(rr["referrer"], f"🎉 Ваш реферал сделал заказ! +{rr['earned']} 🪙"
+                           + (f" (+{rr['bonus']} 🪙 за первый заказ)" if rr["first"] else ""))
         db.set_order_status(order_id, "issued")
         bot.answer_callback_query(call.id, "Отмечено: выдан 📦")
         _safe_send(client_id,

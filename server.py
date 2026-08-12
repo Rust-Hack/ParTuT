@@ -141,13 +141,12 @@ def api_me():
     uid = int(user["id"])
     db.ensure_user(uid)
 
-    # Реферал: friend открыл приложение по ссылке ...startapp=refN
+    # Реферал: friend открыл приложение по ссылке ...startapp=refN.
+    # Только ЗАПОМИНАЕМ пригласившего — монеты дадим, когда друг сделает заказ.
     start_param = str(data.get("start_param") or "")
     if start_param.startswith("ref"):
         try:
-            ref_id = int(start_param[3:])
-            if db.set_referrer_once(uid, ref_id):
-                db.add_coins(ref_id, REFERRAL_BONUS)
+            db.set_referrer_once(uid, int(start_param[3:]))
         except (TypeError, ValueError):
             pass
 
@@ -451,11 +450,27 @@ def api_bonus():
     uid = int(user["id"])
     db.ensure_user(uid)
     link = f"https://t.me/{BOT_USERNAME}?startapp=ref{uid}" if BOT_USERNAME else ""
+
+    active = db.count_active_referrals(uid)
+    percent = db.ref_percent(active)
+    next_need, next_pct = None, None
+    for m, p in sorted(db.REFERRAL_TIERS):        # ближайший тир выше текущего
+        if m > active:
+            next_need, next_pct = m - active, p
+            break
+    referrals = [{"active": bool(r["ref_activated"])} for r in db.list_referrals(uid)]
+
     return jsonify({"ok": True,
                     "coins": db.get_coins(uid),
                     "referrals": db.count_referrals(uid),
+                    "active_referrals": active,
+                    "ref_earned": db.get_ref_earned(uid),
+                    "ref_percent": percent,
+                    "next_need": next_need,
+                    "next_percent": next_pct,
+                    "referrals_list": referrals,
                     "ref_link": link,
-                    "referral_bonus": REFERRAL_BONUS,
+                    "referral_bonus": db.REFERRAL_BONUS,
                     "coin_value": COIN_VALUE})
 
 
@@ -678,6 +693,14 @@ def _notify_client(user_id, text):
         print(f"Не смог уведомить клиента {user_id}: {e}")
 
 
+def _reward_referrer(buyer_id, order_total):
+    """Начислить пригласившему % от заказа + бонус за первый заказ, уведомить его."""
+    rr = db.reward_referrer_for_order(buyer_id, order_total)
+    if rr and rr["earned"] > 0:
+        extra = f" (+{rr['bonus']} 🪙 за первый заказ друга)" if rr["first"] else ""
+        _notify_client(rr["referrer"], f"🎉 Ваш реферал сделал заказ! +{rr['earned']} 🪙{extra}")
+
+
 def _order_item_count(o):
     """Сколько единиц товара в заказе (для прогресса колеса)."""
     try:
@@ -743,6 +766,7 @@ def api_admin_order_status():
         if order["status"] != "issued":                 # начисляем один раз
             db.add_coins(client_id, int(order["total"]) * COINS_PER_BYN)
             db.add_wheel_progress(client_id, _order_item_count(order))   # прогресс колеса
+            _reward_referrer(client_id, order["total"])   # % и бонус пригласившему
         db.set_order_status(oid, "issued")
         _notify_client(client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
