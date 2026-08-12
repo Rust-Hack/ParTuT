@@ -502,6 +502,13 @@
       <button class="closebtn" id="deliveryClose">Отмена</button></div>
   </div>
 
+  <!-- Правила игры (колесо / слот) -->
+  <div class="overlay" id="infoOverlay">
+    <div class="sheet"><h2 id="infoTitle">Правила</h2>
+      <div id="infoBody" style="font-size:14px;line-height:1.5"></div>
+      <button class="closebtn" id="infoClose">Понятно</button></div>
+  </div>
+
   <div class="view" id="ageView">
     <div class="spacer"></div><div class="icon">🔞</div>
     <h2>Вам есть 18 лет?</h2><p>Наши товары — только для совершеннолетних.</p>
@@ -1462,6 +1469,7 @@
       const pay = (slot.symbols || []).map(s => `<div class="slotpay"><span>${s.emoji}</span><small>${s.coins} 🪙</small></div>`).join("");
       $("gameWrap").innerHTML = `
         <div class="slot-top"><div class="wheel-head" id="slotHead" style="margin:0">🪙 ${bonus.coins || 0} монет</div>
+          <button class="soundtgl" id="slotInfo" aria-label="Правила">ℹ️</button>
           <button class="soundtgl" id="soundTgl" aria-label="Звук">${soundOn ? "🔊" : "🔇"}</button></div>
         <div class="slot3">
           <div class="reel-col"><div class="reel-strip" id="strip0"></div></div>
@@ -1474,12 +1482,26 @@
         <div class="slotpays">${pay}</div>`;
       [0, 1, 2].forEach(c => initStrip($("strip" + c)));
       $("slotBtn").onclick = spinSlot;
-      $("soundTgl").onclick = () => {
-        soundOn = !soundOn; localStorage.setItem("slotSound", soundOn ? "1" : "0");
-        $("soundTgl").textContent = soundOn ? "🔊" : "🔇";
-        if (soundOn) tone(660, 0.15, 0.05);
+      $("soundTgl").onclick = () => { toggleSound(); $("soundTgl").textContent = soundOn ? "🔊" : "🔇"; };
+      $("slotInfo").onclick = () => {
+        const pay = (slot.symbols || []).map(s => `<div class="statrow"><span>${s.emoji} × 3</span><b>+${s.coins} 🪙</b></div>`).join("");
+        showInfo("🎰 Вэйп Удача", `
+          <p>Прокрут стоит <b>${slot.cost} 🪙</b>. Соберите <b>3 одинаковых</b> символа в линию — <b>ряд</b> или <b>диагональ</b> — и получите монеты.</p>
+          <div style="font-weight:800;margin:12px 0 4px">Призы за 3 в ряд:</div>${pay}
+          <p style="color:var(--hint);margin-top:12px">Чем реже символ — тем крупнее приз. Монеты тратятся скидкой в корзине (100 монет = 1 Br).</p>`);
       };
     }
+    // Звук — общий тумблер для слота и колеса.
+    function toggleSound() {
+      soundOn = !soundOn; localStorage.setItem("slotSound", soundOn ? "1" : "0");
+      if (soundOn) tone(660, 0.15, 0.05);
+    }
+    // Шторка с правилами.
+    function showInfo(title, html) {
+      $("infoTitle").textContent = title; $("infoBody").innerHTML = html;
+      $("infoOverlay").classList.add("show");
+    }
+    $("infoClose").onclick = () => closeOverlay($("infoOverlay"));
     async function spinSlot() {
       if (slotSpinning || (bonus.coins || 0) < slot.cost) return;
       slotSpinning = true; $("slotBtn").disabled = true;
@@ -1663,7 +1685,9 @@
       const canSpin = wheel.spins > 0;
       const pct = Math.min(100, Math.round((wheel.progress / wheel.step) * 100));
       $("wheelWrap").innerHTML = `
-        <div class="wheel-head" id="wheelHead">🪙 ${bonus.coins || 0} монет</div>
+        <div class="slot-top"><div class="wheel-head" id="wheelHead" style="margin:0">🪙 ${bonus.coins || 0} монет</div>
+          <button class="soundtgl" id="wheelInfo" aria-label="Правила">ℹ️</button>
+          <button class="soundtgl" id="wheelSound">${soundOn ? "🔊" : "🔇"}</button></div>
         <div class="wheel-stage">
           <div class="wheel-ptr"></div>
           <div class="wheel" id="wheelEl" style="background:conic-gradient(${stops})">${labels}<div class="wheel-hub ${canSpin ? 'ready' : ''}" id="wheelHub">GO</div></div>
@@ -1676,6 +1700,14 @@
         ${(me && me.is_admin) ? `<button class="closebtn" id="grantSpin" style="margin-top:8px">🔧 +3 прокрута (тест)</button>` : ""}`;
       $("spinBtn").onclick = spinWheel;
       if ($("wheelHub")) $("wheelHub").onclick = spinWheel;   // тап по центру = крутить
+      $("wheelSound").onclick = () => { toggleSound(); $("wheelSound").textContent = soundOn ? "🔊" : "🔇"; };
+      $("wheelInfo").onclick = () => showInfo("🎡 Колесо Фортуны", `
+        <p>Крутите колесо и выигрывайте монеты 🪙.</p>
+        <ul style="margin:8px 0;padding-left:18px;color:var(--text)">
+          <li><b>1 прокрут</b> — за каждые <b>${wheel.step} купленных товаров</b> (после выдачи заказа).</li>
+          <li>Призы: от <b>100</b> до <b>1000</b> монет, сектор <b>SUPER</b> — 2000.</li>
+          <li>Монеты тратятся скидкой в корзине (100 монет = 1 Br) и на слот «Вэйп Удача».</li>
+        </ul>`);
       if ($("grantSpin")) $("grantSpin").onclick = async () => {
         try {
           const r = await fetch("/api/admin/wheel/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
