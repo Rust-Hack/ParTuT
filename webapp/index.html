@@ -253,7 +253,7 @@
               mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent); }
     .reel-strip { will-change: transform; }
     .reel-strip.reel-spinning { animation: reelSpin .45s linear infinite; filter: blur(.6px); }
-    @keyframes reelSpin { from { transform: translateY(0); } to { transform: translateY(-50%); } }
+    @keyframes reelSpin { from { transform: translateY(-50%); } to { transform: translateY(0); } }
     .reel-cell { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; font-size: 40px; }
     .reel-cell.hit { background: rgba(255,176,32,.22); box-shadow: inset 0 0 0 3px var(--warn), 0 0 14px var(--warn); border-radius: 12px; animation: cellWin .5s ease; }
     @keyframes cellWin { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
@@ -1374,6 +1374,31 @@
     }
     // Приятная восходящая мелодия при выигрыше (E-мажор арпеджио).
     const winSound = () => [659.25, 830.61, 987.77, 1318.51].forEach((f, i) => setTimeout(() => tone(f, 0.32, 0.05), i * 95));
+    // Трещотка: частые сухие тики, замедляющиеся к остановке (как колесо фортуны).
+    function ratchetTick() {
+      if (!soundOn) return;
+      try {
+        const ctx = ac(), o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "triangle"; o.frequency.value = 820 + Math.random() * 260;
+        const t = ctx.currentTime;
+        g.gain.setValueAtTime(0.045, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.026);
+        o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.032);
+      } catch (e) {}
+    }
+    let ratchetTimer = 0;
+    function ratchet(durSec) {
+      clearTimeout(ratchetTimer);
+      if (!soundOn) return;
+      const start = performance.now(), total = durSec * 1000;
+      const step = () => {
+        const p = (performance.now() - start) / total;
+        if (p >= 1) return;
+        ratchetTick();
+        ratchetTimer = setTimeout(step, 40 + p * p * 200);   // старт частый → плавно реже
+      };
+      step();
+    }
     function slotBtnText() {
       const can = (bonus.coins || 0) >= slot.cost;
       return can ? `Крутить · ${slot.cost} 🪙` : "Недостаточно монет";
@@ -1396,19 +1421,20 @@
       el.classList.add("reel-spinning");
     }
     // Остановка барабана на результате [верх, середина, низ] с лёгким «отскоком».
+    // Крутится СВЕРХУ ВНИЗ: результат в начале ленты, стартуем снизу и едем вниз к нему.
     function landReel(el, three, N, dur) {
       const em = slotEmojis();
-      const cells = [];
+      const cells = [three[0], three[1], three[2]];
       for (let i = 0; i < N; i++) cells.push(em[Math.floor(Math.random() * em.length)] || "❔");
-      cells.push(three[0], three[1], three[2]);
       el.classList.remove("reel-spinning");
-      el.style.transition = "none"; el.style.transform = "translateY(0)";
       el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
-      void el.offsetHeight;
       const cellH = el.parentElement.clientHeight / 3;
+      el.style.transition = "none";
+      el.style.transform = `translateY(${-(N) * cellH}px)`;   // старт: видны нижние (случайные) ячейки
+      void el.offsetHeight;
       requestAnimationFrame(() => {
         el.style.transition = `transform ${dur}s cubic-bezier(.2,.85,.28,1.06)`;   // overshoot в конце
-        el.style.transform = `translateY(${-(N) * cellH}px)`;
+        el.style.transform = "translateY(0)";                  // едем вниз до результата (сверху)
       });
     }
     function renderSlot() {
@@ -1439,6 +1465,7 @@
       slotSpinning = true; $("slotBtn").disabled = true;
       const stage = document.querySelector(".slot3"); if (stage) stage.classList.remove("win");
       haptic("impact", "medium");
+      ratchet(2.9);                    // трещотка на всё время прокрутки
       // 1) Мгновенно крутим все три барабана (не ждём сеть).
       [0, 1, 2].forEach(c => startReel($("strip" + c)));
       // 2) Параллельно — результат (1 запрос).
@@ -1466,8 +1493,8 @@
         const btn = $("slotBtn");
         if (btn) { btn.disabled = (bonus.coins || 0) < slot.cost; btn.textContent = slotBtnText(); }
         if (res.win) {
-          (res.win_cells || []).forEach(([r, c]) => {              // подсветить выигрышные клетки
-            const cell = $("strip" + c) && $("strip" + c).children[N + r];
+          (res.win_cells || []).forEach(([r, c]) => {              // подсветить выигрышные клетки (результат сверху)
+            const cell = $("strip" + c) && $("strip" + c).children[r];
             if (cell) cell.classList.add("hit");
           });
           if (stage) {
@@ -1676,6 +1703,7 @@
       wheelDeg += 360 * 3 + delta;                    // 3 оборота + доводка
       el.style.transition = "transform 2.4s cubic-bezier(.12,.72,.2,1)";
       el.style.transform = `rotate(${wheelDeg}deg)`;
+      ratchet(2.4);                                   // трещотка синхронно с торможением
       setTimeout(() => {
         bonus.coins = res.balance; wheel.spins = res.spins; spinning = false;
         refreshWheelInfo();
