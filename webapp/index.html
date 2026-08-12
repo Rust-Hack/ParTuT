@@ -239,10 +239,14 @@
     .wheel-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin-bottom: 8px; }
     .wheel-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s; }
     .wheel-hint { text-align: center; color: var(--hint); font-size: 13px; margin-bottom: 14px; }
-    .slot3 { position: relative; display: flex; gap: 8px; justify-content: center; margin: 6px 0 16px; }
-    .reel-col { width: 84px; max-width: 27vw; aspect-ratio: 1 / 3; overflow: hidden; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow), inset 0 0 0 3px var(--accent); }
+    .slot3 { position: relative; display: flex; gap: 8px; justify-content: center; margin: 6px 0 16px; padding: 6px; border-radius: 20px; }
+    .slot3.win { animation: slotWin .7s ease; }
+    @keyframes slotWin { 0%,100% { box-shadow: none; } 40% { box-shadow: 0 0 0 3px var(--warn), 0 0 26px var(--warn); } }
+    .reel-col { position: relative; width: 84px; max-width: 27vw; aspect-ratio: 1 / 3; overflow: hidden; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow), inset 0 0 0 3px var(--accent);
+      -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent);
+              mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent); }
     .reel-strip { will-change: transform; }
-    .reel-strip.reel-spinning { animation: reelSpin .45s linear infinite; }
+    .reel-strip.reel-spinning { animation: reelSpin .45s linear infinite; filter: blur(.6px); }
     @keyframes reelSpin { from { transform: translateY(0); } to { transform: translateY(-50%); } }
     .reel-cell { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; font-size: 40px; }
     .reel-cell.hit { background: rgba(255,176,32,.22); box-shadow: inset 0 0 0 3px var(--warn), 0 0 14px var(--warn); border-radius: 12px; animation: cellWin .5s ease; }
@@ -1328,6 +1332,7 @@
     // ----- Слот «Вэйп Удача» (сетка 3×3, барабаны прокручиваются) -----
     let slotSpinning = false;
     const slotEmojis = () => (slot.symbols || []).map(s => s.emoji);
+    const haptic = (kind, style) => { try { const h = tg && tg.HapticFeedback; if (!h) return; kind === "notify" ? h.notificationOccurred(style || "success") : h.impactOccurred(style || "light"); } catch (e) {} };
     function slotBtnText() {
       const can = (bonus.coins || 0) >= slot.cost;
       return can ? `Крутить · ${slot.cost} 🪙` : "Недостаточно монет";
@@ -1384,6 +1389,8 @@
     async function spinSlot() {
       if (slotSpinning || (bonus.coins || 0) < slot.cost) return;
       slotSpinning = true; $("slotBtn").disabled = true;
+      const stage = document.querySelector(".slot3"); if (stage) stage.classList.remove("win");
+      haptic("impact", "medium");
       // 1) Мгновенно крутим все три барабана (не ждём сеть).
       [0, 1, 2].forEach(c => startReel($("strip" + c)));
       // 2) Параллельно — результат (1 запрос).
@@ -1403,16 +1410,21 @@
         const delay = 300 + c * 380;
         maxEnd = Math.max(maxEnd, delay + dur * 1000);
         setTimeout(() => landReel($("strip" + c), cols[c], N, dur), delay);
+        setTimeout(() => haptic("impact", "light"), delay + dur * 1000);   // «клац» при остановке
       });
       setTimeout(() => {
         slotSpinning = false;
         if ($("slotHead")) $("slotHead").textContent = `🪙 ${bonus.coins} монет`;
         const btn = $("slotBtn");
         if (btn) { btn.disabled = (bonus.coins || 0) < slot.cost; btn.textContent = slotBtnText(); }
-        if (res.win) (res.win_cells || []).forEach(([r, c]) => {   // подсветить выигрышные клетки
-          const cell = $("strip" + c) && $("strip" + c).children[N + r];
-          if (cell) cell.classList.add("hit");
-        });
+        if (res.win) {
+          (res.win_cells || []).forEach(([r, c]) => {              // подсветить выигрышные клетки
+            const cell = $("strip" + c) && $("strip" + c).children[N + r];
+            if (cell) cell.classList.add("hit");
+          });
+          if (stage) stage.classList.add("win");
+          haptic("notify", "success");
+        }
         setTimeout(() => alertMsg(res.win ? `🎉 Три ${res.label}! +${res.coins} 🪙` : "Не повезло — крути ещё!"), 250);
       }, maxEnd + 120);
     }
