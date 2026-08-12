@@ -138,6 +138,30 @@ def init_db():
         )
     """)
 
+    # Розыгрыши (раз в месяц): приз-места + участники.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS raffles (
+            id           {ID_COL},
+            title        TEXT,
+            prize1       TEXT,
+            prize2       TEXT,
+            prize3_coins INTEGER NOT NULL DEFAULT 500,
+            threshold    REAL    NOT NULL DEFAULT 25,
+            starts_at    TEXT    NOT NULL,
+            ends_at      TEXT    NOT NULL,
+            status       TEXT    NOT NULL DEFAULT 'active',
+            winners      TEXT,
+            created_at   TEXT
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS raffle_entries (
+            id        {ID_COL},
+            raffle_id INTEGER NOT NULL,
+            user_id   BIGINT  NOT NULL
+        )
+    """)
+
     # Способы получения на точку: самовывоз/доставка/метро/такси (настраивает админ).
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS delivery_methods (
@@ -221,6 +245,117 @@ def _ensure_order_columns():
         cur.execute("ALTER TABLE orders ADD COLUMN payment_method TEXT")
     conn.commit()
     conn.close()
+
+
+# ---------- Розыгрыши ----------
+
+def _now_str():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def get_active_raffle():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM raffles WHERE status = 'active' ORDER BY id DESC LIMIT 1"))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def get_last_finished_raffle():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM raffles WHERE status = 'finished' ORDER BY id DESC LIMIT 1"))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def create_raffle(title="Розыгрыш месяца", prize1="Одноразка", prize2="Жидкость",
+                  prize3_coins=500, threshold=25, days=30):
+    now = datetime.datetime.now()
+    ends = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+    conn = connect()
+    cur = conn.cursor()
+    rid = _insert_id(
+        cur,
+        """INSERT INTO raffles (title, prize1, prize2, prize3_coins, threshold, starts_at, ends_at, status, created_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, 'active', %s)""",
+        (title, prize1, prize2, int(prize3_coins), float(threshold),
+         now.strftime("%Y-%m-%d %H:%M"), ends, now.strftime("%Y-%m-%d %H:%M")),
+    )
+    conn.commit()
+    conn.close()
+    return rid
+
+
+_RAFFLE_EDITABLE = {"title", "prize1", "prize2", "prize3_coins", "threshold", "ends_at"}
+
+
+def update_raffle_field(raffle_id, field, value):
+    if field not in _RAFFLE_EDITABLE:
+        return False
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q(f"UPDATE raffles SET {field} = %s WHERE id = %s"), (value, raffle_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def finish_raffle(raffle_id, winners):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE raffles SET status = 'finished', winners = %s WHERE id = %s"),
+                (json.dumps(winners, ensure_ascii=False), raffle_id))
+    conn.commit()
+    conn.close()
+
+
+def add_raffle_entry(raffle_id, user_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("INSERT INTO raffle_entries (raffle_id, user_id) VALUES (%s, %s)"), (raffle_id, user_id))
+    conn.commit()
+    conn.close()
+
+
+def is_entered(raffle_id, user_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT 1 FROM raffle_entries WHERE raffle_id = %s AND user_id = %s LIMIT 1"), (raffle_id, user_id))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row)
+
+
+def count_entries(raffle_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COUNT(*) AS c FROM raffle_entries WHERE raffle_id = %s"), (raffle_id,))
+    c = cur.fetchone()["c"]
+    conn.close()
+    return c
+
+
+def get_raffle_user_ids(raffle_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT user_id FROM raffle_entries WHERE raffle_id = %s"), (raffle_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [r["user_id"] for r in rows]
+
+
+def spent_since(user_id, since):
+    """Сумма ВЫДАННЫХ заказов клиента с момента since (для порога участия)."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COALESCE(SUM(total), 0) AS s FROM orders WHERE user_id = %s AND status = 'issued' AND created_at >= %s"),
+                (user_id, since))
+    s = cur.fetchone()["s"]
+    conn.close()
+    return float(s or 0)
 
 
 # ---------- Способы получения (доставка/самовывоз) ----------

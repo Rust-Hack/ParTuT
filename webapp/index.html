@@ -509,7 +509,24 @@
     <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
     <div class="prow" id="mBrands"><span>🏷 Бренды и вкусы</span><span>›</span></div>
     <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
+    <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
+  </div>
+
+  <!-- Раздел: Розыгрыш (настройка) -->
+  <div class="view" id="raffleAdminView">
+    <div class="viewhead"><h2>🏆 Розыгрыш</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="raffleAdminClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <div id="raffleAdminInfo" style="color:var(--hint);font-size:13px;margin-bottom:6px"></div>
+      <label>Название</label><input id="raTitle" placeholder="Розыгрыш месяца">
+      <label>🥇 Приз за 1 место</label><input id="raPrize1" placeholder="Одноразка">
+      <label>🥈 Приз за 2 место</label><input id="raPrize2" placeholder="Жидкость">
+      <label>🥉 Приз за 3 место (монеты)</label><input id="raPrize3" inputmode="numeric" placeholder="500">
+      <label>Порог участия (Br за месяц)</label><input id="raThreshold" inputmode="decimal" placeholder="25">
+      <button class="bigbtn" id="raSave" style="margin-top:16px">Сохранить</button>
+      <button class="closebtn" id="raDraw" style="color:var(--danger)">🎲 Разыграть сейчас и начать новый</button>
+    </div>
   </div>
 
   <!-- Раздел: Статистика -->
@@ -1241,7 +1258,7 @@
         <button data-bt="ref" class="${bonusTab === 'ref' ? 'on' : ''}">👥 Рефералы</button></div>`;
       let body;
       if (bonusTab === "raffle") {
-        body = `<div class="empty"><div class="circ">🏆</div><h3>Розыгрыши скоро</h3><p>Разыгрываем товары среди клиентов — совсем скоро здесь.</p></div>`;
+        body = `<div id="raffleWrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
       } else if (bonusTab === "ref") {
         body = referralHtml();
       } else {
@@ -1251,6 +1268,62 @@
       $("tab-bonus").querySelectorAll("[data-bt]").forEach(b => b.onclick = () => { bonusTab = b.dataset.bt; renderBonus(); });
       if (bonusTab === "wheel") renderWheel();
       else if (bonusTab === "ref") bindReferral();
+      else if (bonusTab === "raffle") renderRaffle();
+    }
+
+    // ----- Розыгрыши -----
+    let raffle = null;
+    const maskId = (id) => "•••" + ("" + id).slice(-3);
+    function raffleTimeLeft(ends) {
+      if (!ends) return "—";
+      const ms = new Date(ends.replace(" ", "T")) - new Date();
+      if (ms <= 0) return "скоро итоги";
+      const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000);
+      return d > 0 ? `${d} д ${h} ч` : `${h} ч`;
+    }
+    async function renderRaffle() {
+      try {
+        const r = await fetch("/api/raffle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        raffle = d.ok ? d.raffle : null;
+      } catch (e) { raffle = null; }
+      if (!raffle) { if ($("raffleWrap")) $("raffleWrap").innerHTML = `<p style="color:var(--hint)">Розыгрыш недоступен.</p>`; return; }
+      const r = raffle;
+      const prizeRows = [
+        ["🥇 1 место", r.prize1 || "—"], ["🥈 2 место", r.prize2 || "—"], ["🥉 3 место", `${r.prize3_coins} монет`],
+      ].map(x => `<div class="statrow"><span>${x[0]}</span><b>${esc(x[1])}</b></div>`).join("");
+      let cta;
+      if (r.entered) cta = `<div class="rbanner" style="border-color:#2e9e4f;color:#2e9e4f">✅ Вы участвуете! Ждём итогов.</div>`;
+      else if (r.eligible) cta = `<button class="bigbtn" id="raffleJoin">Участвовать</button>`;
+      else {
+        const pct = r.threshold ? Math.min(100, Math.round(r.spent / r.threshold * 100)) : 0;
+        cta = `<div class="wheel-bar"><i style="width:${pct}%"></i></div>
+          <div style="color:var(--hint);font-size:13px;margin-top:8px;text-align:center">Осталось потратить <b>${r.remaining.toFixed(2)} Br</b> до участия<br>(${r.spent.toFixed(2)} / ${r.threshold.toFixed(2)} Br за месяц)</div>`;
+      }
+      const wins = (r.last_winners || []).length
+        ? r.last_winners.map(w => `<div class="statrow"><span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${maskId(w.user_id)}</span><b>${esc(w.prize)}</b></div>`).join("")
+        : "";
+      $("raffleWrap").innerHTML = `
+        <div class="card-block" style="text-align:left">
+          <div style="font-weight:800;font-size:17px;margin-bottom:4px">🏆 ${esc(r.title)}</div>
+          <div style="color:var(--hint);font-size:13px;margin-bottom:12px">Участников: <b>${r.participants}</b> · до конца: <b>${raffleTimeLeft(r.ends_at)}</b></div>
+          ${prizeRows}
+          <div style="margin-top:14px">${cta}</div>
+        </div>
+        <div class="card-block" style="text-align:left">
+          <div style="font-weight:800;margin-bottom:6px">🎯 Как участвовать</div>
+          <p style="color:var(--hint);font-size:14px;margin:0">Совершайте покупки на сумму от <b>${r.threshold.toFixed(2)} Br</b> за месяц — и жмите «Участвовать». Победителей бот выбирает автоматически раз в месяц.</p>
+        </div>
+        ${wins ? `<div class="card-block" style="text-align:left"><div style="font-weight:800;margin-bottom:6px">🏅 Прошлый розыгрыш</div>${wins}</div>` : ""}`;
+      if ($("raffleJoin")) $("raffleJoin").onclick = joinRaffle;
+    }
+    async function joinRaffle() {
+      try {
+        const r = await fetch("/api/raffle/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (d.ok) { alertMsg("Поздравляем! Вы участвуете в розыгрыше 🎉"); renderRaffle(); }
+        else alertMsg(d.error === "not_eligible" ? "Ещё не набрана сумма для участия." : "Не удалось.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
     }
 
     function referralHtml() {
@@ -1674,6 +1747,45 @@
         <div class="stathead">Выручка по точкам</div><div class="statlist">${cityRows}</div>
         <div class="stathead">Мало на складе (≤3)</div><div class="statlist">${lowRows}</div>`;
     }
+
+    // ----- Розыгрыш (админ) -----
+    $("mRaffle").onclick = openRaffleAdmin;
+    $("raffleAdminClose").onclick = () => $("raffleAdminView").classList.remove("show");
+    async function openRaffleAdmin() {
+      $("raffleAdminView").classList.add("show");
+      try {
+        const r = await fetch("/api/admin/raffle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (!d.ok) return;
+        const ra = d.raffle;
+        $("raTitle").value = ra.title || ""; $("raPrize1").value = ra.prize1 || "";
+        $("raPrize2").value = ra.prize2 || ""; $("raPrize3").value = ra.prize3_coins || 500;
+        $("raThreshold").value = ra.threshold || 25;
+        $("raffleAdminInfo").innerHTML = `Участников: <b>${ra.participants}</b> · до конца: ${raffleTimeLeft(ra.ends_at)}`;
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+    $("raSave").onclick = async () => {
+      const body = { initData, title: $("raTitle").value, prize1: $("raPrize1").value, prize2: $("raPrize2").value,
+        prize3_coins: $("raPrize3").value, threshold: $("raThreshold").value };
+      $("raSave").disabled = true; $("raSave").textContent = "Сохраняю…";
+      try {
+        const r = await fetch("/api/admin/raffle/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        alertMsg(d.ok ? "Сохранено ✅" : "Не удалось сохранить.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("raSave").disabled = false; $("raSave").textContent = "Сохранить"; }
+    };
+    $("raDraw").onclick = () => {
+      const go = async () => {
+        try {
+          await fetch("/api/admin/raffle/draw", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+          alertMsg("Розыгрыш проведён, запущен новый ✅"); openRaffleAdmin();
+        } catch (e) { alertMsg("Сеть недоступна."); }
+      };
+      const ask = "Разыграть победителей сейчас и начать новый розыгрыш?";
+      if (tg && tg.showConfirm) tg.showConfirm(ask, ok => { if (ok) go(); });
+      else if (confirm(ask)) go();
+    };
 
     // ----- Настройки магазина -----
     $("mSettings").onclick = openSettings;

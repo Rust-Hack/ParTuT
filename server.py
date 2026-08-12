@@ -520,6 +520,87 @@ def api_wheel_spin():
                     "balance": db.get_coins(uid), "spins": w["spins"]})
 
 
+# ------------------- Розыгрыши (раз в месяц) -------------------
+
+def _draw_raffle(raffle):
+    """Выбирает победителей 1-3 мест, начисляет монеты за 3 место, уведомляет, завершает."""
+    uids = db.get_raffle_user_ids(raffle["id"])
+    random.shuffle(uids)
+    places = [(1, raffle["prize1"] or "Приз за 1 место", 0),
+              (2, raffle["prize2"] or "Приз за 2 место", 0),
+              (3, f"{raffle['prize3_coins']} монет", raffle["prize3_coins"])]
+    winners = []
+    for i, (place, prize, coins) in enumerate(places):
+        if i >= len(uids):
+            break
+        wid = uids[i]
+        winners.append({"place": place, "user_id": wid, "prize": prize})
+        if coins:
+            db.add_coins(wid, coins)
+        _notify_client(wid, f"🏆 Вы заняли {place} место в розыгрыше! Приз: {prize}. "
+                            + ("Монеты начислены." if coins else "Продавец свяжется с вами."))
+    db.finish_raffle(raffle["id"], winners)
+
+
+def _ensure_raffle():
+    """Ленивый планировщик: создаёт розыгрыш, если нет; разыгрывает и запускает новый, если срок вышел."""
+    r = db.get_active_raffle()
+    if not r:
+        db.create_raffle()
+        return
+    if r["ends_at"] and db._now_str() >= r["ends_at"]:
+        _draw_raffle(r)
+        db.create_raffle()
+
+
+def _raffle_public(r, uid):
+    spent = db.spent_since(uid, r["starts_at"])
+    threshold = round(r["threshold"] or 0, 2)
+    last = db.get_last_finished_raffle()
+    try:
+        last_winners = json.loads(last["winners"]) if last and last["winners"] else []
+    except (TypeError, ValueError):
+        last_winners = []
+    return {
+        "id": r["id"], "title": r["title"] or "Розыгрыш месяца",
+        "prize1": r["prize1"] or "", "prize2": r["prize2"] or "", "prize3_coins": r["prize3_coins"],
+        "ends_at": r["ends_at"], "threshold": threshold,
+        "participants": db.count_entries(r["id"]),
+        "spent": round(spent, 2), "remaining": round(max(0, threshold - spent), 2),
+        "eligible": spent >= threshold, "entered": db.is_entered(r["id"], uid),
+        "last_winners": last_winners,
+    }
+
+
+@app.route("/api/raffle", methods=["POST"])
+def api_raffle():
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+    db.ensure_user(uid)
+    _ensure_raffle()
+    return jsonify({"ok": True, "raffle": _raffle_public(db.get_active_raffle(), uid)})
+
+
+@app.route("/api/raffle/join", methods=["POST"])
+def api_raffle_join():
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+    _ensure_raffle()
+    r = db.get_active_raffle()
+    if db.is_entered(r["id"], uid):
+        return jsonify({"ok": True, "entered": True})
+    if db.spent_since(uid, r["starts_at"]) < (r["threshold"] or 0):
+        return jsonify({"ok": False, "error": "not_eligible"}), 400
+    db.add_raffle_entry(r["id"], uid)
+    return jsonify({"ok": True, "entered": True})
+
+
 # ============================================================
 #  АДМИН-API (только для тех, кто в ADMIN_IDS)
 # ============================================================
@@ -829,6 +910,59 @@ def api_admin_stats():
         "out_of_stock": out_of_stock,
         "products_total": len(products),
     }})
+
+
+# ------------------- Розыгрыш (админ) -------------------
+
+@app.route("/api/admin/raffle", methods=["POST"])
+def api_admin_raffle():
+    """Текущий розыгрыш для настройки."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    _ensure_raffle()
+    r = db.get_active_raffle()
+    return jsonify({"ok": True, "raffle": {
+        "id": r["id"], "title": r["title"] or "", "prize1": r["prize1"] or "", "prize2": r["prize2"] or "",
+        "prize3_coins": r["prize3_coins"], "threshold": round(r["threshold"] or 0, 2),
+        "ends_at": r["ends_at"], "participants": db.count_entries(r["id"]),
+    }})
+
+
+@app.route("/api/admin/raffle/update", methods=["POST"])
+def api_admin_raffle_update():
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    _ensure_raffle()
+    r = db.get_active_raffle()
+    for field in ("title", "prize1", "prize2"):
+        if field in data:
+            db.update_raffle_field(r["id"], field, str(data[field]).strip())
+    if "prize3_coins" in data:
+        try:
+            db.update_raffle_field(r["id"], "prize3_coins", max(0, int(data["prize3_coins"])))
+        except (TypeError, ValueError):
+            pass
+    if "threshold" in data:
+        try:
+            db.update_raffle_field(r["id"], "threshold", max(0.0, float(str(data["threshold"]).replace(",", "."))))
+        except (TypeError, ValueError):
+            pass
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/raffle/draw", methods=["POST"])
+def api_admin_raffle_draw():
+    """Разыграть текущий розыгрыш сейчас и запустить новый."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    _ensure_raffle()
+    r = db.get_active_raffle()
+    _draw_raffle(r)
+    db.create_raffle()
+    return jsonify({"ok": True})
 
 
 # ------------------- Настройки магазина -------------------
