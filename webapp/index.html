@@ -322,6 +322,8 @@
     .betbtn.on { background: var(--brand-neon); color: #06222b; border-color: var(--brand-neon); box-shadow: 0 0 12px var(--brand-glow); }
     .autobtn { width: 100%; margin-top: 8px; padding: 11px; border-radius: 12px; border: 1px solid rgba(74,222,255,.35); background: rgba(14,34,43,.6); color: var(--brand-neon); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
     .autobtn.on { background: rgba(255,61,129,.15); border-color: #ff3d81; color: #ff6b9d; box-shadow: 0 0 12px rgba(255,61,129,.4); }
+    .unrefx, .delx { border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
+    .delx { color: var(--danger); border-color: var(--danger); }
     .winbanner { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); text-align: center; pointer-events: none; z-index: 6; }
     .winbanner .wt { font-size: 26px; font-weight: 900; letter-spacing: 1px; color: #fff; text-shadow: 0 0 10px var(--brand-neon), 0 0 22px var(--brand-neon); animation: wtPop .5s ease; }
     .winbanner .wc { margin-top: 2px; font-size: 19px; font-weight: 800; color: var(--brand-neon); text-shadow: 0 0 8px var(--brand-glow); }
@@ -615,7 +617,26 @@
     <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
     <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
     <div class="prow" id="mGrant"><span>🎁 Начислить монеты/прокруты</span><span>›</span></div>
+    <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
+  </div>
+
+  <!-- Раздел: Пользователи (отвязка рефералов / удаление) -->
+  <div class="view" id="referralAdminView">
+    <div class="viewhead"><h2>👥 Пользователи</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="referralAdminClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <label>ID пользователя</label>
+      <input id="unrefId" inputmode="numeric" placeholder="напр. 6804152449">
+      <button class="bigbtn" id="unrefDo" style="margin-top:12px">Отвязать реферала</button>
+      <button class="closebtn" id="delUserDo" style="color:var(--danger);margin-top:6px">🗑 Удалить пользователя полностью</button>
+      <div id="unrefResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
+    </div>
+    <div class="card-block" style="text-align:left">
+      <div style="font-weight:800;margin-bottom:8px">Мои рефералы (<span id="myRefCount">0</span>)</div>
+      <div id="myRefList"></div>
+      <button class="closebtn" id="clearRefs" style="color:var(--danger);margin-top:8px">🗑 Отвязать всех моих</button>
+    </div>
   </div>
 
   <!-- Раздел: Начислить бонусы по id -->
@@ -2437,6 +2458,75 @@
         else alertMsg(d.error === "bad_id" ? "Неверный ID." : "Не удалось начислить.");
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("grDo").disabled = false; $("grDo").textContent = "Начислить"; }
+    };
+
+    // ----- Рефералы (отвязка) -----
+    $("mReferrals").onclick = openReferralsAdmin;
+    $("referralAdminClose").onclick = () => $("referralAdminView").classList.remove("show");
+    async function openReferralsAdmin() {
+      $("referralAdminView").classList.add("show");
+      $("unrefId").value = ""; $("unrefResult").textContent = "";
+      await loadMyReferrals();
+    }
+    async function loadMyReferrals() {
+      $("myRefList").innerHTML = `<div style="color:var(--hint)">Загрузка…</div>`;
+      try {
+        const r = await fetch("/api/admin/referrals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (!d.ok) { $("myRefList").innerHTML = `<div style="color:var(--hint)">Не удалось загрузить.</div>`; return; }
+        $("myRefCount").textContent = d.referrals.length;
+        $("myRefList").innerHTML = d.referrals.length
+          ? d.referrals.map(r => `<div class="statrow"><span>ID ${r.id} · <b style="color:${r.active ? '#2e9e4f' : 'var(--hint)'}">${r.active ? "активен" : "ждём заказ"}</b></span><span style="display:flex;gap:8px"><button class="unrefx" data-unref="${r.id}">Отвязать</button><button class="delx" data-del="${r.id}">Удалить</button></span></div>`).join("")
+          : `<div style="color:var(--hint)">Пока нет рефералов.</div>`;
+        document.querySelectorAll(".unrefx").forEach(b => b.onclick = () => doUnref(b.dataset.unref));
+        document.querySelectorAll(".delx").forEach(b => b.onclick = () => confirmDelUser(b.dataset.del));
+      } catch (e) { $("myRefList").innerHTML = `<div style="color:var(--hint)">Сеть недоступна.</div>`; }
+    }
+    async function doUnref(id) {
+      try {
+        const r = await fetch("/api/admin/referral/unlink", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id }) });
+        const d = await r.json();
+        if (d.ok) { alertMsg(d.unlinked ? "Отвязан ✅" : "У этого ID не было привязки."); loadMyReferrals(); }
+        else alertMsg(d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+    async function doDelUser(id) {
+      try {
+        const r = await fetch("/api/admin/user/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id }) });
+        const d = await r.json();
+        if (d.ok) { alertMsg(d.deleted ? "Пользователь удалён ✅" : "Пользователь не найден."); loadMyReferrals(); }
+        else alertMsg(d.error === "self" ? "Себя удалить нельзя." : d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+    function confirmDelUser(id) {
+      const msg = `Удалить пользователя ID ${id}? Он потеряет монеты, прокруты и 18+. Заказы останутся в истории.`;
+      if (tg && tg.showConfirm) tg.showConfirm(msg, ok => { if (ok) doDelUser(id); });
+      else if (confirm(msg)) doDelUser(id);
+    }
+    $("unrefDo").onclick = async () => {
+      const id = $("unrefId").value.trim();
+      if (!id) { alertMsg("Введите ID."); return; }
+      $("unrefDo").disabled = true; $("unrefDo").textContent = "Отвязываю…";
+      await doUnref(id);
+      $("unrefDo").disabled = false; $("unrefDo").textContent = "Отвязать реферала"; $("unrefId").value = "";
+    };
+    $("delUserDo").onclick = () => {
+      const id = $("unrefId").value.trim();
+      if (!id) { alertMsg("Введите ID."); return; }
+      confirmDelUser(id);
+      $("unrefId").value = "";
+    };
+    $("clearRefs").onclick = () => {
+      const go = async () => {
+        try {
+          const r = await fetch("/api/admin/referral/clear", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+          const d = await r.json();
+          if (d.ok) { alertMsg(`Отвязано: ${d.count} ✅`); loadMyReferrals(); }
+          else alertMsg("Не удалось.");
+        } catch (e) { alertMsg("Сеть недоступна."); }
+      };
+      if (tg && tg.showConfirm) tg.showConfirm("Отвязать всех ваших рефералов?", ok => { if (ok) go(); });
+      else if (confirm("Отвязать всех ваших рефералов?")) go();
     };
 
     // ----- Настройки магазина -----

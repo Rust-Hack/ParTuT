@@ -745,6 +745,44 @@ def set_ref_activated(user_id):
     conn.close()
 
 
+def unlink_referral(user_id):
+    """Отвязывает реферала: referred_by → NULL, ref_activated → 0.
+    Возвращает True, если связь была и снялась (можно снова привязать)."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET referred_by = NULL, ref_activated = 0 "
+                   "WHERE user_id = %s AND referred_by IS NOT NULL"), (user_id,))
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def clear_referrals_of(ref_id):
+    """Отвязывает ВСЕХ рефералов пригласившего ref_id. Возвращает число отвязанных."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET referred_by = NULL, ref_activated = 0 WHERE referred_by = %s"), (ref_id,))
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
+def delete_user(user_id):
+    """Полностью удаляет запись пользователя (монеты, 18+, прокруты, реф-связь).
+    Заказы остаются в истории. Возвращает True, если пользователь был удалён."""
+    conn = connect()
+    cur = conn.cursor()
+    # Отвязать тех, кого он приглашал (чтобы не осталось «висячих» ссылок на удалённого).
+    cur.execute(_q("UPDATE users SET referred_by = NULL, ref_activated = 0 WHERE referred_by = %s"), (user_id,))
+    cur.execute(_q("DELETE FROM users WHERE user_id = %s"), (user_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
 WHEEL_STEP = 5   # сколько купленных товаров нужно на один прокрут колеса
 
 

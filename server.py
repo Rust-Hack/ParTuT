@@ -533,6 +533,56 @@ def api_admin_grant():
     return jsonify({"ok": True, "coins": db.get_coins(target), "spins": w["spins"]})
 
 
+@app.route("/api/admin/referrals", methods=["POST"])
+def api_admin_referrals():
+    """Список рефералов текущего админа (для управления/отвязки)."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    rows = db.list_referrals(int(admin["id"]))
+    return jsonify({"ok": True, "referrals": [{"id": r["user_id"], "active": bool(r["ref_activated"])} for r in rows]})
+
+
+@app.route("/api/admin/referral/unlink", methods=["POST"])
+def api_admin_referral_unlink():
+    """Отвязать конкретного реферала по его id (referred_by → пусто)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        target = int(data.get("user_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    return jsonify({"ok": True, "unlinked": db.unlink_referral(target)})
+
+
+@app.route("/api/admin/referral/clear", methods=["POST"])
+def api_admin_referral_clear():
+    """Отвязать ВСЕХ рефералов текущего админа."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    return jsonify({"ok": True, "count": db.clear_referrals_of(int(admin["id"]))})
+
+
+@app.route("/api/admin/user/delete", methods=["POST"])
+def api_admin_user_delete():
+    """Полностью удалить пользователя по id (монеты/18+/прокруты/реф-связь)."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        target = int(data.get("user_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if target == int(admin["id"]):
+        return jsonify({"ok": False, "error": "self"}), 400     # себя не удаляем
+    return jsonify({"ok": True, "deleted": db.delete_user(target)})
+
+
 @app.route("/api/wheel/spin", methods=["POST"])
 def api_wheel_spin():
     """Прокрут колеса: списываем прокрут, выбираем приз по весам, начисляем монеты."""
