@@ -640,6 +640,18 @@
       <button class="closebtn" id="delUserDo" style="color:var(--danger);margin-top:6px">🗑 Удалить пользователя полностью</button>
       <div id="unrefResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
     </div>
+    <div class="card-block form">
+      <div style="font-weight:800;margin-bottom:8px">💰 Монеты пользователя</div>
+      <label>ID пользователя</label>
+      <input id="coinUserId" inputmode="numeric" placeholder="напр. 6804152449">
+      <label>Количество монет</label>
+      <input id="coinAmount" inputmode="numeric" placeholder="напр. 100">
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="bigbtn" id="coinAdd" style="flex:1">➕ Добавить</button>
+        <button class="bigbtn" id="coinRemove" style="flex:1;background:var(--danger)">➖ Убрать</button>
+      </div>
+      <div id="coinResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
+    </div>
     <div class="card-block" style="text-align:left">
       <div style="font-weight:800;margin-bottom:8px">Все пользователи (<span id="allUsersCount">0</span>)</div>
       <div class="search" style="margin-bottom:10px"><input id="userSearch" inputmode="numeric" placeholder="Поиск по ID…"></div>
@@ -2481,9 +2493,28 @@
     async function openReferralsAdmin() {
       $("referralAdminView").classList.add("show");
       $("unrefId").value = ""; $("unrefResult").textContent = ""; $("userSearch").value = "";
+      $("coinUserId").value = ""; $("coinAmount").value = ""; $("coinResult").textContent = "";
       await Promise.all([loadAllUsers(), loadMyReferrals()]);
     }
     function refreshUsersAdmin() { loadAllUsers(); loadMyReferrals(); }
+    async function adjustCoins(sign) {
+      const id = $("coinUserId").value.trim();
+      const amt = parseInt($("coinAmount").value, 10);
+      if (!id) { alertMsg("Введите ID."); return; }
+      if (!amt || amt <= 0) { alertMsg("Введите количество монет."); return; }
+      const delta = sign * amt;
+      try {
+        const r = await fetch("/api/admin/coins/adjust", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id, delta }) });
+        const d = await r.json();
+        if (d.ok) {
+          $("coinResult").textContent = `Готово ✅ Баланс ID ${id}: ${d.coins} 🪙`;
+          alertMsg(sign > 0 ? "Добавлено ✅" : "Убрано ✅");
+          loadAllUsers();
+        } else alertMsg(d.error === "bad_input" ? "Проверьте ID и количество." : "Не удалось.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+    $("coinAdd").onclick = () => adjustCoins(1);
+    $("coinRemove").onclick = () => adjustCoins(-1);
     async function loadAllUsers() {
       const q = $("userSearch").value.trim();
       $("allUsersList").innerHTML = `<div style="color:var(--hint)">Загрузка…</div>`;

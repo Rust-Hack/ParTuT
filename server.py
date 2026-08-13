@@ -544,6 +544,22 @@ def api_admin_referrals():
     return jsonify({"ok": True, "referrals": [{"id": r["user_id"], "active": bool(r["ref_activated"])} for r in rows]})
 
 
+@app.route("/api/admin/coins/adjust", methods=["POST"])
+def api_admin_coins_adjust():
+    """Изменить баланс монет пользователя на delta (может быть отрицательным). Не уходит в минус."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        target = int(data.get("user_id"))
+        delta = int(data.get("delta"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+    db.ensure_user(target)
+    db.add_coins(target, delta)          # add_coins клампит снизу нулём
+    return jsonify({"ok": True, "coins": db.get_coins(target)})
+
+
 @app.route("/api/admin/users", methods=["POST"])
 def api_admin_users():
     """Список всех пользователей (поиск по id) — для админа."""

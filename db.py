@@ -597,10 +597,12 @@ def get_user_row(user_id):
 
 
 def add_coins(user_id, n):
+    """Меняет баланс на n (может быть отрицательным), не опускаясь ниже нуля."""
     ensure_user(user_id)
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("UPDATE users SET coins = COALESCE(coins, 0) + %s WHERE user_id = %s"), (int(n), user_id))
+    cur.execute(_q(f"UPDATE users SET coins = {GREATEST}(0, COALESCE(coins, 0) + %s) WHERE user_id = %s"),
+                (int(n), user_id))
     conn.commit()
     conn.close()
 
