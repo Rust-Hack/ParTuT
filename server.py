@@ -29,7 +29,7 @@ from flask import Flask, jsonify, request, Response, send_from_directory
 
 import db
 import notifications
-from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, CITIES, CATEGORIES
+from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, CITIES, CATEGORIES
 
 db.init_db()
 
@@ -119,6 +119,33 @@ def get_super(init_data):
     if not user or not user.get("id") or not is_super_admin(int(user["id"])):
         return None
     return user
+
+
+def _admin_display(admin):
+    return admin.get("username") or admin.get("first_name") or str(admin.get("id"))
+
+
+def _notify_supers_request(rid, admin, summary):
+    """Шлёт супер-админам запрос на подтверждение с кнопками Разрешить/Отклонить."""
+    text = (f"🔐 Запрос #{rid} на подтверждение\n"
+            f"От админа: {_admin_display(admin)} (id {admin['id']})\n\n{summary}")
+    kb = telebot.types.InlineKeyboardMarkup()
+    kb.add(telebot.types.InlineKeyboardButton("✅ Разрешить", callback_data=f"areq:ok:{rid}"),
+           telebot.types.InlineKeyboardButton("✖️ Отклонить", callback_data=f"areq:no:{rid}"))
+    for sid in SUPER_ADMIN_IDS:
+        try:
+            tg.send_message(sid, text, reply_markup=kb)
+        except Exception as e:
+            print(f"Не смог уведомить супер-админа {sid}: {e}")
+
+
+def _gate(admin, action, payload, summary):
+    """Супер-админ — выполняет сразу; обычный админ — создаёт заявку на подтверждение."""
+    if is_super_admin(int(admin["id"])):
+        return jsonify({"ok": True, "pending": False, "result": db.execute_admin_request(action, payload)})
+    rid = db.create_admin_request(int(admin["id"]), _admin_display(admin), action, payload, summary)
+    _notify_supers_request(rid, admin, summary)
+    return jsonify({"ok": True, "pending": True, "request_id": rid})
 
 
 # ============================================================
@@ -505,19 +532,20 @@ def api_wheel():
 def api_admin_wheel_grant():
     """Тест: начислить админу 3 прокрута колеса."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = get_super(data.get("initData", ""))
+    admin = get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     uid = int(admin["id"])
-    db.add_spins(uid, 3)
-    return jsonify({"ok": True, "spins": db.get_wheel(uid)["spins"]})
+    return _gate(admin, "wheel_grant_self", {"user_id": uid, "spins": 3},
+                 f"+3 прокрута колеса админу id {uid}")
 
 
 @app.route("/api/admin/grant", methods=["POST"])
 def api_admin_grant():
-    """Начислить пользователю монеты и/или прокруты колеса (по id). Только супер-админ."""
+    """Начислить пользователю монеты и/или прокруты колеса (по id). Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_super(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         target = int(data.get("user_id"))
@@ -532,13 +560,8 @@ def api_admin_grant():
         spins = int(data.get("spins") or 0)
     except (TypeError, ValueError):
         spins = 0
-    db.ensure_user(target)
-    if coins:
-        db.add_coins(target, coins)
-    if spins:
-        db.add_spins(target, spins)
-    w = db.get_wheel(target)
-    return jsonify({"ok": True, "coins": db.get_coins(target), "spins": w["spins"]})
+    summary = f"Начислить id {target}: {coins} 🪙" + (f" + {spins} прокрутов" if spins else "")
+    return _gate(admin, "grant", {"user_id": target, "coins": coins, "spins": spins}, summary)
 
 
 @app.route("/api/admin/referrals", methods=["POST"])
@@ -554,25 +577,27 @@ def api_admin_referrals():
 
 @app.route("/api/admin/coins/adjust", methods=["POST"])
 def api_admin_coins_adjust():
-    """Изменить баланс монет пользователя на delta (может быть отрицательным). Только супер-админ."""
+    """Изменить баланс монет пользователя на delta (±). Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_super(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         target = int(data.get("user_id"))
         delta = int(data.get("delta"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_input"}), 400
-    db.ensure_user(target)
-    db.add_coins(target, delta)          # add_coins клампит снизу нулём
-    return jsonify({"ok": True, "coins": db.get_coins(target)})
+    if is_super_admin(target) and not is_super_admin(int(admin["id"])):
+        return jsonify({"ok": False, "error": "protected"}), 403     # монеты супер-админа не трогаем
+    summary = (f"Убрать {abs(delta)} 🪙 у id {target}" if delta < 0 else f"Начислить {delta} 🪙 id {target}")
+    return _gate(admin, "coins_adjust", {"user_id": target, "delta": delta}, summary)
 
 
 @app.route("/api/admin/users", methods=["POST"])
 def api_admin_users():
-    """Список всех пользователей (поиск по id) — только супер-админ."""
+    """Список всех пользователей (поиск по id) — для админа (просмотр)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_super(data.get("initData", "")):
+    if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     users, total = db.list_users(str(data.get("search") or ""))
     for u in users:
@@ -582,9 +607,10 @@ def api_admin_users():
 
 @app.route("/api/admin/referral/unlink", methods=["POST"])
 def api_admin_referral_unlink():
-    """Отвязать конкретного реферала по его id (referred_by → пусто). Только супер-админ."""
+    """Отвязать конкретного реферала по его id. Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_super(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         target = int(data.get("user_id"))
@@ -592,24 +618,25 @@ def api_admin_referral_unlink():
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if is_super_admin(target):
         return jsonify({"ok": False, "error": "protected"}), 403     # супер-админа не трогаем
-    return jsonify({"ok": True, "unlinked": db.unlink_referral(target)})
+    return _gate(admin, "referral_unlink", {"user_id": target}, f"Отвязать реферала id {target}")
 
 
 @app.route("/api/admin/referral/clear", methods=["POST"])
 def api_admin_referral_clear():
-    """Отвязать ВСЕХ рефералов текущего супер-админа."""
+    """Отвязать ВСЕХ рефералов текущего админа. Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = get_super(data.get("initData", ""))
+    admin = get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    return jsonify({"ok": True, "count": db.clear_referrals_of(int(admin["id"]))})
+    uid = int(admin["id"])
+    return _gate(admin, "referral_clear", {"requester_id": uid}, f"Отвязать ВСЕХ рефералов админа id {uid}")
 
 
 @app.route("/api/admin/user/delete", methods=["POST"])
 def api_admin_user_delete():
-    """Полностью удалить пользователя по id (монеты/18+/прокруты/реф-связь). Только супер-админ."""
+    """Полностью удалить пользователя по id. Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = get_super(data.get("initData", ""))
+    admin = get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -620,7 +647,7 @@ def api_admin_user_delete():
         return jsonify({"ok": False, "error": "self"}), 400     # себя не удаляем
     if is_super_admin(target):
         return jsonify({"ok": False, "error": "protected"}), 403     # супер-админа удалить нельзя
-    return jsonify({"ok": True, "deleted": db.delete_user(target)})
+    return _gate(admin, "user_delete", {"user_id": target}, f"Удалить пользователя id {target}")
 
 
 @app.route("/api/wheel/spin", methods=["POST"])

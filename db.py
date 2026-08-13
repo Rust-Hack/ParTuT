@@ -137,6 +137,20 @@ def init_db():
         )
     """)
 
+    # Заявки обычных админов на чувствительные операции — ждут подтверждения супер-админа.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS admin_requests (
+            id             {ID_COL},
+            requester_id   BIGINT,
+            requester_name TEXT,
+            action         TEXT,
+            payload        TEXT,
+            summary        TEXT,
+            status         TEXT DEFAULT 'pending',
+            created_at     TEXT
+        )
+    """)
+
     cur.execute(f"""
         CREATE TABLE IF NOT EXISTS orders (
             id              {ID_COL},
@@ -828,6 +842,66 @@ def delete_user(user_id):
     conn.commit()
     conn.close()
     return deleted
+
+
+# --- Заявки на подтверждение супер-админом (чувствительные операции обычных админов) ---
+
+def create_admin_request(requester_id, requester_name, action, payload, summary):
+    """Создаёт заявку в статусе pending. Возвращает её id."""
+    created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn = connect()
+    cur = conn.cursor()
+    rid = _insert_id(cur,
+        """INSERT INTO admin_requests (requester_id, requester_name, action, payload, summary, status, created_at)
+           VALUES (%s, %s, %s, %s, %s, 'pending', %s)""",
+        (requester_id, requester_name, action, json.dumps(payload), summary, created))
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def get_admin_request(rid):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM admin_requests WHERE id = %s"), (rid,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def set_admin_request_status_if(rid, new_status, allowed):
+    """Атомарно меняет статус заявки только из allowed (approve/reject ровно один раз)."""
+    conn = connect()
+    cur = conn.cursor()
+    marks = ",".join(["%s"] * len(allowed))
+    cur.execute(_q(f"UPDATE admin_requests SET status = %s WHERE id = %s AND status IN ({marks})"),
+                (new_status, rid, *allowed))
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def execute_admin_request(action, payload):
+    """Выполняет одобренную операцию. Возвращает dict-результат."""
+    if action == "coins_adjust":
+        t = int(payload["user_id"]); add_coins(t, int(payload["delta"]))
+        return {"coins": get_coins(t)}
+    if action == "grant":
+        t = int(payload["user_id"]); ensure_user(t)
+        if int(payload.get("coins", 0)): add_coins(t, int(payload["coins"]))
+        if int(payload.get("spins", 0)): add_spins(t, int(payload["spins"]))
+        return {"coins": get_coins(t), "spins": get_wheel(t)["spins"]}
+    if action == "user_delete":
+        return {"deleted": delete_user(int(payload["user_id"]))}
+    if action == "referral_unlink":
+        return {"unlinked": unlink_referral(int(payload["user_id"]))}
+    if action == "referral_clear":
+        return {"count": clear_referrals_of(int(payload["requester_id"]))}
+    if action == "wheel_grant_self":
+        t = int(payload["user_id"]); add_spins(t, int(payload.get("spins", 3)))
+        return {"spins": get_wheel(t)["spins"]}
+    return {}
 
 
 WHEEL_STEP = 5   # сколько купленных товаров нужно на один прокрут колеса

@@ -23,7 +23,7 @@ load_dotenv()
 # Общие настройки и справочники берём из config.py (их же использует server.py).
 from config import (
     BOT_TOKEN, WEBAPP_URL, CATEGORIES, CITIES,
-    ADMIN_IDS, is_admin,
+    ADMIN_IDS, is_admin, is_super_admin,
 )
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -174,12 +174,60 @@ def on_button(call):
     chat_id = call.message.chat.id
     user_id = call.from_user.id
 
+    # Подтверждение заявок обычных админов — только супер-админ.
+    if data.startswith("areq:"):
+        handle_approval(call, user_id, data)
+        return
+
     # Все админские кнопки (adm..., admord...) — только для админов/продавцов.
     if data.startswith("adm") and is_admin(user_id):
         handle_admin_callback(call, chat_id, user_id, data)
         return
 
     bot.answer_callback_query(call.id)
+
+
+def handle_approval(call, user_id, data):
+    """Супер-админ нажал Разрешить/Отклонить на заявке обычного админа."""
+    if not is_super_admin(user_id):
+        bot.answer_callback_query(call.id, "Только для супер-админа", show_alert=True)
+        return
+    try:
+        _, decision, rid = data.split(":")
+        rid = int(rid)
+    except (ValueError, TypeError):
+        bot.answer_callback_query(call.id)
+        return
+    req = db.get_admin_request(rid)
+    if not req:
+        bot.answer_callback_query(call.id, "Заявка не найдена", show_alert=True)
+        return
+    if req["status"] != "pending":
+        bot.answer_callback_query(call.id, "Уже обработано", show_alert=True)
+        return
+
+    if decision == "ok":
+        if not db.set_admin_request_status_if(rid, "approved", ["pending"]):
+            bot.answer_callback_query(call.id, "Уже обработано", show_alert=True)
+            return
+        try:
+            db.execute_admin_request(req["action"], json.loads(req["payload"]))
+        except Exception as e:
+            print(f"Ошибка выполнения заявки #{rid}: {e}")
+        bot.answer_callback_query(call.id, "Разрешено ✅")
+        _safe_send(req["requester_id"], f"✅ Ваш запрос одобрен:\n{req['summary']}")
+        head = f"✅ РАЗРЕШЕНО #{rid}\nОт: {req['requester_name']}\n{req['summary']}"
+    else:
+        if not db.set_admin_request_status_if(rid, "rejected", ["pending"]):
+            bot.answer_callback_query(call.id, "Уже обработано", show_alert=True)
+            return
+        bot.answer_callback_query(call.id, "Отклонено")
+        _safe_send(req["requester_id"], f"✖️ Ваш запрос отклонён:\n{req['summary']}")
+        head = f"✖️ ОТКЛОНЕНО #{rid}\nОт: {req['requester_name']}\n{req['summary']}"
+    try:
+        bot.edit_message_text(head, call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
 
 
 # ============================================================

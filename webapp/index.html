@@ -2010,7 +2010,8 @@
         try {
           const r = await fetch("/api/admin/wheel/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
           const d = await r.json();
-          if (d.ok) { wheel.spins = d.spins; renderWheel(); }
+          if (handledPending(d)) return;
+          if (d.ok) { wheel.spins = d.result.spins; renderWheel(); }
         } catch (e) { alertMsg("Сеть недоступна."); }
       };
     }
@@ -2330,12 +2331,13 @@
     const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
 
     async function openAdmin() {
-      // Начисление/списание монет и управление пользователями — только супер-админ.
-      const superOnly = !!(me && me.is_super);
-      if ($("mGrant")) $("mGrant").style.display = superOnly ? "" : "none";
-      if ($("mReferrals")) $("mReferrals").style.display = superOnly ? "" : "none";
       await fetchBrands();               // нужно разделам «Товары» и «Бренды»
       $("adminView").classList.add("show");
+    }
+    // Обычный админ инициирует чувствительную операцию → ждёт подтверждения супер-админа.
+    function handledPending(d) {
+      if (d && d.ok && d.pending) { alertMsg("⏳ Запрос отправлен супер-админу на подтверждение."); return true; }
+      return false;
     }
     $("adminClose").onclick = () => $("adminView").classList.remove("show");
 
@@ -2496,7 +2498,8 @@
       try {
         const r = await fetch("/api/admin/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const d = await r.json();
-        if (d.ok) { $("grResult").textContent = `Готово ✅ Баланс: ${d.coins} 🪙, прокрутов: ${d.spins}`; alertMsg("Начислено ✅"); }
+        if (handledPending(d)) { $("grResult").textContent = "⏳ Ждёт подтверждения супер-админа."; }
+        else if (d.ok) { $("grResult").textContent = `Готово ✅ Баланс: ${d.result.coins} 🪙, прокрутов: ${d.result.spins}`; alertMsg("Начислено ✅"); }
         else alertMsg(d.error === "bad_id" ? "Неверный ID." : "Не удалось начислить.");
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("grDo").disabled = false; $("grDo").textContent = "Начислить"; }
@@ -2539,11 +2542,12 @@
       try {
         const r = await fetch("/api/admin/coins/adjust", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id, delta }) });
         const d = await r.json();
+        if (handledPending(d)) { $("coinResult").textContent = "⏳ Ждёт подтверждения супер-админа."; return; }
         if (d.ok) {
-          $("coinResult").textContent = `Готово ✅ Баланс ID ${id}: ${d.coins} 🪙`;
+          $("coinResult").textContent = `Готово ✅ Баланс ID ${id}: ${d.result.coins} 🪙`;
           alertMsg(sign > 0 ? "Добавлено ✅" : "Убрано ✅");
           loadAllUsers();
-        } else alertMsg(d.error === "bad_input" ? "Проверьте ID и количество." : "Не удалось.");
+        } else alertMsg(d.error === "protected" ? "🛡 Монеты супер-админа трогать нельзя." : d.error === "bad_input" ? "Проверьте ID и количество." : "Не удалось.");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
     $("coinAdd").onclick = () => adjustCoins(1);
@@ -2590,7 +2594,8 @@
       try {
         const r = await fetch("/api/admin/referral/unlink", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id }) });
         const d = await r.json();
-        if (d.ok) { alertMsg(d.unlinked ? "Отвязан ✅" : "У этого ID не было привязки."); refreshUsersAdmin(); }
+        if (handledPending(d)) return;
+        if (d.ok) { alertMsg(d.result.unlinked ? "Отвязан ✅" : "У этого ID не было привязки."); refreshUsersAdmin(); }
         else alertMsg(d.error === "protected" ? "🛡 Супер-админа трогать нельзя." : d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
@@ -2598,7 +2603,8 @@
       try {
         const r = await fetch("/api/admin/user/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id }) });
         const d = await r.json();
-        if (d.ok) { alertMsg(d.deleted ? "Пользователь удалён ✅" : "Пользователь не найден."); refreshUsersAdmin(); }
+        if (handledPending(d)) return;
+        if (d.ok) { alertMsg(d.result.deleted ? "Пользователь удалён ✅" : "Пользователь не найден."); refreshUsersAdmin(); }
         else alertMsg(d.error === "protected" ? "🛡 Супер-админа удалить нельзя." : d.error === "self" ? "Себя удалить нельзя." : d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
@@ -2625,7 +2631,8 @@
         try {
           const r = await fetch("/api/admin/referral/clear", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
           const d = await r.json();
-          if (d.ok) { alertMsg(`Отвязано: ${d.count} ✅`); refreshUsersAdmin(); }
+          if (handledPending(d)) return;
+          if (d.ok) { alertMsg(`Отвязано: ${d.result.count} ✅`); refreshUsersAdmin(); }
           else alertMsg("Не удалось.");
         } catch (e) { alertMsg("Сеть недоступна."); }
       };
