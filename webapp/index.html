@@ -332,6 +332,10 @@
     .uacts { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
     .superbadge { font-size: 10px; font-weight: 800; color: var(--brand-neon); border: 1px solid var(--brand-neon); border-radius: 6px; padding: 1px 5px; text-shadow: 0 0 6px var(--brand-glow); white-space: nowrap; }
     .uprotected { font-size: 12px; color: var(--hint); font-style: italic; }
+    .idcopy { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+    .idcopy:active { color: var(--brand-neon); }
+    .minitoast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%) translateY(10px); background: rgba(8,16,20,.92); color: #fff; padding: 9px 16px; border-radius: 999px; font-size: 13px; font-weight: 600; box-shadow: 0 4px 16px rgba(0,0,0,.4); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 100; }
+    .minitoast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
     .winbanner { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); text-align: center; pointer-events: none; z-index: 6; }
     .winbanner .wt { font-size: 26px; font-weight: 900; letter-spacing: 1px; color: #fff; text-shadow: 0 0 10px var(--brand-neon), 0 0 22px var(--brand-neon); animation: wtPop .5s ease; }
     .winbanner .wc { margin-top: 2px; font-size: 19px; font-weight: 800; color: var(--brand-neon); text-shadow: 0 0 8px var(--brand-glow); }
@@ -2499,6 +2503,22 @@
       await Promise.all([loadAllUsers(), loadMyReferrals()]);
     }
     function refreshUsersAdmin() { loadAllUsers(); loadMyReferrals(); }
+    function toast(msg) {
+      let t = document.getElementById("miniToast");
+      if (!t) { t = document.createElement("div"); t.id = "miniToast"; t.className = "minitoast"; document.body.appendChild(t); }
+      t.textContent = msg; t.classList.add("show");
+      clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 1400);
+    }
+    // Тап по ID: копируем в буфер И подставляем во все админ-поля (монеты/отвязка/удаление).
+    function copyUserId(id) {
+      try { navigator.clipboard && navigator.clipboard.writeText(String(id)); } catch (e) {}
+      ["coinUserId", "unrefId"].forEach(f => { if ($(f)) $(f).value = id; });
+      haptic("impact", "light");
+      toast(`ID ${id} скопирован ✓`);
+    }
+    function bindIdCopy(scope) {
+      (scope || document).querySelectorAll(".idcopy").forEach(el => el.onclick = () => copyUserId(el.dataset.copy));
+    }
     async function adjustCoins(sign) {
       const id = $("coinUserId").value.trim();
       const amt = parseInt($("coinAmount").value, 10);
@@ -2532,11 +2552,12 @@
           const acts = u.super
             ? `<span class="uprotected">защищён</span>`
             : `${u.referred_by ? `<button class="unrefx" data-unref="${u.id}">Отвязать</button>` : ""}<button class="delx" data-del="${u.id}">Удалить</button>`;
-          return `<div class="urow"><div class="uinfo"><b>${who}</b><small>ID ${u.id} · ${meta}</small></div><div class="uacts">${acts}</div></div>`;
+          return `<div class="urow"><div class="uinfo"><b>${who}</b><small><span class="idcopy" data-copy="${u.id}">ID ${u.id} 📋</span> · ${meta}</small></div><div class="uacts">${acts}</div></div>`;
         }).join("")
           + ((d.shown < d.total && !q) ? `<div style="color:var(--hint);font-size:12px;margin-top:8px">Показаны последние ${d.shown} из ${d.total} — уточните поиск по ID.</div>` : "");
         document.querySelectorAll("#allUsersList .unrefx").forEach(b => b.onclick = () => doUnref(b.dataset.unref));
         document.querySelectorAll("#allUsersList .delx").forEach(b => b.onclick = () => confirmDelUser(b.dataset.del));
+        bindIdCopy($("allUsersList"));
       } catch (e) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Сеть недоступна.</div>`; }
     }
     async function loadMyReferrals() {
@@ -2547,10 +2568,11 @@
         if (!d.ok) { $("myRefList").innerHTML = `<div style="color:var(--hint)">Не удалось загрузить.</div>`; return; }
         $("myRefCount").textContent = d.referrals.length;
         $("myRefList").innerHTML = d.referrals.length
-          ? d.referrals.map(r => `<div class="statrow"><span>ID ${r.id} · <b style="color:${r.active ? '#2e9e4f' : 'var(--hint)'}">${r.active ? "активен" : "ждём заказ"}</b></span><span style="display:flex;gap:8px"><button class="unrefx" data-unref="${r.id}">Отвязать</button><button class="delx" data-del="${r.id}">Удалить</button></span></div>`).join("")
+          ? d.referrals.map(r => `<div class="statrow"><span><span class="idcopy" data-copy="${r.id}">ID ${r.id} 📋</span> · <b style="color:${r.active ? '#2e9e4f' : 'var(--hint)'}">${r.active ? "активен" : "ждём заказ"}</b></span><span style="display:flex;gap:8px"><button class="unrefx" data-unref="${r.id}">Отвязать</button><button class="delx" data-del="${r.id}">Удалить</button></span></div>`).join("")
           : `<div style="color:var(--hint)">Пока нет рефералов.</div>`;
-        document.querySelectorAll(".unrefx").forEach(b => b.onclick = () => doUnref(b.dataset.unref));
-        document.querySelectorAll(".delx").forEach(b => b.onclick = () => confirmDelUser(b.dataset.del));
+        document.querySelectorAll("#myRefList .unrefx").forEach(b => b.onclick = () => doUnref(b.dataset.unref));
+        document.querySelectorAll("#myRefList .delx").forEach(b => b.onclick = () => confirmDelUser(b.dataset.del));
+        bindIdCopy($("myRefList"));
       } catch (e) { $("myRefList").innerHTML = `<div style="color:var(--hint)">Сеть недоступна.</div>`; }
     }
     async function doUnref(id) {
