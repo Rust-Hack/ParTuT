@@ -113,14 +113,6 @@ def get_admin(init_data):
     return user
 
 
-def get_super(init_data):
-    """Только СУПЕР-админ: начисление/списание монет, удаление юзеров, отвязка рефералов."""
-    user = get_user(init_data)
-    if not user or not user.get("id") or not is_super_admin(int(user["id"])):
-        return None
-    return user
-
-
 def _admin_display(admin):
     return admin.get("username") or admin.get("first_name") or str(admin.get("id"))
 

@@ -171,7 +171,7 @@ def on_photo(message):
 @bot.callback_query_handler(func=lambda call: True)
 def on_button(call):
     data = call.data
-    chat_id = call.message.chat.id
+    chat_id = call.message.chat.id if call.message else call.from_user.id   # message=None для старых (>48ч)
     user_id = call.from_user.id
 
     # Подтверждение заявок обычных админов — только супер-админ.
@@ -225,7 +225,8 @@ def handle_approval(call, user_id, data):
         _safe_send(req["requester_id"], f"✖️ Ваш запрос отклонён:\n{req['summary']}")
         head = f"✖️ ОТКЛОНЕНО #{rid}\nОт: {req['requester_name']}\n{req['summary']}"
     try:
-        bot.edit_message_text(head, call.message.chat.id, call.message.message_id)
+        if call.message:
+            bot.edit_message_text(head, call.message.chat.id, call.message.message_id)
     except Exception:
         pass
 
