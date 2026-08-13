@@ -594,7 +594,12 @@ def api_admin_grant():
         spins = int(data.get("spins") or 0)
     except (TypeError, ValueError):
         spins = 0
-    summary = f"Начислить id {target}: {coins} 🪙" + (f" + {spins} прокрутов" if spins else "")
+    parts = []
+    if coins:
+        parts.append(f"{'убрать' if coins < 0 else 'начислить'} {abs(coins)} 🪙")
+    if spins:
+        parts.append(f"{'убрать' if spins < 0 else 'начислить'} {abs(spins)} прокрутов")
+    summary = f"Пользователю id {target}: " + (", ".join(parts) if parts else "—")
     return _gate(admin, "grant", {"user_id": target, "coins": coins, "spins": spins}, summary)
 
 

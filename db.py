@@ -944,11 +944,11 @@ def add_wheel_progress(user_id, n):
 
 
 def add_spins(user_id, n):
-    """Начислить прокруты напрямую (для теста админом)."""
+    """Меняет число прокрутов на n (может быть отрицательным), не ниже нуля."""
     ensure_user(user_id)
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("UPDATE users SET wheel_spins = COALESCE(wheel_spins, 0) + %s WHERE user_id = %s"),
+    cur.execute(_q(f"UPDATE users SET wheel_spins = {GREATEST}(0, COALESCE(wheel_spins, 0) + %s) WHERE user_id = %s"),
                 (int(n), user_id))
     conn.commit()
     conn.close()

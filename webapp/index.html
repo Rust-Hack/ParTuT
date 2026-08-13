@@ -630,7 +630,6 @@
     <div class="prow" id="mBrands"><span>🏷 Бренды и вкусы</span><span>›</span></div>
     <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
     <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
-    <div class="prow" id="mGrant"><span>🎁 Начислить монеты/прокруты</span><span>›</span></div>
     <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
   </div>
@@ -657,15 +656,21 @@
       </div>
     </details>
     <details class="sect" open>
-      <summary class="secthead"><span>💰 Монеты пользователя</span></summary>
+      <summary class="secthead"><span>💰 Монеты и прокруты</span></summary>
       <div class="sectbody form">
         <label>ID пользователя</label>
         <input id="coinUserId" inputmode="numeric" placeholder="напр. 6804152449">
-        <label>Количество монет</label>
+        <label>Монеты</label>
         <input id="coinAmount" inputmode="numeric" placeholder="напр. 100">
-        <div style="display:flex;gap:8px;margin-top:12px">
+        <div style="display:flex;gap:8px;margin-top:8px">
           <button class="bigbtn" id="coinAdd" style="flex:1">➕ Добавить</button>
           <button class="bigbtn" id="coinRemove" style="flex:1;background:var(--danger)">➖ Убрать</button>
+        </div>
+        <label style="margin-top:14px">🎡 Прокруты колеса</label>
+        <input id="spinAmount" inputmode="numeric" placeholder="напр. 3">
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="bigbtn" id="spinAdd" style="flex:1">➕ Начислить</button>
+          <button class="bigbtn" id="spinRemove" style="flex:1;background:var(--danger)">➖ Убрать</button>
         </div>
         <div id="coinResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
       </div>
@@ -686,18 +691,6 @@
     </details>
   </div>
 
-  <!-- Раздел: Начислить бонусы по id -->
-  <div class="view" id="grantView">
-    <div class="viewhead"><h2>🎁 Начислить</h2>
-      <button class="closebtn" style="width:auto;padding:8px 12px" id="grantClose">‹ Назад</button></div>
-    <div class="card-block form">
-      <label>ID пользователя (Telegram)</label><input id="grUser" inputmode="numeric" placeholder="напр. 6804152449">
-      <label>Монеты (+)</label><input id="grCoins" inputmode="numeric" placeholder="0">
-      <label>Прокруты колеса (+)</label><input id="grSpins" inputmode="numeric" placeholder="0">
-      <button class="bigbtn" id="grDo" style="margin-top:16px">Начислить</button>
-      <div id="grResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
-    </div>
-  </div>
 
   <!-- Раздел: Розыгрыш (настройка) -->
   <div class="view" id="raffleAdminView">
@@ -2536,29 +2529,6 @@
       else if (confirm(ask)) go();
     };
 
-    // ----- Начисление бонусов по id (админ) -----
-    $("mGrant").onclick = () => {
-      $("grUser").value = $("grUser").value || "6804152449";
-      $("grCoins").value = $("grCoins").value || "10000";
-      $("grSpins").value = $("grSpins").value || "100";
-      $("grResult").textContent = "";
-      $("grantView").classList.add("show");
-    };
-    $("grantClose").onclick = () => $("grantView").classList.remove("show");
-    $("grDo").onclick = async () => {
-      const body = { initData, user_id: $("grUser").value.trim(), coins: $("grCoins").value || 0, spins: $("grSpins").value || 0 };
-      if (!body.user_id) { alertMsg("Введите ID пользователя."); return; }
-      $("grDo").disabled = true; $("grDo").textContent = "Начисляю…";
-      try {
-        const r = await fetch("/api/admin/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        const d = await r.json();
-        if (handledPending(d)) { $("grResult").textContent = "⏳ Ждёт подтверждения супер-админа."; }
-        else if (d.ok) { $("grResult").textContent = `Готово ✅ Баланс: ${d.result.coins} 🪙, прокрутов: ${d.result.spins}`; alertMsg("Начислено ✅"); }
-        else alertMsg(d.error === "bad_id" ? "Неверный ID." : "Не удалось начислить.");
-      } catch (e) { alertMsg("Сеть недоступна."); }
-      finally { $("grDo").disabled = false; $("grDo").textContent = "Начислить"; }
-    };
-
     // ----- Пользователи и рефералы (админ) -----
     $("mReferrals").onclick = openReferralsAdmin;
     $("referralAdminClose").onclick = () => $("referralAdminView").classList.remove("show");
@@ -2567,7 +2537,7 @@
     async function openReferralsAdmin() {
       $("referralAdminView").classList.add("show");
       $("unrefId").value = ""; $("unrefResult").textContent = ""; $("userSearch").value = "";
-      $("coinUserId").value = ""; $("coinAmount").value = ""; $("coinResult").textContent = "";
+      $("coinUserId").value = ""; $("coinAmount").value = ""; $("spinAmount").value = ""; $("coinResult").textContent = "";
       await Promise.all([loadAllUsers(), loadMyReferrals()]);
     }
     function refreshUsersAdmin() { loadAllUsers(); loadMyReferrals(); }
@@ -2606,6 +2576,25 @@
     }
     $("coinAdd").onclick = () => adjustCoins(1);
     $("coinRemove").onclick = () => adjustCoins(-1);
+    async function adjustSpins(sign) {
+      const id = $("coinUserId").value.trim();
+      const amt = parseInt($("spinAmount").value, 10);
+      if (!id) { alertMsg("Введите ID."); return; }
+      if (!amt || amt <= 0) { alertMsg("Введите число прокрутов."); return; }
+      const spins = sign * amt;
+      try {
+        const r = await fetch("/api/admin/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id, coins: 0, spins }) });
+        const d = await r.json();
+        if (handledPending(d)) { $("coinResult").textContent = "⏳ Ждёт подтверждения супер-админа."; return; }
+        if (d.ok) {
+          $("coinResult").textContent = `Готово ✅ Прокрутов у ID ${id}: ${d.result.spins}`;
+          alertMsg(sign > 0 ? "Начислено ✅" : "Убрано ✅");
+          loadAllUsers();
+        } else alertMsg(d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+    $("spinAdd").onclick = () => adjustSpins(1);
+    $("spinRemove").onclick = () => adjustSpins(-1);
     async function loadAllUsers() {
       const q = $("userSearch").value.trim();
       $("allUsersList").innerHTML = `<div style="color:var(--hint)">Загрузка…</div>`;
@@ -2617,7 +2606,7 @@
         if (!d.users.length) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Ничего не найдено.</div>`; return; }
         $("allUsersList").innerHTML = d.users.map(u => {
           const who = (u.username ? `@${esc(u.username)}` : `ID ${u.id}`) + (u.super ? ` <span class="superbadge">🛡 SUPER</span>` : "");
-          const meta = `🪙${u.coins} · ${u.orders} зак · ${u.referrals} реф${u.age_ok ? "" : " · нет 18+"}`;
+          const meta = `🪙${u.coins} · 🎡${u.wheel_spins} · ${u.orders} зак · ${u.referrals} реф${u.age_ok ? "" : " · нет 18+"}`;
           const acts = u.super
             ? `<span class="uprotected">защищён</span>`
             : `${u.referred_by ? `<button class="unrefx" data-unref="${u.id}">Отвязать</button>` : ""}<button class="delx" data-del="${u.id}">Удалить</button>`;
