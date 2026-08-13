@@ -2330,6 +2330,10 @@
     const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
 
     async function openAdmin() {
+      // Начисление/списание монет и управление пользователями — только супер-админ.
+      const superOnly = !!(me && me.is_super);
+      if ($("mGrant")) $("mGrant").style.display = superOnly ? "" : "none";
+      if ($("mReferrals")) $("mReferrals").style.display = superOnly ? "" : "none";
       await fetchBrands();               // нужно разделам «Товары» и «Бренды»
       $("adminView").classList.add("show");
     }

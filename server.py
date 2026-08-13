@@ -113,6 +113,14 @@ def get_admin(init_data):
     return user
 
 
+def get_super(init_data):
+    """Только СУПЕР-админ: начисление/списание монет, удаление юзеров, отвязка рефералов."""
+    user = get_user(init_data)
+    if not user or not user.get("id") or not is_super_admin(int(user["id"])):
+        return None
+    return user
+
+
 # ============================================================
 #  СТРАНИЦА
 # ============================================================
@@ -497,7 +505,7 @@ def api_wheel():
 def api_admin_wheel_grant():
     """Тест: начислить админу 3 прокрута колеса."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
+    admin = get_super(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     uid = int(admin["id"])
@@ -507,9 +515,9 @@ def api_admin_wheel_grant():
 
 @app.route("/api/admin/grant", methods=["POST"])
 def api_admin_grant():
-    """Начислить пользователю монеты и/или прокруты колеса (по id)."""
+    """Начислить пользователю монеты и/или прокруты колеса (по id). Только супер-админ."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    if not get_super(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         target = int(data.get("user_id"))
@@ -546,9 +554,9 @@ def api_admin_referrals():
 
 @app.route("/api/admin/coins/adjust", methods=["POST"])
 def api_admin_coins_adjust():
-    """Изменить баланс монет пользователя на delta (может быть отрицательным). Не уходит в минус."""
+    """Изменить баланс монет пользователя на delta (может быть отрицательным). Только супер-админ."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    if not get_super(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         target = int(data.get("user_id"))
@@ -562,9 +570,9 @@ def api_admin_coins_adjust():
 
 @app.route("/api/admin/users", methods=["POST"])
 def api_admin_users():
-    """Список всех пользователей (поиск по id) — для админа."""
+    """Список всех пользователей (поиск по id) — только супер-админ."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    if not get_super(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     users, total = db.list_users(str(data.get("search") or ""))
     for u in users:
@@ -574,9 +582,9 @@ def api_admin_users():
 
 @app.route("/api/admin/referral/unlink", methods=["POST"])
 def api_admin_referral_unlink():
-    """Отвязать конкретного реферала по его id (referred_by → пусто)."""
+    """Отвязать конкретного реферала по его id (referred_by → пусто). Только супер-админ."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    if not get_super(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         target = int(data.get("user_id"))
@@ -589,9 +597,9 @@ def api_admin_referral_unlink():
 
 @app.route("/api/admin/referral/clear", methods=["POST"])
 def api_admin_referral_clear():
-    """Отвязать ВСЕХ рефералов текущего админа."""
+    """Отвязать ВСЕХ рефералов текущего супер-админа."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
+    admin = get_super(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     return jsonify({"ok": True, "count": db.clear_referrals_of(int(admin["id"]))})
@@ -599,9 +607,9 @@ def api_admin_referral_clear():
 
 @app.route("/api/admin/user/delete", methods=["POST"])
 def api_admin_user_delete():
-    """Полностью удалить пользователя по id (монеты/18+/прокруты/реф-связь)."""
+    """Полностью удалить пользователя по id (монеты/18+/прокруты/реф-связь). Только супер-админ."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
+    admin = get_super(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
