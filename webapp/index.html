@@ -653,15 +653,17 @@
       <div id="coinResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
     </div>
     <div class="card-block" style="text-align:left">
-      <div style="font-weight:800;margin-bottom:8px">Все пользователи (<span id="allUsersCount">0</span>)</div>
-      <div class="search" style="margin-bottom:10px"><input id="userSearch" inputmode="numeric" placeholder="Поиск по ID…"></div>
-      <div id="allUsersList"></div>
-    </div>
-    <div class="card-block" style="text-align:left">
       <div style="font-weight:800;margin-bottom:8px">Мои рефералы (<span id="myRefCount">0</span>)</div>
       <div id="myRefList"></div>
       <button class="closebtn" id="clearRefs" style="color:var(--danger);margin-top:8px">🗑 Отвязать всех моих</button>
     </div>
+    <details class="sect">
+      <summary class="secthead">Все пользователи (<span id="allUsersCount">0</span>)</summary>
+      <div class="sectbody">
+        <input id="userSearch" class="admsearch" inputmode="numeric" placeholder="🔍 Поиск по ID">
+        <div id="allUsersList"></div>
+      </div>
+    </details>
   </div>
 
   <!-- Раздел: Начислить бонусы по id -->
