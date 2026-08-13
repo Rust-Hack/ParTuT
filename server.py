@@ -141,14 +141,15 @@ def api_me():
     uid = int(user["id"])
     age_ok = db.ensure_user_get_age(uid)      # создать + узнать 18+ за одно подключение
 
-    # Реферал: friend открыл приложение по ссылке ...startapp=refN.
+    # Реферал: friend открыл Mini App с параметром start_param=refN (дубль к боту).
     # Только ЗАПОМИНАЕМ пригласившего — монеты дадим, когда друг сделает заказ.
     start_param = str(data.get("start_param") or "")
     if start_param.startswith("ref"):
         try:
-            db.set_referrer_once(uid, int(start_param[3:]))
+            ok_ref = db.set_referrer_once(uid, int(start_param[3:]))
+            print(f"[ref/miniapp] uid={uid} start_param={start_param} set={ok_ref}")
         except (TypeError, ValueError):
-            pass
+            print(f"[ref/miniapp] uid={uid} плохой start_param={start_param}")
 
     return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid)})
 
@@ -453,7 +454,7 @@ def api_bonus():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    link = f"https://t.me/{BOT_USERNAME}?startapp=ref{uid}" if BOT_USERNAME else ""
+    link = f"https://t.me/{BOT_USERNAME}?start=ref{uid}" if BOT_USERNAME else ""
 
     st = db.get_bonus_stats(uid)              # всё за одно подключение
     active = st["active"]

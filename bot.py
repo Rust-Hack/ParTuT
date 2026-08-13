@@ -79,6 +79,16 @@ def open_shop_prompt(chat_id, greeting=False):
 
 @bot.message_handler(commands=["start"])
 def on_start(message):
+    # Реферальная привязка по deep-link: t.me/<bot>?start=refN (надёжнее, чем startapp).
+    parts = (message.text or "").split(maxsplit=1)
+    payload = parts[1].strip() if len(parts) > 1 else ""
+    if payload.startswith("ref"):
+        try:
+            ref_id = int(payload[3:])
+            if db.set_referrer_once(message.from_user.id, ref_id):
+                print(f"[ref] пользователь {message.from_user.id} приглашён {ref_id}")
+        except (TypeError, ValueError):
+            pass
     open_shop_prompt(message.chat.id, greeting=True)
 
 
