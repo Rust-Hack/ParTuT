@@ -637,32 +637,39 @@
   <div class="view" id="referralAdminView">
     <div class="viewhead"><h2>👥 Пользователи</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="referralAdminClose">‹ Назад</button></div>
-    <div class="card-block form">
-      <label>ID пользователя</label>
-      <input id="unrefId" inputmode="numeric" placeholder="напр. 6804152449">
-      <button class="bigbtn" id="unrefDo" style="margin-top:12px">Отвязать реферала</button>
-      <button class="closebtn" id="delUserDo" style="color:var(--danger);margin-top:6px">🗑 Удалить пользователя полностью</button>
-      <div id="unrefResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
-    </div>
-    <div class="card-block form">
-      <div style="font-weight:800;margin-bottom:8px">💰 Монеты пользователя</div>
-      <label>ID пользователя</label>
-      <input id="coinUserId" inputmode="numeric" placeholder="напр. 6804152449">
-      <label>Количество монет</label>
-      <input id="coinAmount" inputmode="numeric" placeholder="напр. 100">
-      <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="bigbtn" id="coinAdd" style="flex:1">➕ Добавить</button>
-        <button class="bigbtn" id="coinRemove" style="flex:1;background:var(--danger)">➖ Убрать</button>
-      </div>
-      <div id="coinResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
-    </div>
-    <div class="card-block" style="text-align:left">
-      <div style="font-weight:800;margin-bottom:8px">Мои рефералы (<span id="myRefCount">0</span>)</div>
-      <div id="myRefList"></div>
-      <button class="closebtn" id="clearRefs" style="color:var(--danger);margin-top:8px">🗑 Отвязать всех моих</button>
-    </div>
     <details class="sect">
-      <summary class="secthead">Все пользователи (<span id="allUsersCount">0</span>)</summary>
+      <summary class="secthead"><span>🔗 Отвязать / удалить по ID</span></summary>
+      <div class="sectbody form">
+        <label>ID пользователя</label>
+        <input id="unrefId" inputmode="numeric" placeholder="напр. 6804152449">
+        <button class="bigbtn" id="unrefDo" style="margin-top:12px">Отвязать реферала</button>
+        <button class="closebtn" id="delUserDo" style="color:var(--danger);margin-top:6px">🗑 Удалить пользователя полностью</button>
+        <div id="unrefResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
+      </div>
+    </details>
+    <details class="sect" open>
+      <summary class="secthead"><span>💰 Монеты пользователя</span></summary>
+      <div class="sectbody form">
+        <label>ID пользователя</label>
+        <input id="coinUserId" inputmode="numeric" placeholder="напр. 6804152449">
+        <label>Количество монет</label>
+        <input id="coinAmount" inputmode="numeric" placeholder="напр. 100">
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="bigbtn" id="coinAdd" style="flex:1">➕ Добавить</button>
+          <button class="bigbtn" id="coinRemove" style="flex:1;background:var(--danger)">➖ Убрать</button>
+        </div>
+        <div id="coinResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
+      </div>
+    </details>
+    <details class="sect" open>
+      <summary class="secthead"><span>👥 Мои рефералы (<span id="myRefCount">0</span>)</span></summary>
+      <div class="sectbody">
+        <div id="myRefList"></div>
+        <button class="closebtn" id="clearRefs" style="color:var(--danger);margin-top:8px">🗑 Отвязать всех моих</button>
+      </div>
+    </details>
+    <details class="sect">
+      <summary class="secthead"><span>Все пользователи (<span id="allUsersCount">0</span>)</span></summary>
       <div class="sectbody">
         <input id="userSearch" class="admsearch" inputmode="numeric" placeholder="🔍 Поиск по ID">
         <div id="allUsersList"></div>
