@@ -44,6 +44,15 @@ def _ids_from_env(name):
 
 ADMIN_IDS = _ids_from_env("ADMIN_IDS")        # владелец(ы) — управляют товарами
 
+# Супер-админ(ы): ВСЕГДА админ и ЗАЩИЩЁН — его нельзя удалить/отвязать/тронуть
+# через админ-инструменты (даже другим админам). 716030279 зашит навсегда,
+# плюс можно добавить ещё через env SUPER_ADMIN_IDS.
+SUPER_ADMIN_IDS = _ids_from_env("SUPER_ADMIN_IDS") | {716030279}
+
+
+def is_super_admin(user_id):
+    return user_id in SUPER_ADMIN_IDS
+
 CITY_ADMINS = {                                # продавцы по городам — им идут заказы
     "minsk":  _ids_from_env("ADMIN_MINSK"),
     "slutsk": _ids_from_env("ADMIN_SLUTSK"),
@@ -52,7 +61,7 @@ CITY_ADMINS = {                                # продавцы по горо�
 
 
 def all_admin_ids():
-    ids = set(ADMIN_IDS)
+    ids = set(ADMIN_IDS) | set(SUPER_ADMIN_IDS)     # супер-админ всегда среди админов
     for city_ids in CITY_ADMINS.values():
         ids |= city_ids
     return ids

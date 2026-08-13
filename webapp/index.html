@@ -329,7 +329,9 @@
     .uinfo { min-width: 0; }
     .uinfo b { display: block; font-size: 14px; }
     .uinfo small { color: var(--hint); font-size: 12px; }
-    .uacts { display: flex; gap: 6px; flex-shrink: 0; }
+    .uacts { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+    .superbadge { font-size: 10px; font-weight: 800; color: var(--brand-neon); border: 1px solid var(--brand-neon); border-radius: 6px; padding: 1px 5px; text-shadow: 0 0 6px var(--brand-glow); white-space: nowrap; }
+    .uprotected { font-size: 12px; color: var(--hint); font-style: italic; }
     .winbanner { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); text-align: center; pointer-events: none; z-index: 6; }
     .winbanner .wt { font-size: 26px; font-weight: 900; letter-spacing: 1px; color: #fff; text-shadow: 0 0 10px var(--brand-neon), 0 0 22px var(--brand-neon); animation: wtPop .5s ease; }
     .winbanner .wc { margin-top: 2px; font-size: 19px; font-weight: 800; color: var(--brand-neon); text-shadow: 0 0 8px var(--brand-glow); }
@@ -2492,10 +2494,12 @@
         $("allUsersCount").textContent = d.total;
         if (!d.users.length) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Ничего не найдено.</div>`; return; }
         $("allUsersList").innerHTML = d.users.map(u => {
-          const who = u.username ? `@${esc(u.username)}` : `ID ${u.id}`;
+          const who = (u.username ? `@${esc(u.username)}` : `ID ${u.id}`) + (u.super ? ` <span class="superbadge">🛡 SUPER</span>` : "");
           const meta = `🪙${u.coins} · ${u.orders} зак · ${u.referrals} реф${u.age_ok ? "" : " · нет 18+"}`;
-          return `<div class="urow"><div class="uinfo"><b>${who}</b><small>ID ${u.id} · ${meta}</small></div>`
-            + `<div class="uacts">${u.referred_by ? `<button class="unrefx" data-unref="${u.id}">Отвязать</button>` : ""}<button class="delx" data-del="${u.id}">Удалить</button></div></div>`;
+          const acts = u.super
+            ? `<span class="uprotected">защищён</span>`
+            : `${u.referred_by ? `<button class="unrefx" data-unref="${u.id}">Отвязать</button>` : ""}<button class="delx" data-del="${u.id}">Удалить</button>`;
+          return `<div class="urow"><div class="uinfo"><b>${who}</b><small>ID ${u.id} · ${meta}</small></div><div class="uacts">${acts}</div></div>`;
         }).join("")
           + ((d.shown < d.total && !q) ? `<div style="color:var(--hint);font-size:12px;margin-top:8px">Показаны последние ${d.shown} из ${d.total} — уточните поиск по ID.</div>` : "");
         document.querySelectorAll("#allUsersList .unrefx").forEach(b => b.onclick = () => doUnref(b.dataset.unref));
@@ -2521,7 +2525,7 @@
         const r = await fetch("/api/admin/referral/unlink", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id }) });
         const d = await r.json();
         if (d.ok) { alertMsg(d.unlinked ? "Отвязан ✅" : "У этого ID не было привязки."); refreshUsersAdmin(); }
-        else alertMsg(d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
+        else alertMsg(d.error === "protected" ? "🛡 Супер-админа трогать нельзя." : d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
     async function doDelUser(id) {
@@ -2529,7 +2533,7 @@
         const r = await fetch("/api/admin/user/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id }) });
         const d = await r.json();
         if (d.ok) { alertMsg(d.deleted ? "Пользователь удалён ✅" : "Пользователь не найден."); refreshUsersAdmin(); }
-        else alertMsg(d.error === "self" ? "Себя удалить нельзя." : d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
+        else alertMsg(d.error === "protected" ? "🛡 Супер-админа удалить нельзя." : d.error === "self" ? "Себя удалить нельзя." : d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
     function confirmDelUser(id) {

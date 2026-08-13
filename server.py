@@ -29,7 +29,7 @@ from flask import Flask, jsonify, request, Response, send_from_directory
 
 import db
 import notifications
-from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, CONFIRM_MINUTES, is_admin, CITIES, CATEGORIES
+from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, CITIES, CATEGORIES
 
 db.init_db()
 
@@ -151,7 +151,7 @@ def api_me():
         except (TypeError, ValueError):
             print(f"[ref/miniapp] uid={uid} плохой start_param={start_param}")
 
-    return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid)})
+    return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid), "is_super": is_super_admin(uid)})
 
 
 @app.route("/api/age", methods=["POST"])
@@ -551,6 +551,8 @@ def api_admin_users():
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     users, total = db.list_users(str(data.get("search") or ""))
+    for u in users:
+        u["super"] = is_super_admin(u["id"])       # супер-админа фронт пометит и скроет кнопки
     return jsonify({"ok": True, "users": users, "total": total, "shown": len(users)})
 
 
@@ -564,6 +566,8 @@ def api_admin_referral_unlink():
         target = int(data.get("user_id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
+    if is_super_admin(target):
+        return jsonify({"ok": False, "error": "protected"}), 403     # супер-админа не трогаем
     return jsonify({"ok": True, "unlinked": db.unlink_referral(target)})
 
 
@@ -590,6 +594,8 @@ def api_admin_user_delete():
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if target == int(admin["id"]):
         return jsonify({"ok": False, "error": "self"}), 400     # себя не удаляем
+    if is_super_admin(target):
+        return jsonify({"ok": False, "error": "protected"}), 403     # супер-админа удалить нельзя
     return jsonify({"ok": True, "deleted": db.delete_user(target)})
 
 
