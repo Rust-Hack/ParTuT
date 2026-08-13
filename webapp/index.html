@@ -324,6 +324,12 @@
     .autobtn.on { background: rgba(255,61,129,.15); border-color: #ff3d81; color: #ff6b9d; box-shadow: 0 0 12px rgba(255,61,129,.4); }
     .unrefx, .delx { border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
     .delx { color: var(--danger); border-color: var(--danger); }
+    .urow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .urow:last-child { border-bottom: none; }
+    .uinfo { min-width: 0; }
+    .uinfo b { display: block; font-size: 14px; }
+    .uinfo small { color: var(--hint); font-size: 12px; }
+    .uacts { display: flex; gap: 6px; flex-shrink: 0; }
     .winbanner { position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); text-align: center; pointer-events: none; z-index: 6; }
     .winbanner .wt { font-size: 26px; font-weight: 900; letter-spacing: 1px; color: #fff; text-shadow: 0 0 10px var(--brand-neon), 0 0 22px var(--brand-neon); animation: wtPop .5s ease; }
     .winbanner .wc { margin-top: 2px; font-size: 19px; font-weight: 800; color: var(--brand-neon); text-shadow: 0 0 8px var(--brand-glow); }
@@ -631,6 +637,11 @@
       <button class="bigbtn" id="unrefDo" style="margin-top:12px">Отвязать реферала</button>
       <button class="closebtn" id="delUserDo" style="color:var(--danger);margin-top:6px">🗑 Удалить пользователя полностью</button>
       <div id="unrefResult" style="color:var(--hint);font-size:13px;margin-top:10px"></div>
+    </div>
+    <div class="card-block" style="text-align:left">
+      <div style="font-weight:800;margin-bottom:8px">Все пользователи (<span id="allUsersCount">0</span>)</div>
+      <div class="search" style="margin-bottom:10px"><input id="userSearch" inputmode="numeric" placeholder="Поиск по ID…"></div>
+      <div id="allUsersList"></div>
     </div>
     <div class="card-block" style="text-align:left">
       <div style="font-weight:800;margin-bottom:8px">Мои рефералы (<span id="myRefCount">0</span>)</div>
@@ -2460,13 +2471,36 @@
       finally { $("grDo").disabled = false; $("grDo").textContent = "Начислить"; }
     };
 
-    // ----- Рефералы (отвязка) -----
+    // ----- Пользователи и рефералы (админ) -----
     $("mReferrals").onclick = openReferralsAdmin;
     $("referralAdminClose").onclick = () => $("referralAdminView").classList.remove("show");
+    let _userSearchTimer = null;
+    $("userSearch").oninput = () => { clearTimeout(_userSearchTimer); _userSearchTimer = setTimeout(loadAllUsers, 300); };
     async function openReferralsAdmin() {
       $("referralAdminView").classList.add("show");
-      $("unrefId").value = ""; $("unrefResult").textContent = "";
-      await loadMyReferrals();
+      $("unrefId").value = ""; $("unrefResult").textContent = ""; $("userSearch").value = "";
+      await Promise.all([loadAllUsers(), loadMyReferrals()]);
+    }
+    function refreshUsersAdmin() { loadAllUsers(); loadMyReferrals(); }
+    async function loadAllUsers() {
+      const q = $("userSearch").value.trim();
+      $("allUsersList").innerHTML = `<div style="color:var(--hint)">Загрузка…</div>`;
+      try {
+        const r = await fetch("/api/admin/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, search: q }) });
+        const d = await r.json();
+        if (!d.ok) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Не удалось загрузить.</div>`; return; }
+        $("allUsersCount").textContent = d.total;
+        if (!d.users.length) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Ничего не найдено.</div>`; return; }
+        $("allUsersList").innerHTML = d.users.map(u => {
+          const who = u.username ? `@${esc(u.username)}` : `ID ${u.id}`;
+          const meta = `🪙${u.coins} · ${u.orders} зак · ${u.referrals} реф${u.age_ok ? "" : " · нет 18+"}`;
+          return `<div class="urow"><div class="uinfo"><b>${who}</b><small>ID ${u.id} · ${meta}</small></div>`
+            + `<div class="uacts">${u.referred_by ? `<button class="unrefx" data-unref="${u.id}">Отвязать</button>` : ""}<button class="delx" data-del="${u.id}">Удалить</button></div></div>`;
+        }).join("")
+          + ((d.shown < d.total && !q) ? `<div style="color:var(--hint);font-size:12px;margin-top:8px">Показаны последние ${d.shown} из ${d.total} — уточните поиск по ID.</div>` : "");
+        document.querySelectorAll("#allUsersList .unrefx").forEach(b => b.onclick = () => doUnref(b.dataset.unref));
+        document.querySelectorAll("#allUsersList .delx").forEach(b => b.onclick = () => confirmDelUser(b.dataset.del));
+      } catch (e) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Сеть недоступна.</div>`; }
     }
     async function loadMyReferrals() {
       $("myRefList").innerHTML = `<div style="color:var(--hint)">Загрузка…</div>`;
@@ -2486,7 +2520,7 @@
       try {
         const r = await fetch("/api/admin/referral/unlink", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id }) });
         const d = await r.json();
-        if (d.ok) { alertMsg(d.unlinked ? "Отвязан ✅" : "У этого ID не было привязки."); loadMyReferrals(); }
+        if (d.ok) { alertMsg(d.unlinked ? "Отвязан ✅" : "У этого ID не было привязки."); refreshUsersAdmin(); }
         else alertMsg(d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
@@ -2494,7 +2528,7 @@
       try {
         const r = await fetch("/api/admin/user/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: id }) });
         const d = await r.json();
-        if (d.ok) { alertMsg(d.deleted ? "Пользователь удалён ✅" : "Пользователь не найден."); loadMyReferrals(); }
+        if (d.ok) { alertMsg(d.deleted ? "Пользователь удалён ✅" : "Пользователь не найден."); refreshUsersAdmin(); }
         else alertMsg(d.error === "self" ? "Себя удалить нельзя." : d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
@@ -2521,7 +2555,7 @@
         try {
           const r = await fetch("/api/admin/referral/clear", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
           const d = await r.json();
-          if (d.ok) { alertMsg(`Отвязано: ${d.count} ✅`); loadMyReferrals(); }
+          if (d.ok) { alertMsg(`Отвязано: ${d.count} ✅`); refreshUsersAdmin(); }
           else alertMsg("Не удалось.");
         } catch (e) { alertMsg("Сеть недоступна."); }
       };

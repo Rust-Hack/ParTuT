@@ -769,6 +769,51 @@ def clear_referrals_of(ref_id):
     return n
 
 
+def list_users(search="", limit=300):
+    """Список пользователей для админа с полезными полями. search — подстрока id.
+    Возвращает (список, всего_в_базе)."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM users")
+    total = cur.fetchone()["c"]
+    base = ("SELECT user_id, COALESCE(age_ok,0) AS age_ok, COALESCE(coins,0) AS coins, "
+            "referred_by, COALESCE(wheel_spins,0) AS wheel_spins, COALESCE(ref_earned,0) AS ref_earned FROM users ")
+    search = (search or "").strip()
+    if search:
+        cur.execute(_q(base + "WHERE CAST(user_id AS TEXT) LIKE %s ORDER BY user_id DESC LIMIT %s"),
+                    (f"%{search}%", limit))
+    else:
+        cur.execute(_q(base + "ORDER BY user_id DESC LIMIT %s"), (limit,))
+    users = cur.fetchall()
+    ids = [u["user_id"] for u in users]
+    orders_by, names, refcount = {}, {}, {}
+    if ids:
+        marks = ",".join(["%s"] * len(ids))
+        cur.execute(_q(f"SELECT user_id, COUNT(*) AS cnt, COALESCE(SUM(total),0) AS spent "
+                       f"FROM orders WHERE user_id IN ({marks}) AND status = 'issued' GROUP BY user_id"), tuple(ids))
+        for r in cur.fetchall():
+            orders_by[r["user_id"]] = (r["cnt"], r["spent"])
+        cur.execute(_q(f"SELECT user_id, username FROM orders WHERE user_id IN ({marks}) ORDER BY id DESC"), tuple(ids))
+        for r in cur.fetchall():
+            if r["user_id"] not in names and r["username"]:
+                names[r["user_id"]] = r["username"]        # самый свежий username
+        cur.execute(_q(f"SELECT referred_by AS ref, COUNT(*) AS c FROM users WHERE referred_by IN ({marks}) GROUP BY referred_by"), tuple(ids))
+        for r in cur.fetchall():
+            refcount[r["ref"]] = r["c"]
+    conn.close()
+    out = []
+    for u in users:
+        cnt, spent = orders_by.get(u["user_id"], (0, 0))
+        out.append({
+            "id": u["user_id"], "username": names.get(u["user_id"], ""),
+            "coins": u["coins"], "age_ok": bool(u["age_ok"]),
+            "wheel_spins": u["wheel_spins"], "ref_earned": u["ref_earned"],
+            "referred_by": u["referred_by"], "referrals": refcount.get(u["user_id"], 0),
+            "orders": cnt, "spent": round(spent or 0, 2),
+        })
+    return out, total
+
+
 def delete_user(user_id):
     """Полностью удаляет запись пользователя (монеты, 18+, прокруты, реф-связь).
     Заказы остаются в истории. Возвращает True, если пользователь был удалён."""

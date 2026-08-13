@@ -544,6 +544,16 @@ def api_admin_referrals():
     return jsonify({"ok": True, "referrals": [{"id": r["user_id"], "active": bool(r["ref_activated"])} for r in rows]})
 
 
+@app.route("/api/admin/users", methods=["POST"])
+def api_admin_users():
+    """Список всех пользователей (поиск по id) — для админа."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    users, total = db.list_users(str(data.get("search") or ""))
+    return jsonify({"ok": True, "users": users, "total": total, "shown": len(users)})
+
+
 @app.route("/api/admin/referral/unlink", methods=["POST"])
 def api_admin_referral_unlink():
     """Отвязать конкретного реферала по его id (referred_by → пусто)."""
