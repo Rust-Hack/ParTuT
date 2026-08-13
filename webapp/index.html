@@ -331,6 +331,7 @@
     .uinfo small { color: var(--hint); font-size: 12px; }
     .uacts { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
     .superbadge { font-size: 10px; font-weight: 800; color: var(--brand-neon); border: 1px solid var(--brand-neon); border-radius: 6px; padding: 1px 5px; text-shadow: 0 0 6px var(--brand-glow); white-space: nowrap; }
+    .reqbadge { display: inline-block; min-width: 18px; text-align: center; font-size: 11px; font-weight: 800; color: #fff; background: var(--danger); border-radius: 999px; padding: 1px 6px; margin-left: 4px; }
     .uprotected { font-size: 12px; color: var(--hint); font-style: italic; }
     .idcopy { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
     .idcopy:active { color: var(--brand-neon); }
@@ -622,6 +623,7 @@
   <div class="view" id="adminView">
     <div class="viewhead"><h2>🛠 Управление</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="adminClose">Закрыть</button></div>
+    <div class="prow" id="mRequests" style="display:none"><span>📥 Заявки на подтверждение <b id="reqBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
     <div class="prow" id="mOrders"><span>📦 Заказы</span><span>›</span></div>
     <div class="prow" id="mProducts"><span>🛍 Товары</span><span>›</span></div>
     <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
@@ -631,6 +633,13 @@
     <div class="prow" id="mGrant"><span>🎁 Начислить монеты/прокруты</span><span>›</span></div>
     <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
+  </div>
+
+  <!-- Раздел: Заявки на подтверждение (супер-админ) -->
+  <div class="view" id="requestsView">
+    <div class="viewhead"><h2>📥 Заявки</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="requestsClose">‹ Назад</button></div>
+    <div id="requestsList"></div>
   </div>
 
   <!-- Раздел: Пользователи (отвязка рефералов / удаление) -->
@@ -2331,8 +2340,53 @@
     const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
 
     async function openAdmin() {
+      if ($("mRequests")) $("mRequests").style.display = (me && me.is_super) ? "" : "none";
+      if (me && me.is_super) loadReqBadge();
       await fetchBrands();               // нужно разделам «Товары» и «Бренды»
       $("adminView").classList.add("show");
+    }
+    async function loadReqBadge() {
+      try {
+        const r = await fetch("/api/admin/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        const b = $("reqBadge"); if (!b || !d.ok) return;
+        b.textContent = d.count; b.style.display = d.count ? "" : "none";
+      } catch (e) {}
+    }
+    $("mRequests").onclick = openRequests;
+    $("requestsClose").onclick = () => $("requestsView").classList.remove("show");
+    async function openRequests() {
+      $("requestsView").classList.add("show");
+      await loadRequests();
+    }
+    async function loadRequests() {
+      $("requestsList").innerHTML = `<div class="card-block" style="color:var(--hint)">Загрузка…</div>`;
+      try {
+        const r = await fetch("/api/admin/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (!d.ok) { $("requestsList").innerHTML = `<div class="card-block" style="color:var(--hint)">Нет доступа.</div>`; return; }
+        if (!d.requests.length) { $("requestsList").innerHTML = `<div class="card-block" style="color:var(--hint);text-align:center">Нет ожидающих заявок 🎉</div>`; return; }
+        $("requestsList").innerHTML = d.requests.map(q => `
+          <div class="card-block" style="text-align:left">
+            <div style="font-weight:800;margin-bottom:4px">${esc(q.summary)}</div>
+            <div style="color:var(--hint);font-size:12px;margin-bottom:10px">От: ${esc(q.requester_name)} · id ${q.requester_id} · ${esc(q.created_at || "")}</div>
+            <div style="display:flex;gap:8px">
+              <button class="bigbtn reqok" data-id="${q.id}" style="flex:1">✅ Разрешить</button>
+              <button class="bigbtn reqno" data-id="${q.id}" style="flex:1;background:var(--danger)">✖️ Отклонить</button>
+            </div>
+          </div>`).join("");
+        document.querySelectorAll(".reqok").forEach(b => b.onclick = () => decideRequest(b.dataset.id, "approve"));
+        document.querySelectorAll(".reqno").forEach(b => b.onclick = () => decideRequest(b.dataset.id, "reject"));
+      } catch (e) { $("requestsList").innerHTML = `<div class="card-block" style="color:var(--hint)">Сеть недоступна.</div>`; }
+    }
+    async function decideRequest(id, decision) {
+      try {
+        const r = await fetch("/api/admin/request/decide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, request_id: id, decision }) });
+        const d = await r.json();
+        if (d.ok) { alertMsg(decision === "approve" ? "Разрешено ✅" : "Отклонено ✖️"); }
+        else alertMsg(d.error === "already" ? "Заявка уже обработана." : "Не удалось.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      loadRequests(); loadReqBadge();
     }
     // Обычный админ инициирует чувствительную операцию → ждёт подтверждения супер-админа.
     function handledPending(d) {

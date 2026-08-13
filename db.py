@@ -882,6 +882,16 @@ def set_admin_request_status_if(rid, new_status, allowed):
     return changed
 
 
+def list_admin_requests(status="pending", limit=50):
+    """Заявки по статусу (для экрана супер-админа), новые сверху."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM admin_requests WHERE status = %s ORDER BY id DESC LIMIT %s"), (status, limit))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def execute_admin_request(action, payload):
     """Выполняет одобренную операцию. Возвращает dict-результат."""
     if action == "coins_adjust":

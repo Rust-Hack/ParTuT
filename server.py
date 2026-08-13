@@ -140,6 +140,48 @@ def _gate(admin, action, payload, summary):
     return jsonify({"ok": True, "pending": True, "request_id": rid})
 
 
+@app.route("/api/admin/requests", methods=["POST"])
+def api_admin_requests_pending():
+    """Список ожидающих заявок — только супер-админ."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id") or not is_super_admin(int(user["id"])):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    rows = db.list_admin_requests("pending")
+    reqs = [{"id": r["id"], "requester_id": r["requester_id"], "requester_name": r["requester_name"],
+             "summary": r["summary"], "created_at": r["created_at"]} for r in rows]
+    return jsonify({"ok": True, "requests": reqs, "count": len(reqs)})
+
+
+@app.route("/api/admin/request/decide", methods=["POST"])
+def api_admin_request_decide():
+    """Супер-админ разрешает/отклоняет заявку из приложения."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id") or not is_super_admin(int(user["id"])):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        rid = int(data.get("request_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    approve = data.get("decision") == "approve"
+    req = db.get_admin_request(rid)
+    if not req:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    new_status = "approved" if approve else "rejected"
+    if not db.set_admin_request_status_if(rid, new_status, ["pending"]):
+        return jsonify({"ok": False, "error": "already"}), 409     # уже обработана
+    if approve:
+        try:
+            db.execute_admin_request(req["action"], json.loads(req["payload"]))
+        except Exception as e:
+            print(f"Ошибка выполнения заявки #{rid}: {e}")
+        _notify_client(req["requester_id"], f"✅ Ваш запрос одобрен:\n{req['summary']}")
+    else:
+        _notify_client(req["requester_id"], f"✖️ Ваш запрос отклонён:\n{req['summary']}")
+    return jsonify({"ok": True, "decided": new_status})
+
+
 # ============================================================
 #  СТРАНИЦА
 # ============================================================
