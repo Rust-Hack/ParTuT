@@ -113,6 +113,27 @@ def on_myid(message):
     )
 
 
+@bot.message_handler(commands=["reply"])
+def on_reply(message):
+    """Ответ клиенту на его вопрос: /reply <user_id> текст (только для админов)."""
+    if not is_admin(message.from_user.id):
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3:
+        bot.send_message(message.chat.id, "Формат: /reply <id клиента> текст ответа")
+        return
+    try:
+        target = int(parts[1])
+    except ValueError:
+        bot.send_message(message.chat.id, "Неверный id клиента.")
+        return
+    try:
+        bot.send_message(target, f"💬 Ответ от магазина:\n{parts[2]}")
+        bot.send_message(message.chat.id, f"✅ Отправлено клиенту {target}")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Не удалось отправить (клиент не запускал бота?): {e}")
+
+
 @bot.message_handler(commands=["admin"])
 def on_admin(message):
     """Админ-меню — только для тех, кто в списке админов."""

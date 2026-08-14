@@ -29,7 +29,7 @@ from flask import Flask, jsonify, request, Response, send_from_directory
 
 import db
 import notifications
-from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, CITIES, CATEGORIES
+from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, CITIES, CATEGORIES
 
 db.init_db()
 
@@ -506,6 +506,52 @@ def api_receipt():
         return jsonify({"ok": True})
 
     return jsonify({"ok": False, "error": "send_failed"}), 500
+
+
+@app.route("/api/support", methods=["POST"])
+def api_support():
+    """Клиент пишет в поддержку — доставляем сообщение менеджеру(ам) через бота."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    text = (data.get("text") or "").strip()[:2000]
+    if not text:
+        return jsonify({"ok": False, "error": "empty"}), 400
+    uid = int(user["id"])
+    uname = user.get("username")
+    who = f"@{uname}" if uname else (user.get("first_name") or "клиент")
+    msg = (f"💬 Вопрос от {who} (id {uid}):\n{text}\n\n"
+           f"Ответить: /reply {uid} ваш текст")
+    delivered = 0
+    for sid in SUPPORT_IDS:
+        try:
+            tg.send_message(sid, msg)
+            delivered += 1
+        except Exception as e:
+            print(f"Не смог доставить вопрос в поддержку {sid}: {e}")
+    return jsonify({"ok": True, "delivered": delivered})
+
+
+@app.route("/api/admin/message", methods=["POST"])
+def api_admin_message():
+    """Админ пишет клиенту — доставляем сообщение клиенту через бота."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        target = int(data.get("user_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    text = (data.get("text") or "").strip()[:2000]
+    if not text:
+        return jsonify({"ok": False, "error": "empty"}), 400
+    try:
+        tg.send_message(target, f"💬 Сообщение от магазина:\n{text}")
+        return jsonify({"ok": True, "sent": True})
+    except Exception as e:
+        print(f"Не смог отправить сообщение клиенту {target}: {e}")
+        return jsonify({"ok": True, "sent": False})     # клиент мог не запускать бота
 
 
 @app.route("/api/orders", methods=["POST"])

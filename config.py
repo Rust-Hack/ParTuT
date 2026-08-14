@@ -53,6 +53,11 @@ SUPER_ADMIN_IDS = _ids_from_env("SUPER_ADMIN_IDS") | {716030279}
 def is_super_admin(user_id):
     return user_id in SUPER_ADMIN_IDS
 
+
+# Кому приходят вопросы клиентов «Написать в поддержку» (менеджер/поддержка).
+# По умолчанию — 1376577605; можно переопределить/добавить через env SUPPORT_IDS.
+SUPPORT_IDS = _ids_from_env("SUPPORT_IDS") | {1376577605}
+
 CITY_ADMINS = {                                # продавцы по городам — им идут заказы
     "minsk":  _ids_from_env("ADMIN_MINSK"),
     "slutsk": _ids_from_env("ADMIN_SLUTSK"),

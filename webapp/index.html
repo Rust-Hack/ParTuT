@@ -432,6 +432,7 @@
     .oacts .ok { background: var(--accent); color: var(--on-accent); }
     .oacts .issue { background: #2e9e4f; color: #fff; }
     .oacts .rej { background: var(--surface-2); color: var(--danger); }
+    .oacts .omsg { background: var(--surface-2); color: var(--text); }
     .fchip { background: var(--surface-2); border-radius: 999px; padding: 6px 11px; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; }
     .fchip b { cursor: pointer; color: var(--hint); font-weight: 700; }
 
@@ -620,6 +621,24 @@
     <div class="sheet"><h2>Оформление</h2>
       <div id="deliveryBody"></div>
       <button class="closebtn" id="deliveryClose">Отмена</button></div>
+  </div>
+
+  <!-- Написать в поддержку -->
+  <div class="overlay" id="supportOverlay">
+    <div class="sheet"><h2>💬 Написать в поддержку</h2>
+      <p style="color:var(--hint);font-size:13px;margin:0 0 10px">Опишите вопрос — менеджер ответит вам в этом чате.</p>
+      <textarea id="supportText" class="admsearch" style="min-height:110px;resize:vertical" placeholder="Ваш вопрос…"></textarea>
+      <button class="bigbtn" id="supportSend" style="margin-top:12px">Отправить</button>
+      <button class="closebtn" id="supportClose">Закрыть</button></div>
+  </div>
+
+  <!-- Админ пишет клиенту -->
+  <div class="overlay" id="msgOverlay">
+    <div class="sheet"><h2>✍️ Написать клиенту</h2>
+      <p style="color:var(--hint);font-size:13px;margin:0 0 10px" id="msgTo"></p>
+      <textarea id="msgText" class="admsearch" style="min-height:110px;resize:vertical" placeholder="Сообщение клиенту…"></textarea>
+      <button class="bigbtn" id="msgSend" style="margin-top:12px">Отправить</button>
+      <button class="closebtn" id="msgClose">Закрыть</button></div>
   </div>
 
   <!-- Правила игры (колесо / слот) -->
@@ -1448,13 +1467,30 @@
           ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>` : ""}
           <div class="prow"><span>${dark ? "🌙" : "☀️"} Тёмная тема</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
           <div class="prow" id="openMyOrders"><span>📦 Мои заказы</span><span>›</span></div>
-          <div class="prow">💬 Менеджер</div>
-          <div class="prow">❓ Помощь</div>
+          <div class="prow" id="openSupport"><span>💬 Написать в поддержку</span><span>›</span></div>
         </div></div>`;
       $("themeSwitch").onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark");
       if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
       $("openMyOrders").onclick = openMyOrders;
+      $("openSupport").onclick = openSupport;
     }
+    function openSupport() {
+      $("supportText").value = "";
+      $("supportOverlay").classList.add("show");
+    }
+    $("supportClose").onclick = () => closeOverlay($("supportOverlay"));
+    $("supportSend").onclick = async () => {
+      const text = $("supportText").value.trim();
+      if (!text) { alertMsg("Напишите вопрос."); return; }
+      $("supportSend").disabled = true; $("supportSend").textContent = "Отправляю…";
+      try {
+        const r = await fetch("/api/support", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, text }) });
+        const d = await r.json();
+        if (d.ok && d.delivered) { closeOverlay($("supportOverlay")); alertMsg("Отправлено ✅ Менеджер ответит в этом чате."); }
+        else alertMsg("Не удалось отправить. Попробуйте позже.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("supportSend").disabled = false; $("supportSend").textContent = "Отправить"; }
+    };
 
     // ---------- Бонусы (vapecoins + рефералы) ----------
     let bonus = { coins: 0, referrals: 0, ref_link: "", referral_bonus: 50 };
@@ -2697,6 +2733,28 @@
       (scope || document).querySelectorAll(".idcopy").forEach(el => el.onclick = (e) => { e.stopPropagation(); copyUserId(el.dataset.copy); });
     }
     let _usersById = {};
+    // Админ пишет клиенту (по id).
+    let _msgTargetId = null;
+    function openAdminMsg(userId, label) {
+      _msgTargetId = userId;
+      $("msgTo").textContent = label || `Клиент id ${userId}`;
+      $("msgText").value = "";
+      $("msgOverlay").classList.add("show");
+    }
+    $("msgClose").onclick = () => closeOverlay($("msgOverlay"));
+    $("msgSend").onclick = async () => {
+      const text = $("msgText").value.trim();
+      if (!text || !_msgTargetId) { alertMsg("Напишите сообщение."); return; }
+      $("msgSend").disabled = true; $("msgSend").textContent = "Отправляю…";
+      try {
+        const r = await fetch("/api/admin/message", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: _msgTargetId, text }) });
+        const d = await r.json();
+        if (d.ok && d.sent) { closeOverlay($("msgOverlay")); alertMsg("Отправлено клиенту ✅"); }
+        else if (d.ok) alertMsg("Клиент не получит — он не запускал бота.");
+        else alertMsg(d.error === "forbidden" ? "Нет доступа." : "Не удалось.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("msgSend").disabled = false; $("msgSend").textContent = "Отправить"; }
+    };
     // Подробная карточка пользователя (тап по строке).
     function showUserCard(u) {
       if (!u) return;
@@ -2713,12 +2771,14 @@
         ["18+", u.age_ok ? "да" : "нет"],
       ].map(([k, v]) => `<div class="statrow"><span>${k}</span><b>${esc(String(v))}</b></div>`).join("");
       const acts = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
-        <button class="bigbtn" id="ucCoins" style="flex:1 1 100%">💰 Изменить монеты / прокруты</button>
+        <button class="bigbtn" id="ucMsg" style="flex:1 1 100%">✍️ Написать клиенту</button>
+        <button class="bigbtn" id="ucCoins" style="flex:1 1 100%;background:var(--surface-2);color:var(--text)">💰 Изменить монеты / прокруты</button>
         ${(u.referred_by && !u.super) ? `<button class="closebtn ucUnref" style="flex:1;color:var(--danger)">Отвязать реферала</button>` : ""}
         ${!u.super ? `<button class="closebtn ucDel" style="flex:1;color:var(--danger)">🗑 Удалить</button>` : `<div style="flex:1;color:var(--hint);text-align:center;align-self:center">🛡 защищён</div>`}
       </div>`;
       showInfo(who, `<div style="color:var(--hint);font-size:12px;margin-bottom:8px">ID ${u.id}</div>${rows}${acts}`);
       const close = () => closeOverlay($("infoOverlay"));
+      if ($("ucMsg")) $("ucMsg").onclick = () => { close(); openAdminMsg(u.id, who); };
       if ($("ucCoins")) $("ucCoins").onclick = () => { ["coinUserId", "unrefId"].forEach(f => { if ($(f)) $(f).value = u.id; }); close(); toast(`ID ${u.id} подставлен в «Монеты и прокруты»`); };
       document.querySelectorAll(".ucUnref").forEach(b => b.onclick = () => { close(); doUnref(u.id); });
       document.querySelectorAll(".ucDel").forEach(b => b.onclick = () => { close(); confirmDelUser(u.id); });
@@ -3025,10 +3085,11 @@
           ${deliv}${contact}
           <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} Br</span></div></div>
           ${receipt}
-          <div class="oacts">${acts}</div>
+          <div class="oacts">${acts}<button class="omsg" data-omsg="${o.user_id}" data-owho="${esc(who)}">✍️ Написать</button></div>
         </div>`;
       }).join("");
       $("ordersList").querySelectorAll("[data-oact]").forEach(b => b.onclick = () => orderAction(+b.dataset.oid, b.dataset.oact));
+      $("ordersList").querySelectorAll("[data-omsg]").forEach(b => b.onclick = () => openAdminMsg(+b.dataset.omsg, b.dataset.owho));
     }
 
     async function orderAction(id, action) {
