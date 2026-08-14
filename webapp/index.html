@@ -1131,7 +1131,24 @@
     let currentOrder = null, me = null, activeTab = "catalog";
 
     const $ = (id) => document.getElementById(id);
-    const alertMsg = (m) => (tg ? tg.showAlert(m) : alert(m));
+    // Окошки Telegram появились не сразу: в клиентах старее Bot API 6.2 методы
+    // showAlert/showConfirm НА ОБЪЕКТЕ ЕСТЬ, но при вызове бросают исключение.
+    // Поэтому проверять их наличие бесполезно — надо ловить отказ. Без этого
+    // исключение вылетало ДО самого действия: продавец жал «Подтвердить», а
+    // заказ молча оставался неподтверждённым.
+    function alertMsg(m) {
+      try {
+        if (tg && tg.showAlert) { tg.showAlert(m); return; }
+      } catch (e) { /* старый клиент — покажем обычным окном */ }
+      try { alert(m); } catch (e) {}
+    }
+
+    function confirmMsg(question, onYes) {
+      try {
+        if (tg && tg.showConfirm) { tg.showConfirm(question, ok => { if (ok) onYes(); }); return; }
+      } catch (e) { /* старый клиент — спросим обычным окном */ }
+      if (confirm(question)) onYes();
+    }
     const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
     const NAV = [
@@ -1551,12 +1568,17 @@
     $("pointBtn").onclick = () => {
       $("pointList").innerHTML = cityList.map(c => `<button class="opt ${c===city?'active':''}" data-city="${esc(c)}">${esc(c)}</button>`).join("");
       $("pointList").querySelectorAll("[data-city]").forEach(b => b.onclick = () => {
-        if (b.dataset.city !== city && Object.keys(cart).length && !confirm("Сменить точку? Корзина очистится.")) return;
-        if (b.dataset.city !== city) { for (const k in cart) delete cart[k]; }
-        city = b.dataset.city; $("pointName").textContent = city;
-        brandFilters = [];   // другая точка — другой набор брендов
-        prefetchDelivery();  // заранее подтянем способы получения новой точки
-        closeOverlay($("pointOverlay")); updateFilterBtn(); renderGrid(); renderNav();
+        const next = b.dataset.city;
+        const switchTo = () => {
+          if (next !== city) { for (const k in cart) delete cart[k]; }
+          city = next; $("pointName").textContent = city;
+          brandFilters = [];   // другая точка — другой набор брендов
+          prefetchDelivery();  // заранее подтянем способы получения новой точки
+          closeOverlay($("pointOverlay")); updateFilterBtn(); renderGrid(); renderNav();
+        };
+        if (next !== city && Object.keys(cart).length)
+          confirmMsg("Сменить точку? Корзина очистится.", switchTo);
+        else switchTo();
       });
       $("pointOverlay").classList.add("show");
     };
@@ -2889,8 +2911,7 @@
         } catch (e) { alertMsg("Сеть недоступна."); }
       };
       const msg = "Удалить ВСЕ заказы и обнулить счётчики игр? Отменить нельзя.";
-      if (tg && tg.showConfirm) tg.showConfirm(msg, ok => { if (ok) go(); });
-      else if (confirm(msg)) go();
+      confirmMsg(msg, go);
     }
     function bindPeriodBtns() {
       document.querySelectorAll("#statsBody .periodbtn").forEach(b => b.onclick = () => {
@@ -2946,8 +2967,7 @@
         } catch (e) { alertMsg("Сеть недоступна."); }
       };
       const ask = "Разыграть победителей сейчас и начать новый розыгрыш?";
-      if (tg && tg.showConfirm) tg.showConfirm(ask, ok => { if (ok) go(); });
-      else if (confirm(ask)) go();
+      confirmMsg(ask, go);
     };
 
     // ----- Пользователи и рефералы (админ) -----
@@ -3128,8 +3148,7 @@
     }
     function confirmDelUser(id) {
       const msg = `Удалить пользователя ID ${id}? Он потеряет монеты, прокруты и 18+. Заказы останутся в истории.`;
-      if (tg && tg.showConfirm) tg.showConfirm(msg, ok => { if (ok) doDelUser(id); });
-      else if (confirm(msg)) doDelUser(id);
+      confirmMsg(msg, () => doDelUser(id));
     }
     $("unrefDo").onclick = async () => {
       const id = $("unrefId").value.trim();
@@ -3154,8 +3173,7 @@
           else alertMsg("Не удалось.");
         } catch (e) { alertMsg("Сеть недоступна."); }
       };
-      if (tg && tg.showConfirm) tg.showConfirm("Отвязать всех ваших рефералов?", ok => { if (ok) go(); });
-      else if (confirm("Отвязать всех ваших рефералов?")) go();
+      confirmMsg("Отвязать всех ваших рефералов?", go);
     };
 
     // ----- Настройки магазина -----
@@ -3239,8 +3257,8 @@
       finally { $("stAdd").disabled = false; $("stAdd").textContent = "Выдать доступ"; }
     };
 
-    async function removeStaff(uid) {
-      if (!confirm(`Убрать доступ у ID ${uid}?`)) return;
+    function removeStaff(uid) { confirmMsg(`Убрать доступ у ID ${uid}?`, () => doRemoveStaff(uid)); }
+    async function doRemoveStaff(uid) {
       try {
         const r = await fetch("/api/admin/staff/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: uid }) });
         const d = await r.json();
@@ -3315,8 +3333,7 @@
         } catch (e) { alertMsg("Сеть недоступна."); }
       };
       const msg = `Отменить заказ #${o.id}?`;
-      if (tg && tg.showConfirm) tg.showConfirm(msg, ok => { if (ok) go(); });
-      else if (confirm(msg)) go();
+      confirmMsg(msg, go);
     }
     // Трекер: Оформлен → Подтверждён → Выдан (или «отклонён»).
     function orderTracker(status) {
@@ -3449,8 +3466,7 @@
           await refreshProducts();   // остаток мог вернуться при отклонении
         } catch (e) { alertMsg("Сеть недоступна."); }
       };
-      if (tg && tg.showConfirm) tg.showConfirm(ask, ok => { if (ok) go(); });
-      else if (confirm(ask)) go();
+      confirmMsg(ask, go);
     }
 
     // ----- Бренды и вкусы -----
@@ -3543,8 +3559,8 @@
       $("brFormSect").open = true;   // раскрыть свёрнутую форму
       $("brName").scrollIntoView({ behavior: "smooth", block: "center" });
     }
-    async function delBrand(id) {
-      if (!confirm("Удалить бренд?")) return;
+    function delBrand(id) { confirmMsg("Удалить бренд?", () => doDelBrand(id)); }
+    async function doDelBrand(id) {
       try {
         await fetch("/api/admin/brand/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
         if (editingBrandId === id) resetBrandForm();
@@ -3650,8 +3666,8 @@
         await loadDelivery(); renderLocList();
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
-    async function delDeliveryMethod(id) {
-      if (!confirm("Удалить способ получения?")) return;
+    function delDeliveryMethod(id) { confirmMsg("Удалить способ получения?", () => doDelDeliveryMethod(id)); }
+    async function doDelDeliveryMethod(id) {
       try {
         await fetch("/api/admin/delivery/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
         await loadDelivery(); renderLocList();
@@ -3670,8 +3686,8 @@
         $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
       } catch (e) { alertMsg("Сеть недоступна."); }
     };
-    async function delLocation(id) {
-      if (!confirm("Удалить локацию?")) return;
+    function delLocation(id) { confirmMsg("Удалить локацию?", () => doDelLocation(id)); }
+    async function doDelLocation(id) {
       try {
         const r = await fetch("/api/admin/location/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
         const d = await r.json();
@@ -3975,8 +3991,8 @@
       finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
     }
 
-    async function delAdminRow(id) {
-      if (!confirm("Удалить товар?")) return;
+    function delAdminRow(id) { confirmMsg("Удалить товар?", () => doDelAdminRow(id)); }
+    async function doDelAdminRow(id) {
       try {
         await fetch("/api/admin/product/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
         await refreshProducts();
