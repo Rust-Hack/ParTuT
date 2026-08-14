@@ -1310,6 +1310,71 @@ def set_setting(key, value):
     conn.close()
 
 
+# ---------- Резервная копия ----------
+
+# Картинки в копию НЕ кладём: это кэш, их всегда можно скачать заново из
+# Telegram по file_id, зато весят они больше всех остальных данных вместе взятых.
+BACKUP_SKIP = {"photo_blobs"}
+
+
+def _all_table_names(cur):
+    """Имена таблиц спрашиваем У БАЗЫ, а не держим списком: иначе новая таблица
+    однажды появится, а в резервную копию её забудут добавить — и потеряется
+    именно она."""
+    if USE_PG:
+        cur.execute("SELECT table_name AS name FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'")
+    else:
+        cur.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    return sorted(r["name"] for r in cur.fetchall())
+
+
+def export_tables():
+    """Всё содержимое базы: {таблица: [строки]}. Схему не сохраняем — её заново
+    создаёт init_db(), поэтому копия переживает и обновления кода."""
+    conn = connect()
+    cur = conn.cursor()
+    out = {}
+    for table in _all_table_names(cur):
+        if table in BACKUP_SKIP:
+            continue
+        cur.execute(f"SELECT * FROM {table}")
+        out[table] = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return out
+
+
+def import_tables(data, wipe=True):
+    """Заливает копию обратно. wipe=True — сначала чистит таблицы.
+
+    Пропускает таблицы и колонки, которых в нынешней схеме уже нет: копия могла
+    быть снята до обновления кода, и упасть на одном лишнем поле она не должна."""
+    conn = connect()
+    cur = conn.cursor()
+    present = set(_all_table_names(cur))
+    report = {}
+    for table, rows in data.items():
+        if table not in present:
+            report[table] = "таблицы больше нет — пропущено"
+            continue
+        cols = _table_columns(cur, table)
+        if wipe:
+            cur.execute(f"DELETE FROM {table}")
+        loaded = 0
+        for row in rows:
+            fields = [c for c in row if c in cols]
+            if not fields:
+                continue
+            marks = ", ".join(["%s"] * len(fields))
+            cur.execute(_q(f"INSERT INTO {table} ({', '.join(fields)}) VALUES ({marks})"),
+                        tuple(row[f] for f in fields))
+            loaded += 1
+        report[table] = f"{loaded} строк"
+    conn.commit()
+    conn.close()
+    return report
+
+
 # ---------- «Сообщить о поступлении» ----------
 
 def add_stock_alert(product_id, user_id):

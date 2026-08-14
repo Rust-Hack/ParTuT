@@ -634,6 +634,62 @@ def _maybe_send_daily_summary():
         _safe_send(admin_id, text, parse_mode="HTML")
 
 
+# --- Резервная копия базы ---
+# Заказы, покупатели, балансы монет живут в единственном экземпляре в облачной
+# базе. Копию храним там, где её точно не потеряют и за неё не надо платить —
+# в личке владельца в Telegram. Раз в сутки, ночью, когда никто не покупает.
+BACKUP_HOUR = int(os.environ.get("BACKUP_HOUR", "4"))
+_last_backup_date = None
+
+
+def _backup_bytes():
+    """Сжатый JSON со всем содержимым базы + имя файла."""
+    import gzip
+    payload = json.dumps(db.export_tables(), ensure_ascii=False, default=str).encode("utf-8")
+    stamp = datetime.datetime.utcnow().strftime("%Y-%m-%d_%H%M")
+    return gzip.compress(payload), f"partut-{stamp}.json.gz"
+
+
+def _send_backup(chat_ids, note=""):
+    """Отправляет копию. Возвращает текст ошибки или None, если всё ушло."""
+    try:
+        blob, name = _backup_bytes()
+    except Exception as e:
+        print(f"Не смог собрать резервную копию: {e}")
+        return f"не смог собрать копию: {e}"
+    size = f"{len(blob) / 1024:.0f} КБ"
+    caption = (note or "🗄 Резервная копия базы") + f"\nРазмер: {size}. Храните — по ней можно восстановить магазин."
+    sent = False
+    for chat_id in chat_ids:
+        try:
+            bot.send_document(chat_id, blob, visible_file_name=name, caption=caption)
+            sent = True
+        except Exception as e:
+            print(f"Не смог отправить копию в чат {chat_id}: {e}")
+    return None if sent else "не удалось отправить файл"
+
+
+def _maybe_send_backup():
+    """Раз в сутки после BACKUP_HOUR по минскому времени."""
+    global _last_backup_date
+    local = datetime.datetime.utcnow() + datetime.timedelta(hours=SUMMARY_TZ_OFFSET)
+    if local.hour < BACKUP_HOUR or _last_backup_date == local.date():
+        return
+    _last_backup_date = local.date()      # ставим ДО отправки: неудача не должна
+    _send_backup(SUPER_ADMIN_IDS)         # заставить бота слать копию каждую минуту
+
+
+@bot.message_handler(commands=["backup"])
+def cmd_backup(message):
+    """Копия по требованию — чтобы не ждать ночи перед рискованной правкой."""
+    if not is_super_admin(message.from_user.id):
+        return
+    bot.reply_to(message, "Собираю копию…")
+    err = _send_backup([message.chat.id], note="🗄 Резервная копия по запросу")
+    if err:
+        _safe_send(message.chat.id, f"Не получилось: {err}")
+
+
 def _reminder_loop():
     """Раз в минуту: напоминает продавцам о заказах, ждущих одобрения (раз в 10 мин на заказ),
     и авто-отменяет брошенные карточные заказы без чека (спустя CANCEL_UNPAID_HOURS)."""
@@ -647,6 +703,7 @@ def _reminder_loop():
                     _safe_send(o["user_id"], f"⏳ Заказ #{o['id']} отменён — чек не был загружен. "
                                              "Товар вернулся в наличие, монеты возвращены. Оформите заново, если нужно.")
             _maybe_send_daily_summary()
+            _maybe_send_backup()
         except Exception as e:
             print(f"Ошибка фонового цикла заказов: {e}")
         time.sleep(60)
