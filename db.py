@@ -484,6 +484,20 @@ def add_delivery_method(city, name, needs_address, address_label, pickup_address
     conn.close()
 
 
+def update_delivery_method(method_id, name, needs_address, address_label, pickup_address, fee, needs_payment):
+    """Обновляет существующий способ получения (правка на месте)."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("""UPDATE delivery_methods
+        SET name = %s, needs_address = %s, address_label = %s,
+            pickup_address = %s, fee = %s, needs_payment = %s
+        WHERE id = %s"""),
+        (name, 1 if needs_address else 0, address_label or "", pickup_address or "",
+         float(fee or 0), 1 if needs_payment else 0, method_id))
+    conn.commit()
+    conn.close()
+
+
 def get_delivery_method(method_id):
     conn = connect()
     cur = conn.cursor()

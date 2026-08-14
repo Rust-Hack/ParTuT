@@ -3264,7 +3264,21 @@
           const tail = `${m.fee ? " · +" + m.fee.toFixed(2) + " Br" : ""} · ${m.needs_payment ? "оплата" : "без оплаты"}`;
           return `<div class="admrow" style="background:var(--surface-2);box-shadow:none">
               <div class="an">${esc(m.name)}<small>${info}${tail}</small></div>
-              <button class="iconbtn danger" data-dmdel="${m.id}">🗑</button></div>`;
+              <div style="display:flex;gap:6px">
+                <button class="iconbtn" data-dmedit="${m.id}">✏️</button>
+                <button class="iconbtn danger" data-dmdel="${m.id}">🗑</button></div></div>
+            <details class="sect" data-dmbox="${m.id}" style="margin:0 0 8px;background:var(--surface-2);box-shadow:none">
+              <summary class="secthead" style="font-size:13px">✏️ Изменить «${esc(m.name)}»</summary>
+              <div class="sectbody form">
+                <label>Название</label><input class="dme-name" value="${esc(m.name)}">
+                <div class="chk"><input type="checkbox" class="dme-addr" ${m.needs_address ? "checked" : ""}><label style="margin:0">Спрашивать адрес у клиента</label></div>
+                <label>Метка поля адреса</label><input class="dme-alabel" value="${esc(m.address_label || "")}">
+                <label>Адрес самовывоза (показать клиенту)</label><input class="dme-pickup" value="${esc(m.pickup_address || "")}">
+                <label>Доплата за доставку (Br)</label><input class="dme-fee" inputmode="decimal" value="${m.fee || 0}">
+                <div class="chk"><input type="checkbox" class="dme-pay" ${m.needs_payment ? "checked" : ""}><label style="margin:0">Нужна оплата (карта/наличные)</label></div>
+                <button class="bigbtn dm-save" data-mid="${m.id}" style="margin-top:12px">Сохранить</button>
+              </div>
+            </details>`;
         }).join("") || `<p style="color:var(--hint);font-size:13px;margin:4px 0">Способов ещё нет.</p>`;
         return `<div class="card-block">
           <div class="admrow" style="padding:0;background:none;box-shadow:none">
@@ -3289,6 +3303,28 @@
       $("locList").querySelectorAll("[data-locdel]").forEach(b => b.onclick = () => delLocation(+b.dataset.locdel));
       $("locList").querySelectorAll("[data-dmdel]").forEach(b => b.onclick = () => delDeliveryMethod(+b.dataset.dmdel));
       $("locList").querySelectorAll(".dm-add").forEach(b => b.onclick = () => addDeliveryMethod(b));
+      $("locList").querySelectorAll("[data-dmedit]").forEach(b => b.onclick = () => {
+        const box = $("locList").querySelector(`[data-dmbox="${b.dataset.dmedit}"]`);
+        if (box) { box.open = !box.open; if (box.open) box.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+      });
+      $("locList").querySelectorAll(".dm-save").forEach(b => b.onclick = () => saveDeliveryMethod(b));
+    }
+    async function saveDeliveryMethod(btn) {
+      const body = btn.closest(".sectbody");
+      const name = body.querySelector(".dme-name").value.trim();
+      if (!name) { alertMsg("Введите название способа."); return; }
+      const payload = { initData, id: +btn.dataset.mid, name,
+        needs_address: body.querySelector(".dme-addr").checked,
+        address_label: body.querySelector(".dme-alabel").value.trim(),
+        pickup_address: body.querySelector(".dme-pickup").value.trim(),
+        fee: body.querySelector(".dme-fee").value || 0,
+        needs_payment: body.querySelector(".dme-pay").checked };
+      try {
+        const r = await fetch("/api/admin/delivery/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось сохранить."); return; }
+        await loadDelivery(); renderLocList();
+      } catch (e) { alertMsg("Сеть недоступна."); }
     }
     async function addDeliveryMethod(btn) {
       const body = btn.closest(".sectbody");

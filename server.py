@@ -1498,6 +1498,34 @@ def api_admin_delivery_add():
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/delivery/update", methods=["POST"])
+def api_admin_delivery_update():
+    """Правка способа получения на месте (по id)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        mid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    name = (data.get("name") or "").strip()
+    if not name or not db.get_delivery_method(mid):
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+    try:
+        fee = float(str(data.get("fee") or 0).replace(",", "."))
+    except (TypeError, ValueError):
+        fee = 0.0
+    db.update_delivery_method(
+        mid, name,
+        bool(data.get("needs_address")),
+        (data.get("address_label") or "").strip(),
+        (data.get("pickup_address") or "").strip(),
+        max(0.0, fee),
+        bool(data.get("needs_payment", True)),
+    )
+    return jsonify({"ok": True})
+
+
 @app.route("/api/admin/delivery/delete", methods=["POST"])
 def api_admin_delivery_delete():
     """Удалить способ получения."""
