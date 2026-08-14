@@ -22,6 +22,7 @@ import telebot
 from telebot import types
 from dotenv import load_dotenv
 
+import config
 import db
 import notifications
 
@@ -37,6 +38,7 @@ from config import (
 bot = telebot.TeleBot(BOT_TOKEN)
 
 db.init_db()
+config.seed_admins_from_env()   # разовый перенос админов из окружения в базу
 
 # Если задан адрес Mini App — ставим кнопку «🛍 Магазин» рядом с полем ввода.
 if WEBAPP_URL:

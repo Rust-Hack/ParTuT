@@ -104,11 +104,43 @@ def refresh_staff():
         _staff_cache["at"] = 0.0
 
 
+def seed_admins_from_env():
+    """Одноразово переносит админов из переменных окружения в базу.
+
+    После переноса база — единственный источник прав, поэтому любого админа
+    можно убрать прямо из приложения. Раньше записи из окружения удалить было
+    нельзя вовсе: сервер читает их при запуске, и приложение до них не достаёт.
+
+    Отметку о переносе храним в settings, а НЕ «таблица пуста»: иначе стоит
+    владельцу убрать всех продавцов, как при следующем перезапуске они бы
+    вернулись из окружения.
+
+    Города при переносе переводим из кодов в названия: заказы носят название
+    («Минск»), а переменные заданы кодом (ADMIN_MINSK), и раньше они не
+    совпадали — продавцы городов из окружения не получали заказы никогда."""
+    try:
+        if db.get_setting("staff_seeded"):
+            return
+        rows = [(uid, "") for uid in ADMIN_IDS]
+        for code, ids in CITY_ADMINS.items():
+            rows += [(uid, CITIES.get(code, code)) for uid in ids]
+        for uid, city in rows:
+            if uid in SUPER_ADMIN_IDS and not city:
+                continue                      # владелец и так админ всегда
+            db.add_staff(uid, city, "перенесён из настроек сервера", None)
+        db.set_setting("staff_seeded", "1")
+        refresh_staff()
+        if rows:
+            print(f"Админы перенесены из настроек сервера в базу: {len(rows)}")
+    except Exception as e:
+        print(f"Не удалось перенести админов из настроек сервера: {e}")
+
+
 def all_admin_ids():
-    ids = set(ADMIN_IDS) | set(SUPER_ADMIN_IDS)     # супер-админ всегда среди админов
-    for city_ids in CITY_ADMINS.values():
-        ids |= city_ids
-    for city_ids in _staff_by_city().values():      # добавленные из приложения
+    # Супер-админ — всегда админ, даже если базы нет: это последний ключ от
+    # магазина. Все остальные живут в базе и оттуда же убираются.
+    ids = set(SUPER_ADMIN_IDS)
+    for city_ids in _staff_by_city().values():
         ids |= city_ids
     return ids
 
@@ -118,13 +150,13 @@ def is_admin(user_id):
 
 
 def admins_for_city(city):
-    """Кому отправлять заказ этого города. Если продавец города не задан —
-    владельцу: заказ обязан кому-то прийти, иначе его просто никто не увидит."""
+    """Кому отправлять заказ этого города. Если продавца города нет — тем, у кого
+    полный доступ, а если и таких нет — владельцу: заказ обязан кому-то прийти,
+    иначе его просто никто не увидит."""
     staff = _staff_by_city()
-    ids = set(CITY_ADMINS.get(city) or set()) | set(staff.get(city) or set())
-    if ids:
-        return ids
-    return set(ADMIN_IDS) | set(staff.get("") or set())
+    return (set(staff.get(city) or set())
+            or set(staff.get("") or set())
+            or set(SUPER_ADMIN_IDS))
 
 
 # --- Реквизиты оплаты (МЕНЯЙТЕ ПОД СЕБЯ). Обычный текст — его показывает приложение. ---

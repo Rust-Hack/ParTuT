@@ -38,6 +38,7 @@ from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT
                    CONFIRM_MINUTES, is_admin, is_super_admin, admins_for_city, CITIES, CATEGORIES)
 
 db.init_db()
+config.seed_admins_from_env()   # разовый перенос админов из окружения в базу
 
 # Отдельный экземпляр бота — ТОЛЬКО чтобы отправлять сообщения/картинки.
 tg = telebot.TeleBot(BOT_TOKEN)
@@ -1626,9 +1627,9 @@ def _super(data):
 
 @app.route("/api/admin/staff", methods=["POST"])
 def api_admin_staff():
-    """Список тех, у кого есть доступ. Показываем И добавленных из приложения,
-    И прописанных в настройках сервера: иначе непонятно, почему человек остаётся
-    админом после удаления. Записи из настроек помечены и не удаляются отсюда."""
+    """Список тех, у кого есть доступ. Все они живут в базе и убираются отсюда же
+    — кроме владельца: его права держатся на настройках сервера, чтобы доступ к
+    магазину нельзя было потерять ни по ошибке, ни злым умыслом."""
     data = request.get_json(force=True, silent=True) or {}
     if not _super(data):
         return jsonify({"ok": False, "error": "forbidden"}), 403
@@ -1637,21 +1638,15 @@ def api_admin_staff():
     for r in db.list_staff():
         uid = int(r["user_id"])
         rows.append({"user_id": uid, "city": r["city"] or "", "note": r["note"] or "",
-                     "source": "app", "can_remove": not is_super_admin(uid),
-                     "is_super": is_super_admin(uid)})
-    known = {r["user_id"] for r in rows}
+                     "can_remove": not is_super_admin(uid), "is_super": is_super_admin(uid)})
 
-    # Из переменных окружения: владельцы, продавцы городов, супер-админы.
-    from_env = [(uid, "") for uid in ADMIN_IDS]
-    for city, ids in CITY_ADMINS.items():
-        from_env += [(uid, city) for uid in ids]
-    from_env += [(uid, "") for uid in SUPER_ADMIN_IDS]
-    for uid, city in from_env:
-        if uid in known:
-            continue
-        known.add(uid)
-        rows.append({"user_id": uid, "city": city, "note": "", "source": "env",
-                     "can_remove": False, "is_super": is_super_admin(uid)})
+    # Владелец может не значиться в таблице — админом он всё равно остаётся,
+    # и в списке должен быть виден, иначе непонятно, у кого ещё есть доступ.
+    known = {r["user_id"] for r in rows}
+    for uid in SUPER_ADMIN_IDS:
+        if uid not in known:
+            rows.append({"user_id": uid, "city": "", "note": "",
+                         "can_remove": False, "is_super": True})
 
     return jsonify({"ok": True, "staff": rows, "cities": CITIES})
 

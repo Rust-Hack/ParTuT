@@ -52,10 +52,8 @@ def run():
     mine = next((s for s in lst if s["user_id"] == SELLER), None)
     c("продавец есть в списке", mine is not None)
     c("подпись сохранена", mine and mine["note"] == "@seller")
-    c("видно, что добавлен из приложения", mine and mine["source"] == "app")
     c("его можно убрать", mine and mine["can_remove"])
 
-    # Записи из переменных окружения показываем, но удалить нельзя.
     env_row = next((s for s in lst if s["user_id"] == SUPER), None)
     c("владелец виден в списке", env_row is not None)
     c("владельца убрать нельзя", env_row and not env_row["can_remove"])
@@ -92,9 +90,52 @@ def run():
     db.staff_ids_by_city = real
     config.refresh_staff()
 
+    # --- Перенос из переменных окружения ---
+    # Ради этого всё и затевалось: раньше админа из окружения нельзя было убрать
+    # из приложения вовсе. Теперь его переносят в базу — и он снимается как все.
+    c2 = Checker("Перенос админов из настроек сервера")
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute("DELETE FROM staff"); cur.execute(_q_del()); conn.commit(); conn.close()
+    config.refresh_staff()
+
+    env_admin = next(iter(config.ADMIN_IDS - config.SUPER_ADMIN_IDS), None)
+    if env_admin is None:
+        env_admin = 555444
+        config.ADMIN_IDS = set(config.ADMIN_IDS) | {env_admin}
+
+    config.seed_admins_from_env()
+    ids = {int(r["user_id"]) for r in db.list_staff()}
+    c2("админ из окружения попал в базу", env_admin in ids)
+    c2("и остался админом", config.is_admin(env_admin))
+
+    lst = client.post("/api/admin/staff", json={"initData": "x"}).get_json()["staff"]
+    row = next((s for s in lst if s["user_id"] == env_admin), None)
+    c2("теперь его МОЖНО убрать", row and row["can_remove"])
+
+    r = client.post("/api/admin/staff/remove", json={"initData": "x", "user_id": env_admin})
+    c2("сняли перенесённого", (r.get_json() or {}).get("ok"))
+    c2("права отозваны", not config.is_admin(env_admin))
+
+    # Перезапуск сервиса не должен воскрешать снятых.
+    config.seed_admins_from_env()
+    config.refresh_staff()
+    c2("после перезапуска НЕ вернулся", not config.is_admin(env_admin))
+
+    # Заказ обязан кому-то прийти, даже когда продавцов не осталось.
     conn = db.connect(); conn.cursor().execute("DELETE FROM staff"); conn.commit(); conn.close()
     config.refresh_staff()
-    return c.fails
+    c2("без продавцов заказ уходит владельцу", config.admins_for_city("Минск") == set(config.SUPER_ADMIN_IDS))
+    c2("владелец админ и с пустой таблицей", config.is_admin(SUPER))
+
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute("DELETE FROM staff"); cur.execute(_q_del()); conn.commit(); conn.close()
+    config.refresh_staff()
+    return c.fails + c2.fails
+
+
+def _q_del():
+    """Сбрасывает отметку о переносе, чтобы его можно было проверить заново."""
+    return db._q("DELETE FROM settings WHERE key = 'staff_seeded'")
 
 
 if __name__ == "__main__":

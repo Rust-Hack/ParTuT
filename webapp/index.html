@@ -3215,8 +3215,7 @@
         const where = s.city ? esc(s.city) : "все точки";
         const who = s.note ? esc(s.note) : `ID ${s.user_id}`;
         const sub = s.note ? `ID ${s.user_id} · ${where}` : where;
-        const tags = (s.is_super ? `<span class="tagbadge">владелец</span>` : "") +
-          (s.source === "env" ? `<span class="tagbadge alt">из настроек сервера</span>` : "");
+        const tags = s.is_super ? `<span class="tagbadge">владелец · снять нельзя</span>` : "";
         const del = s.can_remove ? `<button class="delx" data-stdel="${s.user_id}">Убрать</button>` : "";
         return `<div class="urow"><div><div><b>${who}</b></div>
           <small style="color:var(--hint)">${sub}</small>
