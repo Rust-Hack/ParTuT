@@ -68,7 +68,7 @@ def notify_sellers(bot, order_id):
 def remind_sellers(bot, order):
     """Короткое повторное напоминание продавцу, что заказ ещё не обработан."""
     method = order["delivery_method"] or ""
-    st = {"paid": "ждёт вашего подтверждения", "confirmed": "подтверждён, ждёт выдачи"}.get(order["status"], "ждёт обработки")
+    st = "ждёт вашего подтверждения"
     text = (f"⏰ <b>Напоминание: заказ #{order['id']} {st}</b>\n"
             f"🏙 {CITIES.get(order['city'], order['city'])} · {order['total']:.2f} BYN"
             + (f" · {method}" if method else "")

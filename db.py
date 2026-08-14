@@ -1442,12 +1442,12 @@ def touch_order_reminded(order_id):
 
 
 def orders_needing_reminder(minutes=10):
-    """Заказы, ожидающие обработки продавцом (paid/confirmed), по которым напоминание
-    не отправлялось дольше `minutes`. Для повторного напоминания продавцу."""
+    """Заказы, ждущие ОДОБРЕНИЯ продавца (status='paid'), по которым напоминание
+    не отправлялось дольше `minutes`. Напоминаем до одобрения (потом продавец сам ведёт заказ)."""
     cutoff = (datetime.datetime.now() - datetime.timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("SELECT * FROM orders WHERE status IN ('paid','confirmed') "
+    cur.execute(_q("SELECT * FROM orders WHERE status = 'paid' "
                    "AND (reminded_at IS NULL OR reminded_at <= %s) ORDER BY id"), (cutoff,))
     rows = cur.fetchall()
     conn.close()

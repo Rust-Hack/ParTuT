@@ -643,7 +643,7 @@
     <div class="req" id="payReq"></div><div class="spacer"></div>
     <button class="bigbtn" id="uploadBtn">📷 Загрузить чек</button>
     <input type="file" id="receiptFile" accept="image/*" style="display:none">
-    <button class="closebtn" id="payCancel">Отмена</button>
+    <button class="closebtn" id="payCancel">Оплачу позже (чек — в «Мои заказы»)</button>
   </div>
 
   <div class="view" id="doneView">
@@ -2254,6 +2254,7 @@
         currentOrder = d;
         if (d.coins_used) bonus.coins = Math.max(0, (bonus.coins || 0) - d.coins_used);
         useCoins = false;
+        for (const k in cart) delete cart[k]; renderNav();   // заказ СОЗДАН — чистим корзину сразу (нет дублей)
         if (d.needs_receipt) {
           $("payTitle").textContent = `Оплата заказа #${d.order_id}`;
           const disc = d.discount ? `Списано ${d.coins_used} 🪙 (−${d.discount.toFixed(2)} Br)\n` : "";
@@ -2265,7 +2266,6 @@
             ? `Заказ #${d.order_id} принят! Оплата наличными при получении. Продавец свяжется с вами.`
             : `Заказ #${d.order_id} принят! Продавец скоро свяжется с вами.`;
           $("doneView").classList.add("show");
-          for (const k in cart) delete cart[k]; renderNav();
         }
         fetchBonus();
       } catch (e) { alertMsg("Сеть недоступна."); }
@@ -2961,7 +2961,7 @@
     const OSTATUS = {
       new:       { label: "Ждёт чек",            cls: "new" },
       paid:      { label: "Ждёт подтверждения",  cls: "paid" },
-      confirmed: { label: "Оплата подтверждена", cls: "confirmed" },
+      confirmed: { label: "Подтверждён", cls: "confirmed" },
       issued:    { label: "Выдан",               cls: "issued" },
       canceled:  { label: "Отклонён",            cls: "canceled" },
     };
@@ -3034,7 +3034,7 @@
     async function orderAction(id, action) {
       const ask = action === "reject" ? "Отклонить заказ и вернуть товар на склад?"
                 : action === "issued" ? "Отметить заказ выданным?"
-                : "Подтвердить оплату?";
+                : "Подтвердить заказ?";
       const go = async () => {
         try {
           await fetch("/api/admin/order/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, action }) });
