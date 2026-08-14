@@ -786,7 +786,7 @@ def clear_referrals_of(ref_id):
 
 
 def list_users(search="", limit=300):
-    """Список пользователей для админа с полезными полями. search — подстрока id.
+    """Список пользователей для админа. search — подстрока id ИЛИ @username (из заказов).
     Возвращает (список, всего_в_базе)."""
     conn = connect()
     cur = conn.cursor()
@@ -796,23 +796,36 @@ def list_users(search="", limit=300):
             "referred_by, COALESCE(wheel_spins,0) AS wheel_spins, COALESCE(ref_earned,0) AS ref_earned FROM users ")
     search = (search or "").strip()
     if search:
-        cur.execute(_q(base + "WHERE CAST(user_id AS TEXT) LIKE %s ORDER BY user_id DESC LIMIT %s"),
-                    (f"%{search}%", limit))
+        # ищем и по id, и по имени (через заказы) — сначала находим id, потом полные данные
+        like = f"%{search.lower()}%"
+        cur.execute(_q(
+            "SELECT DISTINCT u.user_id AS user_id FROM users u "
+            "LEFT JOIN orders o ON o.user_id = u.user_id "
+            "WHERE CAST(u.user_id AS TEXT) LIKE %s OR LOWER(COALESCE(o.username,'')) LIKE %s "
+            "ORDER BY u.user_id DESC LIMIT %s"), (f"%{search}%", like, limit))
+        match_ids = [r["user_id"] for r in cur.fetchall()]
+        if not match_ids:
+            conn.close()
+            return [], total
+        marks0 = ",".join(["%s"] * len(match_ids))
+        cur.execute(_q(base + f"WHERE user_id IN ({marks0}) ORDER BY user_id DESC"), tuple(match_ids))
     else:
         cur.execute(_q(base + "ORDER BY user_id DESC LIMIT %s"), (limit,))
     users = cur.fetchall()
     ids = [u["user_id"] for u in users]
-    orders_by, names, refcount = {}, {}, {}
+    orders_by, names, refcount, last_order = {}, {}, {}, {}
     if ids:
         marks = ",".join(["%s"] * len(ids))
         cur.execute(_q(f"SELECT user_id, COUNT(*) AS cnt, COALESCE(SUM(total),0) AS spent "
                        f"FROM orders WHERE user_id IN ({marks}) AND status = 'issued' GROUP BY user_id"), tuple(ids))
         for r in cur.fetchall():
             orders_by[r["user_id"]] = (r["cnt"], r["spent"])
-        cur.execute(_q(f"SELECT user_id, username FROM orders WHERE user_id IN ({marks}) ORDER BY id DESC"), tuple(ids))
+        cur.execute(_q(f"SELECT user_id, username, created_at FROM orders WHERE user_id IN ({marks}) ORDER BY id DESC"), tuple(ids))
         for r in cur.fetchall():
             if r["user_id"] not in names and r["username"]:
                 names[r["user_id"]] = r["username"]        # самый свежий username
+            if r["user_id"] not in last_order and r["created_at"]:
+                last_order[r["user_id"]] = r["created_at"]  # дата последнего заказа
         cur.execute(_q(f"SELECT referred_by AS ref, COUNT(*) AS c FROM users WHERE referred_by IN ({marks}) GROUP BY referred_by"), tuple(ids))
         for r in cur.fetchall():
             refcount[r["ref"]] = r["c"]
@@ -826,6 +839,7 @@ def list_users(search="", limit=300):
             "wheel_spins": u["wheel_spins"], "ref_earned": u["ref_earned"],
             "referred_by": u["referred_by"], "referrals": refcount.get(u["user_id"], 0),
             "orders": cnt, "spent": round(spent or 0, 2),
+            "last_order": last_order.get(u["user_id"], ""),
         })
     return out, total
 

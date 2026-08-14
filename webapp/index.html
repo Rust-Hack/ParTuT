@@ -326,7 +326,8 @@
     .delx { color: var(--danger); border-color: var(--danger); }
     .urow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
     .urow:last-child { border-bottom: none; }
-    .uinfo { min-width: 0; }
+    .uinfo { min-width: 0; cursor: pointer; }
+    .uopen { color: var(--brand-neon); white-space: nowrap; }
     .uinfo b { display: block; font-size: 14px; }
     .uinfo small { color: var(--hint); font-size: 12px; }
     .uacts { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
@@ -685,7 +686,7 @@
     <details class="sect">
       <summary class="secthead"><span>Все пользователи (<span id="allUsersCount">0</span>)</span></summary>
       <div class="sectbody">
-        <input id="userSearch" class="admsearch" inputmode="numeric" placeholder="🔍 Поиск по ID">
+        <input id="userSearch" class="admsearch" placeholder="🔍 Поиск по ID или @имени">
         <div id="allUsersList"></div>
       </div>
     </details>
@@ -2555,7 +2556,34 @@
       toast(`ID ${id} скопирован ✓`);
     }
     function bindIdCopy(scope) {
-      (scope || document).querySelectorAll(".idcopy").forEach(el => el.onclick = () => copyUserId(el.dataset.copy));
+      (scope || document).querySelectorAll(".idcopy").forEach(el => el.onclick = (e) => { e.stopPropagation(); copyUserId(el.dataset.copy); });
+    }
+    let _usersById = {};
+    // Подробная карточка пользователя (тап по строке).
+    function showUserCard(u) {
+      if (!u) return;
+      const who = (u.username ? `@${esc(u.username)}` : `ID ${u.id}`) + (u.super ? " 🛡" : "");
+      const rows = [
+        ["Баланс", `${u.coins} 🪙`],
+        ["Прокруты колеса", `${u.wheel_spins} 🎡`],
+        ["Заказов (выдано)", `${u.orders}`],
+        ["Сумма покупок", `${u.spent} Br`],
+        ["Последний заказ", u.last_order || "—"],
+        ["Рефералов", `${u.referrals}`],
+        ["Пригласил", u.referred_by ? `id ${u.referred_by}` : "—"],
+        ["Заработано на рефералах", `${u.ref_earned} 🪙`],
+        ["18+", u.age_ok ? "да" : "нет"],
+      ].map(([k, v]) => `<div class="statrow"><span>${k}</span><b>${esc(String(v))}</b></div>`).join("");
+      const acts = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+        <button class="bigbtn" id="ucCoins" style="flex:1 1 100%">💰 Изменить монеты / прокруты</button>
+        ${(u.referred_by && !u.super) ? `<button class="closebtn ucUnref" style="flex:1;color:var(--danger)">Отвязать реферала</button>` : ""}
+        ${!u.super ? `<button class="closebtn ucDel" style="flex:1;color:var(--danger)">🗑 Удалить</button>` : `<div style="flex:1;color:var(--hint);text-align:center;align-self:center">🛡 защищён</div>`}
+      </div>`;
+      showInfo(who, `<div style="color:var(--hint);font-size:12px;margin-bottom:8px">ID ${u.id}</div>${rows}${acts}`);
+      const close = () => closeOverlay($("infoOverlay"));
+      if ($("ucCoins")) $("ucCoins").onclick = () => { ["coinUserId", "unrefId"].forEach(f => { if ($(f)) $(f).value = u.id; }); close(); toast(`ID ${u.id} подставлен в «Монеты и прокруты»`); };
+      document.querySelectorAll(".ucUnref").forEach(b => b.onclick = () => { close(); doUnref(u.id); });
+      document.querySelectorAll(".ucDel").forEach(b => b.onclick = () => { close(); confirmDelUser(u.id); });
     }
     async function adjustCoins(sign) {
       const id = $("coinUserId").value.trim();
@@ -2604,17 +2632,20 @@
         if (!d.ok) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Не удалось загрузить.</div>`; return; }
         $("allUsersCount").textContent = d.total;
         if (!d.users.length) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Ничего не найдено.</div>`; return; }
+        _usersById = {};
+        d.users.forEach(u => { _usersById[u.id] = u; });
         $("allUsersList").innerHTML = d.users.map(u => {
           const who = (u.username ? `@${esc(u.username)}` : `ID ${u.id}`) + (u.super ? ` <span class="superbadge">🛡 SUPER</span>` : "");
           const meta = `🪙${u.coins} · 🎡${u.wheel_spins} · ${u.orders} зак · ${u.referrals} реф${u.age_ok ? "" : " · нет 18+"}`;
           const acts = u.super
             ? `<span class="uprotected">защищён</span>`
             : `${u.referred_by ? `<button class="unrefx" data-unref="${u.id}">Отвязать</button>` : ""}<button class="delx" data-del="${u.id}">Удалить</button>`;
-          return `<div class="urow"><div class="uinfo"><b>${who}</b><small><span class="idcopy" data-copy="${u.id}">ID ${u.id} 📋</span> · ${meta}</small></div><div class="uacts">${acts}</div></div>`;
+          return `<div class="urow"><div class="uinfo" data-udetail="${u.id}"><b>${who}</b><small><span class="idcopy" data-copy="${u.id}">ID ${u.id} 📋</span> · ${meta} · <span class="uopen">подробнее ›</span></small></div><div class="uacts">${acts}</div></div>`;
         }).join("")
-          + ((d.shown < d.total && !q) ? `<div style="color:var(--hint);font-size:12px;margin-top:8px">Показаны последние ${d.shown} из ${d.total} — уточните поиск по ID.</div>` : "");
+          + ((d.shown < d.total && !q) ? `<div style="color:var(--hint);font-size:12px;margin-top:8px">Показаны последние ${d.shown} из ${d.total} — уточните поиск.</div>` : "");
         document.querySelectorAll("#allUsersList .unrefx").forEach(b => b.onclick = () => doUnref(b.dataset.unref));
         document.querySelectorAll("#allUsersList .delx").forEach(b => b.onclick = () => confirmDelUser(b.dataset.del));
+        document.querySelectorAll("#allUsersList .uinfo").forEach(el => el.onclick = () => showUserCard(_usersById[el.dataset.udetail]));
         bindIdCopy($("allUsersList"));
       } catch (e) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Сеть недоступна.</div>`; }
     }
