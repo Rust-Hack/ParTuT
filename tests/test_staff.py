@@ -23,7 +23,8 @@ def run():
 
     conn = db.connect(); conn.cursor().execute("DELETE FROM staff"); conn.commit(); conn.close()
     config.refresh_staff()
-    server.tg.send_message = lambda *a, **k: None      # уведомление новому админу
+    # Заглушку отправки НЕ трогаем: она общая для всех тестов и копит SENT.
+    # Подменишь её здесь — следующие модули перестанут видеть свои сообщения.
 
     # --- Кто вообще может сюда попасть ---
     _as(NOBODY)

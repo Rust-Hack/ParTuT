@@ -258,6 +258,9 @@ _WRITE_PATHS = {
     "/api/order": _STOCK_KEYS,                  # меняют остаток на складе
     "/api/order/cancel": _STOCK_KEYS,
     "/api/admin/order/status": _STOCK_KEYS,
+    # Подписка «сообщить о поступлении» меняет счётчик ждущих в карточке товара:
+    # без сброса продавец до полуминуты видел бы старое число.
+    "/api/notify-me": ("products",),
 }
 
 
@@ -267,7 +270,57 @@ def _bust_cache_on_write(resp):
         keys = _WRITE_PATHS.get(request.path)
         if keys is not None:
             _cache_bust(*keys)
+            # Остаток мог измениться где угодно: правка товара, замена вкусов,
+            # отклонение заказа. Ловим это в ОДНОМ месте, а не в каждом маршруте
+            # — иначе новый способ менять склад однажды забудут сюда вписать.
+            if keys is _STOCK_KEYS or request.path.startswith("/api/admin/product"):
+                _bg(_flush_stock_alerts)
     return resp
+
+
+def _flush_stock_alerts():
+    """Сообщает тем, кто ждал товар, что он снова в наличии."""
+    try:
+        ready = db.stock_alerts_ready()
+    except Exception as e:
+        print(f"Не удалось прочитать подписки на поступление: {e}")
+        return
+    if not ready:
+        return
+    done = set()
+    for uid, pid, name in ready:
+        try:
+            tg.send_message(uid, f"🔔 «{name}» снова в наличии.\nОткройте приложение — товар доступен к заказу.")
+        except Exception as e:
+            print(f"Не смог сообщить о поступлении {pid} покупателю {uid}: {e}")
+        done.add(pid)
+    for pid in done:
+        try:
+            db.clear_stock_alerts(pid)
+        except Exception as e:
+            print(f"Не удалось очистить подписки на товар {pid}: {e}")
+
+
+@app.route("/api/notify-me", methods=["POST"])
+def api_notify_me():
+    """«Сообщите, когда появится». Раньше на карточке отсутствующего товара
+    покупателю было нечего нажать — он просто уходил."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "no_user"}), 403
+    try:
+        pid = int(data.get("product_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    p = db.get_product(pid)
+    if not p:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    if (p["stock"] or 0) > 0:
+        # Пока покупатель раздумывал, товар завезли — подписка не нужна.
+        return jsonify({"ok": True, "in_stock": True})
+    db.add_stock_alert(pid, int(user["id"]))
+    return jsonify({"ok": True, "in_stock": False})
 
 
 @app.before_request
@@ -357,7 +410,13 @@ def api_me():
         except (TypeError, ValueError):
             print(f"[ref/miniapp] uid={uid} плохой start_param={start_param}")
 
-    return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid), "is_super": is_super_admin(uid)})
+    try:
+        alerts = db.alerts_of_user(uid)   # чтобы витрина показала «вы уже ждёте»
+    except Exception as e:
+        alerts = []
+        print(f"Не удалось прочитать подписки покупателя {uid}: {e}")
+    return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid),
+                    "is_super": is_super_admin(uid), "alerts": alerts})
 
 
 @app.route("/api/age", methods=["POST"])
@@ -418,6 +477,11 @@ def _all_products_payload():
     variants_by = {}
     for v in db.get_all_variants():
         variants_by.setdefault(v["product_id"], []).append({"flavor": v["flavor"], "stock": v["stock"]})
+    try:
+        waiting = db.stock_alert_counts()
+    except Exception as e:
+        waiting = {}                      # счётчик — не повод ронять витрину
+        print(f"Не удалось посчитать ожидающих: {e}")
     out = []
     for p in db.get_all_products():
         out.append({
@@ -428,6 +492,8 @@ def _all_products_payload():
             "brand": p["brand"] or "", "flavor": p["flavor"] or "",
             "strength": p["strength"] or "", "volume": p["volume"] or "",
             "variants": variants_by.get(p["id"], []),
+            # Сколько человек ждут поступления — админу видно, что завозить.
+            "waiting": waiting.get(p["id"], 0),
             "photo_url": (f"/api/photo?file_id={p['photo']}" if p["photo"] else None),
             # Для сетки каталога — копия поменьше. У старых товаров её нет, тогда
             # отдаём полноразмерную: витрина в любом случае что-то покажет.

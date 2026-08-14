@@ -252,6 +252,18 @@ def init_db():
         )
     """)
 
+    # Кто просил сообщить, когда товар снова появится.
+    # Пара (товар, покупатель) уникальна: повторное нажатие ничего не портит.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS stock_alerts (
+            id         {ID_COL},
+            product_id INTEGER NOT NULL,
+            user_id    BIGINT  NOT NULL,
+            created_at TEXT
+        )
+    """)
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_alerts ON stock_alerts (product_id, user_id)")
+
     # Админы и продавцы, добавленные из приложения (супер-админом).
     # Те, кто прописан в переменных окружения на хостинге, живут отдельно и
     # отсюда НЕ удаляются — это защита от потери доступа: даже если из
@@ -1296,6 +1308,66 @@ def set_setting(key, value):
         cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
     conn.close()
+
+
+# ---------- «Сообщить о поступлении» ----------
+
+def add_stock_alert(product_id, user_id):
+    """Покупатель ждёт этот товар. Повторное нажатие не создаёт дубль."""
+    conn = connect()
+    cur = conn.cursor()
+    sql = ("INSERT INTO stock_alerts (product_id, user_id, created_at) VALUES (%s, %s, %s) "
+           + ("ON CONFLICT (product_id, user_id) DO NOTHING" if USE_PG else ""))
+    if USE_PG:
+        cur.execute(sql, (product_id, user_id, _now_str()))
+    else:
+        cur.execute("INSERT OR IGNORE INTO stock_alerts (product_id, user_id, created_at) "
+                    "VALUES (?, ?, ?)", (product_id, user_id, _now_str()))
+    conn.commit()
+    conn.close()
+
+
+def alerts_of_user(user_id):
+    """Товары, поступления которых ждёт этот покупатель — чтобы витрина показала,
+    что он уже подписан, и не предлагала нажать ещё раз."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT product_id FROM stock_alerts WHERE user_id = %s"), (user_id,))
+    ids = [int(r["product_id"]) for r in cur.fetchall()]
+    conn.close()
+    return ids
+
+
+def stock_alerts_ready():
+    """Кого пора обрадовать: подписки на товары, которые СНОВА в наличии.
+    Возвращает [(user_id, product_id, название)]."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("""SELECT a.user_id, a.product_id, p.name
+                   FROM stock_alerts a JOIN products p ON p.id = a.product_id
+                   WHERE p.stock > 0""")
+    rows = [(int(r["user_id"]), int(r["product_id"]), r["name"]) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def clear_stock_alerts(product_id):
+    """Сообщили — подписки на этот товар больше не нужны."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM stock_alerts WHERE product_id = %s"), (product_id,))
+    conn.commit()
+    conn.close()
+
+
+def stock_alert_counts():
+    """{товар: сколько ждут} — админу видно, что именно стоит завезти."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT product_id, COUNT(*) AS n FROM stock_alerts GROUP BY product_id")
+    out = {int(r["product_id"]): int(r["n"]) for r in cur.fetchall()}
+    conn.close()
+    return out
 
 
 # ---------- Админы и продавцы (управляются из приложения) ----------

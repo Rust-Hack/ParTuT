@@ -190,6 +190,12 @@
     .cur { font-size: .86em; font-weight: 700; margin-left: 2px; }
     .plus { width: 42px; height: 42px; border-radius: 12px; border: none; background: var(--accent); color: var(--on-accent); font-size: 24px; line-height: 1; }
     .plus:disabled { opacity: .4; }
+    /* Товара нет — но уйти ни с чем покупатель не должен: единственное полезное
+       действие здесь это попросить сообщить о поступлении. */
+    .notifybtn { border: 1px solid var(--accent); background: transparent; color: var(--accent);
+      padding: 8px 10px; border-radius: 12px; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+    .notifybtn.on { border-color: var(--line); color: var(--hint); }
+    .admmarks { display: flex; gap: 5px; margin-top: 5px; }
     .mini { display: flex; align-items: center; gap: 8px; }
     .mini button { width: 30px; height: 30px; border-radius: 9px; border: none; background: var(--accent); color: var(--on-accent); font-size: 17px; line-height: 1; }
     .mini span { font-weight: 800; min-width: 14px; text-align: center; }
@@ -1323,6 +1329,7 @@
         const r = await fetch("/api/me", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, start_param: startParam }) });
         me = await r.json();
         if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
+        stockAlerts = new Set(me.alerts || []);   // о чём уже просили сообщить
         renderNav();
         // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
         if (me.age_ok) loadCatalog().then(prefetchBonuses); else $("ageView").classList.add("show");
@@ -1507,6 +1514,23 @@
     // старых товаров — тогда откатываемся на обычную.
     function thumbOf(p) { return p.thumb_url || p.photo_url; }
 
+    // Подписки «сообщить о поступлении»: приходят в /api/me, пополняются по нажатию.
+    let stockAlerts = new Set();
+    const waitingFor = (id) => stockAlerts.has(id);
+
+    async function notifyMe(id) {
+      try {
+        const r = await fetch("/api/notify-me", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, product_id: id }) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не получилось. Попробуйте позже."); return; }
+        if (d.in_stock) { alertMsg("Товар уже в наличии — можно заказывать."); await loadProducts(); return; }
+        stockAlerts.add(id);
+        renderGrid(); renderFavs();
+        if (currentProductId === id) renderProduct();
+        alertMsg("Сообщим, как только появится 🔔");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+
     function cardHtml(p) {
       const photo = p.photo_url ? `<img src="${thumbOf(p)}" alt="" loading="lazy" decoding="async" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
       const isFav = favs.includes(p.id);
@@ -1514,8 +1538,11 @@
       let ctrl;
       if (p.stock <= 0) {
         // Крестик на кнопке был загадкой: кнопка есть, а нажать нельзя и неясно
-        // почему. Товара нет — значит и кнопки нет, а причина написана бейджем.
-        ctrl = "";
+        // почему. Теперь причина написана бейджем, а вместо мёртвой кнопки —
+        // единственное осмысленное действие: попросить сообщить о поступлении.
+        ctrl = waitingFor(p.id)
+          ? `<button class="notifybtn on" disabled>🔔 Ждёте</button>`
+          : `<button class="notifybtn" data-notify="${p.id}">🔔 Жду</button>`;
       } else if (hasVariants(p)) {
         ctrl = `<button class="pickbtn" data-pick="${p.id}">Выбрать</button>`;
       } else {
@@ -1542,6 +1569,7 @@
       root.querySelectorAll("[data-fav]").forEach(b => b.onclick = () => toggleFav(+b.dataset.fav));
       root.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openProduct(+b.dataset.open));
       root.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => openProduct(+b.dataset.pick, true));
+      root.querySelectorAll("[data-notify]").forEach(b => b.onclick = () => notifyMe(+b.dataset.notify));
     }
     function changeQty(id, delta, flavor = null) {
       const p = allProducts.find(x => x.id === id); if (!p) return;
@@ -2674,7 +2702,17 @@
         return;
       }
       // Обычный товар (без вкусов)
-      if (p.stock <= 0) { $("prodActions").innerHTML = `<button class="bigbtn" disabled>Нет в наличии</button>`; return; }
+      if (p.stock <= 0) {
+        // Мёртвая кнопка «Нет в наличии» просто сообщала плохую новость. Теперь
+        // рядом с ней есть что сделать — попросить сообщить о поступлении.
+        if (waitingFor(p.id)) {
+          $("prodActions").innerHTML = `<button class="bigbtn" disabled>🔔 Сообщим о поступлении</button>`;
+        } else {
+          $("prodActions").innerHTML = `<button class="bigbtn" id="pdNotify">🔔 Сообщить о поступлении</button>`;
+          $("pdNotify").onclick = () => notifyMe(p.id);
+        }
+        return;
+      }
       const qty = cart[cartKey(p.id)] ? cart[cartKey(p.id)].qty : 0;
       if (qty > 0) {
         $("prodActions").innerHTML = `<div class="pd-step"><button id="pdDec">−</button><span>${qty}</span><button id="pdInc">+</button></div>
@@ -3804,17 +3842,22 @@
       });
       if (!list.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Ничего не найдено.</p>`; return; }
       $("adminList").innerHTML = list.map(p => {
+        // Закончившийся товар и число ждущих — то, ради чего в этот список
+        // заходят чаще всего: он отвечает на вопрос «что срочно завезти».
+        const out = p.stock <= 0 ? `<span class="tagbadge out">нет</span>` : "";
+        const wait = p.waiting ? `<span class="tagbadge warn">ждут ${p.waiting}</span>` : "";
+        const marks = (out || wait) ? `<div class="admmarks">${out}${wait}</div>` : "";
+        const tail = `<button class="iconbtn" data-edit="${p.id}">✏️</button>
+            <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
         if (hasVariants(p)) {
           // товар-модель: цену/вкусы/остаток правим в редакторе (✏️)
           return `<div class="admrow">
-            <div class="an">${esc(p.name)}<small>${p.city} · ${p.variants.length} вк · ${p.stock} шт${p.is_hit ? ' · 🔥' : ''}</small></div>
-            <button class="iconbtn" data-edit="${p.id}">✏️</button>
-            <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
+            <div class="an">${esc(p.name)}<small>${p.city} · ${p.variants.length} вк · ${p.stock} шт${p.is_hit ? ' · 🔥' : ''}</small>${marks}</div>
+            ${tail}`;
         }
         return `<div class="admrow">
-          <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small></div>
-          <button class="iconbtn" data-edit="${p.id}">✏️</button>
-          <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
+          <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small>${marks}</div>
+          ${tail}`;
       }).join("");
       $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
       $("adminList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => delAdminRow(+b.dataset.del));
