@@ -439,10 +439,11 @@ def api_order():
         else:
             db.change_stock(it["id"], -it["qty"])
 
-    # Карта → клиент грузит чек (как раньше). Наличные/такси → сразу продавцу.
+    # Карта → клиент грузит чек. Наличные/такси → сразу продавцу, но ЖДЁТ ОДОБРЕНИЯ
+    # (статус 'paid' = ждёт подтверждения продавца, а НЕ авто-подтверждается).
     needs_receipt = (payment == "card")
     if not needs_receipt:
-        db.set_order_status(order_id, "confirmed")     # оплаты онлайн нет — сразу к выдаче
+        db.set_order_status(order_id, "paid")          # ждёт одобрения продавца
         notifications.notify_sellers(tg, order_id)
         _notify_client(user_id, _client_order_summary(order_id))   # подтверждение клиенту в чат
 
@@ -1189,7 +1190,10 @@ def api_admin_order_status():
     if action == "confirm":
         if not db.set_order_status_if(oid, "confirmed", ["new", "paid"]):
             return jsonify({"ok": False, "error": "closed"}), 409
-        _notify_client(client_id, f"✅ Оплата по заказу #{oid} подтверждена! Готовим к выдаче. Спасибо! 🌿")
+        msg = (f"✅ Оплата по заказу #{oid} подтверждена! Готовим к выдаче. Спасибо! 🌿"
+               if order["payment_method"] == "card"
+               else f"✅ Заказ #{oid} подтверждён! Готовим к выдаче. Спасибо! 🌿")
+        _notify_client(client_id, msg)
     elif action == "issued":
         if not db.set_order_status_if(oid, "issued", OPEN):   # переход применится один раз
             return jsonify({"ok": False, "error": "closed"}), 409
