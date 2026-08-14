@@ -8,8 +8,9 @@ import test_order_lifecycle
 import test_messaging
 import test_stats
 import test_delivery
+import test_gzip
 
-MODULES = [test_order_lifecycle, test_messaging, test_stats, test_delivery]
+MODULES = [test_order_lifecycle, test_messaging, test_stats, test_delivery, test_gzip]
 
 
 def main():

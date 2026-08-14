@@ -1166,7 +1166,7 @@
         if (me.age_ok) loadCatalog().then(prefetchBonuses); else $("ageView").classList.add("show");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
-    function prefetchBonuses() { fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle(); }
+    function prefetchBonuses() { prefetchDelivery(); fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle(); }
     $("ageYes").onclick = async () => {
       await fetch("/api/age", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
       $("ageView").classList.remove("show"); loadCatalog().then(prefetchBonuses);
@@ -1390,6 +1390,7 @@
         if (b.dataset.city !== city) { for (const k in cart) delete cart[k]; }
         city = b.dataset.city; $("pointName").textContent = city;
         brandFilters = [];   // другая точка — другой набор брендов
+        prefetchDelivery();  // заранее подтянем способы получения новой точки
         closeOverlay($("pointOverlay")); updateFilterBtn(); renderGrid(); renderNav();
       });
       $("pointOverlay").classList.add("show");
@@ -2214,17 +2215,30 @@
 
     // ----- Оформление: способ получения + оплата -----
     let deliveryMethods = [], selMethod = null, selPayment = null, selAddress = "", selComment = "", selPhone = "";
+    const deliveryCache = {};        // city -> способы получения (чтобы оформление открывалось мгновенно)
+    async function fetchDeliveryFor(c) {
+      if (!c) return [];
+      try {
+        const r = await fetch(`/api/delivery?city=${encodeURIComponent(c)}`);
+        deliveryCache[c] = await r.json();
+      } catch (e) { deliveryCache[c] = deliveryCache[c] || []; }
+      return deliveryCache[c];
+    }
+    function prefetchDelivery() { if (city && !deliveryCache[city]) fetchDeliveryFor(city); }
     $("deliveryClose").onclick = () => closeOverlay($("deliveryOverlay"));
     async function openDelivery() {
       if (!Object.keys(cart).length) return;
       selMethod = null; selPayment = null; selAddress = ""; selComment = ""; selPhone = "";
-      $("deliveryBody").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
       $("deliveryOverlay").classList.add("show");
-      try {
-        const r = await fetch(`/api/delivery?city=${encodeURIComponent(city)}`);
-        deliveryMethods = await r.json();
-      } catch (e) { deliveryMethods = []; }
-      renderDelivery();
+      if (deliveryCache[city]) {
+        deliveryMethods = deliveryCache[city];   // мгновенно из кэша
+        renderDelivery();
+        fetchDeliveryFor(city);                  // тихо обновим на случай изменений
+      } else {
+        $("deliveryBody").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+        deliveryMethods = await fetchDeliveryFor(city);
+        renderDelivery();
+      }
     }
     function renderDelivery() {
       if (!deliveryMethods.length) {

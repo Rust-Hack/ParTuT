@@ -17,6 +17,7 @@ server.py — веб-сервер Mini App (вся витрина внутри �
 """
 
 import os
+import gzip
 import hmac
 import hashlib
 import html
@@ -188,9 +189,45 @@ def api_admin_request_decide():
 #  СТРАНИЦА
 # ============================================================
 
+_GZIP_TYPES = ("text/html", "text/css", "application/javascript",
+               "text/javascript", "application/json", "image/svg+xml")
+
+
+@app.after_request
+def _compress(resp):
+    """Сжимаем текстовые ответы (html/js/json) gzip — меньше трафика, быстрее загрузка.
+    Картинки/бинарники не трогаем (они уже сжаты)."""
+    try:
+        if "gzip" not in request.headers.get("Accept-Encoding", ""):
+            return resp
+        if resp.direct_passthrough or resp.status_code < 200 or resp.status_code >= 300:
+            return resp
+        ctype = (resp.content_type or "").split(";")[0].strip()
+        if ctype not in _GZIP_TYPES:
+            return resp
+        data = resp.get_data()
+        if len(data) < 1024:                       # мелочь сжимать невыгодно
+            return resp
+        resp.set_data(gzip.compress(data, 5))
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Vary"] = "Accept-Encoding"
+        resp.headers["Content-Length"] = len(resp.get_data())
+    except Exception as e:
+        print(f"gzip пропущен: {e}")
+    return resp
+
+
+_INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp", "index.html")
+
+
 @app.route("/")
 def index():
-    return send_from_directory("webapp", "index.html")
+    # Читаем файл в обычный Response (не passthrough), чтобы сработало gzip-сжатие.
+    with open(_INDEX_PATH, "rb") as f:
+        html_bytes = f.read()
+    resp = Response(html_bytes, content_type="text/html; charset=utf-8")
+    resp.headers["Cache-Control"] = "no-cache"    # всегда свежая версия после деплоя
+    return resp
 
 
 @app.route("/health")
