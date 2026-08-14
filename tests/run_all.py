@@ -12,9 +12,10 @@ import test_gzip
 import test_cache
 import test_order_submit
 import test_photos
+import test_staff
 
 MODULES = [test_order_lifecycle, test_messaging, test_stats, test_delivery,
-           test_gzip, test_cache, test_order_submit, test_photos]
+           test_gzip, test_cache, test_order_submit, test_photos, test_staff]
 
 
 def main():

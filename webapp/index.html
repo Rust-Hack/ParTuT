@@ -52,6 +52,20 @@
          не под цвет заставки: фон остаётся прежней светлоты, поэтому карточки
          по-прежнему «висят» над ним, а стена читается только в промежутках. */
       --wall-img:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23cfe0e3' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23f7fcfc' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+      /* Колесо и слот. Ночью это «казино в темноте»: неон на чёрном. Днём то же
+         устройство стоит при свете — лакированный белый барабан с бирюзовыми
+         лучами, а не чёрная дыра посреди светлой страницы. */
+      --wheel-face:#ffffff;
+      --wheel-brick:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23dceaec' stroke-width='2' fill='none'/%3E%3C/svg%3E");
+      --wheel-sec-a:rgba(6,124,130,.16); --wheel-sec-b:rgba(6,124,130,.05);
+      --wheel-super:rgba(200,40,100,.26); --wheel-ray:rgba(6,124,130,.5);
+      --wheel-label:#0c2229; --wheel-label-sh:0 1px 0 rgba(255,255,255,.8);
+      --wheel-hub:radial-gradient(circle at 50% 38%, #ffffff, #d7ebec);
+      --wheel-inset:inset 0 0 22px rgba(8,40,48,.10); --wheel-drop:0 6px 26px rgba(8,40,48,.18);
+      --reel-face:#eef6f7; --slotpay-bg:rgba(255,255,255,.8); --slotpay-line:rgba(6,124,130,.28);
+      --reel-inset:inset 0 0 20px rgba(8,40,48,.12); --slot-inset:inset 0 0 30px rgba(8,40,48,.08);
+      --reel-cell-sh:drop-shadow(0 2px 3px rgba(8,40,48,.22));
+      --slot-cab:radial-gradient(120% 100% at 50% 0%, rgba(6,124,130,.07), transparent 60%), #ffffff;
       --header-h:58px; --nav-h:70px;
       --safe-top:0px; /* высота «чёлки»/статус-бара в полноэкранном режиме, задаётся из JS */
     }
@@ -69,6 +83,17 @@
       /* Ночью швы наоборот СВЕТЛЕЕ фона: тёмный шов на почти чёрной странице
          был бы не виден вовсе. */
       --wall-img:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%230d1f27' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23132b34' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+      --wheel-face:#0e222b;
+      --wheel-brick:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23081419' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23163039' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+      --wheel-sec-a:rgba(53,224,224,.17); --wheel-sec-b:rgba(95,242,242,.05);
+      --wheel-super:rgba(255,64,120,.32); --wheel-ray:rgba(120,245,245,.85);
+      --wheel-label:#eaffff; --wheel-label-sh:0 0 7px #5ff2f2, 0 1px 2px #000;
+      --wheel-hub:radial-gradient(circle at 50% 38%, #163842, #0a1b22);
+      --wheel-inset:inset 0 0 22px rgba(0,0,0,.55); --wheel-drop:0 6px 26px rgba(0,0,0,.35);
+      --reel-face:#0e222b; --slotpay-bg:rgba(14,34,43,.7); --slotpay-line:rgba(74,222,255,.25);
+      --reel-inset:inset 0 0 20px rgba(0,0,0,.6); --slot-inset:inset 0 0 30px rgba(0,0,0,.5);
+      --reel-cell-sh:drop-shadow(0 2px 3px rgba(0,0,0,.5));
+      --slot-cab:radial-gradient(120% 100% at 50% 0%, rgba(53,224,224,.07), transparent 60%), #0a1a22;
     }
 
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -228,7 +253,9 @@
     .sheet { position: relative; background: var(--surface); width: 100%; border-radius: 22px 22px 0 0; padding: 28px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
     .sheet::before { content: ""; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
     .sheet h2 { margin: 0 0 14px; font-size: 18px; }
-    .opt { width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: none; padding: 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
+    /* Рамка прозрачная, но есть всегда: у выбранного варианта она станет цветной,
+       и строка не должна от этого менять высоту. */
+    .opt { width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: 2px solid transparent; padding: 13px 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
     .dlabel { font-weight: 700; color: var(--hint); font-size: 13px; margin: 14px 0 8px; }
     .paypick { display: flex; gap: 8px; }
     .paypick .opt { flex: 1; text-align: center; margin-bottom: 0; }
@@ -237,7 +264,10 @@
     .osum { background: var(--surface-2); border-radius: 13px; padding: 12px 14px; margin-top: 16px; }
     .osum-r { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 0; color: var(--hint); }
     .osum-total { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 10px; font-size: 17px; font-weight: 800; color: var(--text); }
-    .opt.active { background: var(--accent-soft); color: var(--accent); }
+    /* Выбор — это решение о деньгах, он должен читаться мгновенно: рамка,
+       подложка и галочка вместе, а не один оттенок текста. */
+    .opt.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+    .opt.active::after { content: "✓"; float: right; font-weight: 800; }
     .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
 
     .swipe-dim { position: fixed; inset: 0; background: #000; opacity: 0; z-index: 49; pointer-events: none; display: none; }
@@ -317,8 +347,8 @@
     @keyframes ptrBump { 0%,100% { transform: translateX(-50%) translateY(0); } 35% { transform: translateX(-50%) translateY(4px); } }
     .wlabel.win span { text-shadow: 0 0 12px var(--brand-neon), 0 0 22px var(--brand-neon); animation: labelWin .8s ease; }
     @keyframes labelWin { 0%,100% { transform: scale(1); } 45% { transform: scale(1.35); } }
-    .wheel { position: absolute; inset: 0; border-radius: 50%; border: 5px solid var(--brand-neon); background-color: #0e222b;
-      box-shadow: 0 6px 26px rgba(0,0,0,.35), 0 0 16px var(--brand-glow), inset 0 0 22px rgba(0,0,0,.55); transition: box-shadow .7s ease;
+    .wheel { position: absolute; inset: 0; border-radius: 50%; border: 5px solid var(--brand-neon); background-color: var(--wheel-face);
+      box-shadow: var(--wheel-drop), 0 0 16px var(--brand-glow), var(--wheel-inset); transition: box-shadow .7s ease;
       will-change: transform; backface-visibility: hidden; }
     /* Огоньки-бумбоны на палочке по центру каждой линии, торчат наружу (крутятся с колесом) */
     .clamp { position: absolute; inset: 0; pointer-events: none; }
@@ -328,14 +358,14 @@
     /* Конфетти на крупный выигрыш */
     .confetti { position: absolute; top: 42%; left: 50%; width: 8px; height: 12px; border-radius: 2px; pointer-events: none; z-index: 6; }
     @keyframes confFall { 0% { opacity: 1; transform: translate(-50%,-50%) rotate(0); } 100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)); } }
-    .wheel.won { box-shadow: 0 6px 26px rgba(0,0,0,.35), 0 0 0 4px var(--brand-neon), 0 0 40px var(--brand-neon), inset 0 0 22px rgba(0,0,0,.55); }
+    .wheel.won { box-shadow: var(--wheel-drop), 0 0 0 4px var(--brand-neon), 0 0 40px var(--brand-neon), var(--wheel-inset); }
     .wheel.ready { animation: rimPulse 1.6s ease-in-out infinite; }
     @keyframes rimPulse {
-      0%,100% { box-shadow: 0 6px 26px rgba(0,0,0,.35), 0 0 12px var(--brand-glow), inset 0 0 22px rgba(0,0,0,.55); }
-      50%     { box-shadow: 0 6px 26px rgba(0,0,0,.35), 0 0 28px var(--brand-neon), inset 0 0 22px rgba(0,0,0,.55); }
+      0%,100% { box-shadow: var(--wheel-drop), 0 0 12px var(--brand-glow), var(--wheel-inset); }
+      50%     { box-shadow: var(--wheel-drop), 0 0 28px var(--brand-neon), var(--wheel-inset); }
     }
     .wlabel { position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; pointer-events: none; }
-    .wlabel span { margin-top: 15px; color: #eaffff; font-weight: 800; font-size: 14px; white-space: nowrap; text-shadow: 0 0 7px var(--brand-neon), 0 1px 2px #000; transition: text-shadow .6s ease; }
+    .wlabel span { margin-top: 15px; color: var(--wheel-label); font-weight: 800; font-size: 14px; white-space: nowrap; text-shadow: var(--wheel-label-sh); transition: text-shadow .6s ease; }
     .wlabel .lcoin { font-size: .62em; font-weight: 400; margin-left: 1px; }
     .wlabel .lstar { color: #ffd23f; font-size: 1.4em; text-shadow: 0 0 10px #ffd23f, 0 1px 2px #000; }
     .hub-logo { width: 46px; height: 34px; color: var(--brand-neon); filter: drop-shadow(0 0 5px var(--brand-glow)); }
@@ -343,9 +373,11 @@
     .wheel-hist .hlabel { color: var(--hint); font-size: 12px; white-space: nowrap; }
     .wheel-hist .hchip { flex: 0 0 auto; width: 44px; box-sizing: border-box; text-align: center; font-size: 12px; font-weight: 700; color: var(--brand-neon); border: 1px solid var(--line); border-radius: 999px; padding: 3px 0; text-shadow: 0 0 6px var(--brand-glow); }
     .wheel-hist .hchip.ph { color: transparent; border-color: var(--line); box-shadow: none; text-shadow: none; opacity: .4; }
-    .wheel-hub { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 3; width: 74px; height: 74px; border-radius: 50%; background: radial-gradient(circle at 50% 38%, #163842, #0a1b22); border: 2px solid var(--brand-neon); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 14px var(--brand-glow), 0 2px 10px rgba(0,0,0,.45); cursor: pointer; }
+    .wheel-hub { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 3; width: 74px; height: 74px; border-radius: 50%; background: var(--wheel-hub); border: 2px solid var(--brand-neon); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 14px var(--brand-glow), 0 2px 10px rgba(8,40,48,.28); cursor: pointer; }
     .wheel-hub.ready { animation: hubPulse 1.4s ease-in-out infinite; }
     @keyframes hubPulse { 0%,100% { box-shadow: 0 0 10px var(--brand-glow), 0 2px 10px rgba(0,0,0,.45); } 50% { box-shadow: 0 0 26px var(--brand-neon), 0 2px 10px rgba(0,0,0,.45); } }
+    .gamecard { background: var(--surface); border: 1px solid transparent; border-radius: 16px; box-shadow: var(--shadow); padding: 12px 14px; margin-bottom: 14px; }
+    html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shadow: var(--shadow), 0 0 15px rgba(95,242,242,.10); }
     .wheel-prog-top { display: flex; justify-content: space-between; font-size: 13px; color: var(--hint); margin-bottom: 6px; }
     .wheel-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin-bottom: 8px; }
     .wheel-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s; }
@@ -359,29 +391,29 @@
     @keyframes winPop { 0% { opacity: 0; transform: translate(-50%,-25%) scale(.5); } 22% { opacity: 1; transform: translate(-50%,-50%) scale(1.15); } 100% { opacity: 0; transform: translate(-50%,-140%) scale(1); } }
     /* Кабинет слота — как колесо: кирпич + неоновая рамка */
     .slot3 { position: relative; display: flex; gap: 10px; justify-content: center; margin: 6px 0 16px; padding: 14px 16px; border-radius: 22px;
-      background: radial-gradient(120% 100% at 50% 0%, rgba(53,224,224,.07), transparent 60%), #0a1a22;
-      border: 2px solid rgba(74,222,255,.4); box-shadow: 0 0 18px var(--brand-glow), inset 0 0 30px rgba(0,0,0,.5); }
+      background: var(--slot-cab);
+      border: 2px solid var(--slotpay-line); box-shadow: 0 0 18px var(--brand-glow), var(--slot-inset); }
     /* Указатели линии выплаты (центральный ряд) */
     .slot3::before, .slot3::after { content: ""; position: absolute; top: 50%; transform: translateY(-50%); width: 0; height: 0; border-top: 7px solid transparent; border-bottom: 7px solid transparent; filter: drop-shadow(0 0 4px var(--brand-neon)); z-index: 3; }
     .slot3::before { left: 5px; border-left: 9px solid var(--brand-neon); }
     .slot3::after { right: 5px; border-right: 9px solid var(--brand-neon); }
     .slot3.win { animation: slotWin .8s ease; }
-    @keyframes slotWin { 0%,100% { box-shadow: 0 0 18px var(--brand-glow), inset 0 0 30px rgba(0,0,0,.5); } 45% { box-shadow: 0 0 0 2px var(--brand-neon), 0 0 34px var(--brand-neon), inset 0 0 30px rgba(0,0,0,.5); } }
+    @keyframes slotWin { 0%,100% { box-shadow: 0 0 18px var(--brand-glow), var(--slot-inset); } 45% { box-shadow: 0 0 0 2px var(--brand-neon), 0 0 34px var(--brand-neon), var(--slot-inset); } }
     .reel-col { position: relative; width: 84px; max-width: 27vw; aspect-ratio: 1 / 3; overflow: hidden; border-radius: 14px;
-      background-color: #0e222b;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23081419' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23163039' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+      background-color: var(--reel-face);
+      background-image: var(--wheel-brick);
       background-size: 56px 28px;
-      border: 3px solid var(--brand-neon); box-shadow: 0 0 12px var(--brand-glow), inset 0 0 20px rgba(0,0,0,.6);
+      border: 3px solid var(--brand-neon); box-shadow: 0 0 12px var(--brand-glow), var(--reel-inset);
       -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent);
               mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent); }
     .reel-strip { will-change: transform; }
     .reel-strip.blur { filter: blur(1px); }                 /* размытие во время быстрого движения */
     .reel-col.antic { animation: reelAntic .42s ease-in-out infinite; }   /* предвкушение на 3-м барабане */
     @keyframes reelAntic {
-      0%,100% { box-shadow: 0 0 12px var(--brand-glow), inset 0 0 20px rgba(0,0,0,.6); }
-      50%     { box-shadow: 0 0 26px var(--brand-neon), 0 0 8px var(--brand-neon), inset 0 0 20px rgba(0,0,0,.6); }
+      0%,100% { box-shadow: 0 0 12px var(--brand-glow), var(--reel-inset); }
+      50%     { box-shadow: 0 0 26px var(--brand-neon), 0 0 8px var(--brand-neon), var(--reel-inset); }
     }
-    .reel-cell { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; font-size: 40px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
+    .reel-cell { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; font-size: 40px; filter: var(--reel-cell-sh); }
     .reel-cell.hit { border-radius: 12px; text-shadow: 0 0 10px var(--brand-neon); animation: neonPulse 1s ease-in-out infinite; }
     @keyframes neonPulse {
       0%,100% { box-shadow: inset 0 0 0 3px var(--brand-neon), 0 0 10px var(--brand-neon), 0 0 20px var(--brand-neon); }
@@ -389,14 +421,16 @@
     }
     .wheel-hist .hchip.miss { color: var(--hint); border-color: var(--line); text-shadow: none; opacity: .65; }
     .slotpays { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 16px; }
-    .slotpay { background: rgba(14,34,43,.7); border: 1px solid rgba(74,222,255,.25); border-radius: 12px; box-shadow: inset 0 0 12px rgba(0,0,0,.4); padding: 8px 4px; text-align: center; }
+    .slotpay { background: var(--slotpay-bg); border: 1px solid var(--slotpay-line); border-radius: 12px; box-shadow: var(--slot-inset); padding: 8px 4px; text-align: center; }
     .slotpay span { font-size: 22px; display: block; }
     .slotpay small { color: var(--brand-neon); font-size: 11px; text-shadow: 0 0 6px var(--brand-glow); white-space: nowrap; }
     .betsel { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 4px 0 10px; }
     .betlbl { color: var(--hint); font-size: 13px; margin-right: 2px; }
-    .betbtn { min-width: 38px; padding: 7px 0; border-radius: 10px; border: 1px solid rgba(74,222,255,.3); background: rgba(14,34,43,.6); color: var(--text); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
-    .betbtn.on { background: var(--brand-neon); color: #06222b; border-color: var(--brand-neon); box-shadow: 0 0 12px var(--brand-glow); }
-    .autobtn { width: 100%; margin-top: 8px; padding: 11px; border-radius: 12px; border: 1px solid rgba(74,222,255,.35); background: rgba(14,34,43,.6); color: var(--brand-neon); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
+    /* Фон был зашит тёмным, а текст брался из темы: на свету получались тёмные
+       цифры на тёмно-сером — ставку было не прочесть. Теперь фон тоже из темы. */
+    .betbtn { min-width: 38px; padding: 7px 0; border-radius: 10px; border: 1px solid var(--slotpay-line); background: var(--slotpay-bg); color: var(--text); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
+    .betbtn.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); box-shadow: 0 0 12px var(--brand-glow); }
+    .autobtn { width: 100%; margin-top: 8px; padding: 11px; border-radius: 12px; border: 1px solid var(--slotpay-line); background: var(--slotpay-bg); color: var(--accent); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
     .autobtn.on { background: rgba(255,61,129,.15); border-color: #ff3d81; color: #ff6b9d; box-shadow: 0 0 12px rgba(255,61,129,.4); }
     .unrefx, .delx { border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
     .delx { color: var(--danger); border-color: var(--danger); }
@@ -421,7 +455,7 @@
     .winbanner.mega .wc { color: #ffd23f; text-shadow: 0 0 10px #ffb020; }
     @keyframes wtPop { 0% { transform: translate(-50%,-50%) scale(.4); opacity: 0; } 55% { transform: translate(-50%,-50%) scale(1.18); } 100% { transform: translate(-50%,-50%) scale(1); opacity: 1; } }
     .slot3.mega-flash { animation: megaFlash .7s ease; }
-    @keyframes megaFlash { 0%,100% { box-shadow: 0 0 18px var(--brand-glow), inset 0 0 30px rgba(0,0,0,.5); } 30% { box-shadow: 0 0 60px #ffd23f, 0 0 30px #ffd23f, inset 0 0 30px rgba(0,0,0,.3); } }
+    @keyframes megaFlash { 0%,100% { box-shadow: 0 0 18px var(--brand-glow), var(--slot-inset); } 30% { box-shadow: 0 0 60px #ffd23f, 0 0 30px #ffd23f, inset 0 0 30px rgba(0,0,0,.3); } }
     .slotlines { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin: 6px 0 2px; }
     .lineitem { text-align: center; }
     .lineitem small { display: block; color: var(--hint); font-size: 10px; margin-top: 4px; }
@@ -557,6 +591,13 @@
       0%, 100% { box-shadow: none; }
       35%, 55% { box-shadow: 0 0 16px rgba(95,242,242,.6); border-color: var(--accent); }
     }
+
+    /* Рамка есть ВСЕГДА, в светлой теме — прозрачная. Ниже тёмная тема добавляет
+       этим блокам неоновую рамку в 1px; если в светлой рамки нет вовсе, то при
+       переключении темы каждый блок меняет размер на 2px и вся вёрстка
+       подпрыгивает. Прозрачная рамка держит геометрию одинаковой. */
+    .card, .citem, .profcard, .coins, .prow, .point, .sect, .card-block,
+    .ucard, .chartwrap, .statcard, .statlist { border: 1px solid transparent; }
 
     /* Мягкая неоновая подсветка элементов (тёмная тема) — тонко, не вызывающе */
     html[data-theme="dark"] .card,
@@ -778,6 +819,24 @@
     <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
     <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
+    <div class="prow" id="mStaff" style="display:none"><span>🔑 Доступ продавцов</span><span>›</span></div>
+  </div>
+
+  <!-- Раздел: кому открыт доступ (супер-админ) -->
+  <div class="view" id="staffView">
+    <div class="viewhead"><h2>🔑 Доступ</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="staffClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <label>Telegram ID</label>
+      <input id="stId" inputmode="numeric" placeholder="например 716030279">
+      <div class="dnote" style="margin:8px 0 0">Человек узнаёт свой ID командой <b>/myid</b> боту — пусть пришлёт его вам.</div>
+      <label>Точка продаж</label>
+      <select id="stCity"></select>
+      <label>Подпись (для вас)</label>
+      <input id="stNote" placeholder="@username или имя">
+      <button class="bigbtn" id="stAdd" style="margin-top:14px">Выдать доступ</button>
+    </div>
+    <div id="staffList"></div>
   </div>
 
   <!-- Раздел: Заявки на подтверждение (супер-админ) -->
@@ -1573,7 +1632,10 @@
           <div class="coins"><b>${bonus.coins || 0}</b><small>VAPECOINS</small></div></div>
         <div class="plist">
           ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>` : ""}
-          <div class="prow"><span>${dark ? "🌙" : "☀️"} Тёмная тема</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
+          <!-- Строка называет ТЕКУЩУЮ тему, а не одну и ту же всегда: раньше при
+               свете рядом со словом «Тёмная» горело солнышко — значок и подпись
+               противоречили друг другу, и было неясно, что показано, а что будет. -->
+          <div class="prow"><span>${dark ? "🌙 Тёмная тема" : "☀️ Светлая тема"}</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
           <div class="prow" id="openMyOrders"><span>📦 Мои заказы</span><span>›</span></div>
           <div class="prow" id="openSupport"><span>💬 Написать в поддержку</span><span>›</span></div>
         </div></div>`;
@@ -2150,12 +2212,14 @@
       const n = sectors.length || 1;
       const seg = 360 / n;
       // Сектора: кирпич + лёгкая неоновая подсветка (SUPER — розовый), между ними — неоновые лучи.
+      // Цвета — переменными, а не значениями: колесо собирается один раз, но при
+      // смене темы перекрашивается само, без перерисовки.
       const tint = sectors.map((s, i) => {
-        const c = s.label === "SUPER" ? "rgba(255,64,120,.32)" : (i % 2 ? "rgba(95,242,242,.05)" : "rgba(53,224,224,.17)");
+        const c = s.label === "SUPER" ? "var(--wheel-super)" : (i % 2 ? "var(--wheel-sec-b)" : "var(--wheel-sec-a)");
         return `${c} ${i * seg}deg ${(i + 1) * seg}deg`;
       }).join(",");
-      const rays = `repeating-conic-gradient(from 0deg, rgba(120,245,245,.85) 0 1.1deg, transparent 1.1deg ${seg}deg)`;
-      const wheelBgImage = `${rays}, conic-gradient(${tint}), ${WHEEL_BRICK}`;   // ставим из JS (кавычки в url ломают inline style)
+      const rays = `repeating-conic-gradient(from 0deg, var(--wheel-ray) 0 1.1deg, transparent 1.1deg ${seg}deg)`;
+      const wheelBgImage = `${rays}, conic-gradient(${tint}), var(--wheel-brick)`;   // ставим из JS (кавычки в url ломают inline style)
       // Огоньки на внешних углах секторов (крутятся вместе с колесом).
       // луч-разделитель имеет ширину 1.1° → его центр смещён на 0.55°; ставим огонёк ровно на центр линии
       const cornerLamps = sectors.map((_, i) =>
@@ -2178,9 +2242,13 @@
         </div>
         <div class="game-result" id="wheelResult"></div>
         <div class="wheel-hist" id="wheelHist"></div>
-        <div class="wheel-prog-top"><span>Прогресс до прокрута</span><span>${wheel.progress}/${wheel.step}</span></div>
-        <div class="wheel-bar"><i style="width:${pct}%"></i></div>
-        <div class="wheel-hint" id="wheelHint">${canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} товаров до прокрута`}</div>
+        <!-- Прогресс на карточке: само колесо висит прямо на стене и это уместно,
+             а мелкий текст поверх кладки читать труднее, чем на белом. -->
+        <div class="gamecard">
+          <div class="wheel-prog-top"><span>Прогресс до прокрута</span><span>${wheel.progress}/${wheel.step}</span></div>
+          <div class="wheel-bar"><i style="width:${pct}%"></i></div>
+          <div class="wheel-hint" id="wheelHint" style="margin-bottom:0">${canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} товаров до прокрута`}</div>
+        </div>
         <button class="bigbtn" id="spinBtn" ${canSpin ? "" : "disabled"}>${canSpin ? "Крутить 🎡" : "Накопите товаров для прокрута"}</button>
         ${(me && me.is_admin) ? `<button class="closebtn" id="grantSpin" style="margin-top:8px">🔧 +3 прокрута (тест)</button>` : ""}`;
       const we = $("wheelEl");                                 // фон задаём из JS (url с кавычками)
@@ -2355,6 +2423,31 @@
         renderDelivery();
       }
     }
+    let delTotal = 0;   // итог последней отрисовки — им подписываем кнопку
+
+    // Что мешает оформить прямо сейчас (или null, если можно). Раньше кнопка
+    // просто гасла, не объясняя причины, а при способе с адресом, но без оплаты
+    // оставалась активной с пустым адресом — заказ уходил и его отвергал сервер.
+    function deliveryBlocker() {
+      if (selMethod === null) return "Выберите способ получения";
+      const m = deliveryMethods[selMethod];
+      if (!m) return "Выберите способ получения";
+      // Название поля пишет админ и всегда в именительном («Станция метро»),
+      // склонять чужой текст нельзя — иначе выходит «Укажите станция метро».
+      // Кавычки снимают вопрос падежа.
+      if (m.needs_address && !selAddress.trim())
+        return m.address_label ? `Заполните поле «${m.address_label}»` : "Укажите адрес";
+      if (m.needs_payment && !selPayment) return "Выберите способ оплаты";
+      return null;
+    }
+
+    function refreshDelSubmit() {
+      const b = $("delSubmit"); if (!b) return;
+      const blocker = deliveryBlocker();
+      b.disabled = !!blocker;
+      b.textContent = blocker || `Оформить · ${delTotal.toFixed(2)} Br`;
+    }
+
     function renderDelivery() {
       if (!deliveryMethods.length) {
         $("deliveryBody").innerHTML = `<p style="color:var(--hint)">Для «${esc(city)}» способы получения ещё не настроены.</p>`;
@@ -2363,7 +2456,6 @@
       const methodBtns = deliveryMethods.map((m, i) =>
         `<button class="opt ${selMethod === i ? 'active' : ''}" data-dm="${i}">${esc(m.name)}${m.fee ? ` · +${m.fee.toFixed(2)} Br` : ''}</button>`).join("");
       let extra = "";
-      let canSubmit = false;
       if (selMethod !== null) {
         const m = deliveryMethods[selMethod];
         if (m.needs_address)
@@ -2374,10 +2466,8 @@
           extra += `<div class="dlabel">Оплата</div><div class="paypick">
             <button class="opt ${selPayment === 'card' ? 'active' : ''}" data-pm="card">💳 Картой</button>
             <button class="opt ${selPayment === 'cash' ? 'active' : ''}" data-pm="cash">💵 Наличными</button></div>`;
-          canSubmit = !!selPayment;
         } else {
           extra += `<div class="dnote">Оплата не нужна — продавец свяжется с вами.</div>`;
-          canSubmit = true;
         }
         // Телефон + комментарий (по желанию)
         extra += `<div class="dlabel">Телефон для связи (по желанию)</div><input id="delPhone" class="admsearch" inputmode="tel" placeholder="+375 ..." value="${esc(selPhone)}">`;
@@ -2396,11 +2486,15 @@
         ${fee > 0 ? `<div class="osum-r"><span>Доставка</span><span>+${fee.toFixed(2)} Br</span></div>` : ""}
         <div class="osum-r osum-total"><span>Итого</span><span>${finalTotal.toFixed(2)} Br</span></div>
       </div>`;
-      const btn = `<button class="bigbtn" id="delSubmit" ${canSubmit ? "" : "disabled"} style="margin-top:14px">Оформить · ${finalTotal.toFixed(2)} Br</button>`;
+      delTotal = finalTotal;
+      const btn = `<button class="bigbtn" id="delSubmit" style="margin-top:14px"></button>`;
       $("deliveryBody").innerHTML = `<div class="dlabel">Способ получения</div>${methodBtns}${extra}${sum}${btn}`;
+      refreshDelSubmit();
       $("deliveryBody").querySelectorAll("[data-dm]").forEach(b => b.onclick = () => { selMethod = +b.dataset.dm; selPayment = null; selAddress = ""; renderDelivery(); });
       $("deliveryBody").querySelectorAll("[data-pm]").forEach(b => b.onclick = () => { selPayment = b.dataset.pm; renderDelivery(); });
-      if ($("delAddr")) $("delAddr").oninput = () => { selAddress = $("delAddr").value; };
+      // Кнопку обновляем прямо во время ввода, но БЕЗ перерисовки: перерисовка
+      // забрала бы фокус из поля на первом же символе.
+      if ($("delAddr")) $("delAddr").oninput = () => { selAddress = $("delAddr").value; refreshDelSubmit(); };
       if ($("delPhone")) $("delPhone").oninput = () => { selPhone = $("delPhone").value; };
       if ($("delComment")) $("delComment").oninput = () => { selComment = $("delComment").value; };
       if ($("delSubmit")) $("delSubmit").onclick = doSubmitOrder;
@@ -2579,6 +2673,8 @@
 
     async function openAdmin() {
       if ($("mRequests")) $("mRequests").style.display = (me && me.is_super) ? "" : "none";
+      // Раздавать доступ может только владелец: иначе продавец выпишет права сам себе.
+      if ($("mStaff")) $("mStaff").style.display = (me && me.is_super) ? "" : "none";
       if (me && me.is_super) loadReqBadge();
       await fetchBrands();               // нужно разделам «Товары» и «Бренды»
       $("adminView").classList.add("show");
@@ -3084,6 +3180,75 @@
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("setSave").disabled = false; $("setSave").textContent = "Сохранить"; }
     };
+
+    // ----- Доступ продавцов (только супер-админ) -----
+    // Раньше админов задавали переменными окружения на хостинге: чтобы добавить
+    // продавца, нужно было зайти в панель и перезапустить сервис. Теперь список
+    // живёт в базе, а переменные окружения остаются страховкой — записи оттуда
+    // показываем, но удалить из приложения нельзя.
+    $("mStaff").onclick = openStaff;
+    $("staffClose").onclick = () => $("staffView").classList.remove("show");
+
+    async function openStaff() {
+      $("staffView").classList.add("show");
+      $("stId").value = ""; $("stNote").value = "";
+      $("stCity").innerHTML = `<option value="">Все точки (полный доступ)</option>` +
+        locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
+      await loadStaff();
+    }
+
+    async function loadStaff() {
+      $("staffList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      try {
+        const r = await fetch("/api/admin/staff", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (!d.ok) { $("staffList").innerHTML = `<p style="color:var(--hint)">Нет доступа.</p>`; return; }
+        renderStaff(d.staff || []);
+      } catch (e) { $("staffList").innerHTML = `<p style="color:var(--hint)">Сеть недоступна.</p>`; }
+    }
+
+    function renderStaff(list) {
+      if (!list.length) { $("staffList").innerHTML = `<p style="color:var(--hint)">Пока никого.</p>`; return; }
+      const rows = list.map(s => {
+        // Без подписи заголовком служит сам ID — тогда во второй строке его
+        // повторять незачем, там остаётся только точка.
+        const where = s.city ? esc(s.city) : "все точки";
+        const who = s.note ? esc(s.note) : `ID ${s.user_id}`;
+        const sub = s.note ? `ID ${s.user_id} · ${where}` : where;
+        const tags = (s.is_super ? `<span class="tagbadge">владелец</span>` : "") +
+          (s.source === "env" ? `<span class="tagbadge alt">из настроек сервера</span>` : "");
+        const del = s.can_remove ? `<button class="delx" data-stdel="${s.user_id}">Убрать</button>` : "";
+        return `<div class="urow"><div><div><b>${who}</b></div>
+          <small style="color:var(--hint)">${sub}</small>
+          <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">${tags}</div></div>${del}</div>`;
+      }).join("");
+      $("staffList").innerHTML = `<div class="card-block"><label>Кому открыт доступ</label>${rows}</div>`;
+      $("staffList").querySelectorAll("[data-stdel]").forEach(b => b.onclick = () => removeStaff(b.dataset.stdel));
+    }
+
+    $("stAdd").onclick = async () => {
+      const id = $("stId").value.trim();
+      if (!/^\d+$/.test(id)) { alertMsg("ID — это число. Пусть человек пришлёт /myid боту."); return; }
+      const body = { initData, user_id: id, city: $("stCity").value, note: $("stNote").value };
+      $("stAdd").disabled = true; $("stAdd").textContent = "Выдаю…";
+      try {
+        const r = await fetch("/api/admin/staff/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (d.ok) { $("stId").value = ""; $("stNote").value = ""; await loadStaff(); alertMsg("Доступ выдан ✅"); }
+        else alertMsg(d.error === "bad_city" ? "Такой точки нет." : "Не удалось выдать доступ.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("stAdd").disabled = false; $("stAdd").textContent = "Выдать доступ"; }
+    };
+
+    async function removeStaff(uid) {
+      if (!confirm(`Убрать доступ у ID ${uid}?`)) return;
+      try {
+        const r = await fetch("/api/admin/staff/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: uid }) });
+        const d = await r.json();
+        if (d.ok) await loadStaff();
+        else alertMsg(d.error === "super_protected" ? "Владельца убрать нельзя." : "Не удалось убрать.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
 
     // ----- Мои заказы (история + повтор) -----
     let myOrders = [];

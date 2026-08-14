@@ -31,9 +31,11 @@ import requests
 import telebot
 from flask import Flask, jsonify, request, Response, send_from_directory
 
+import config
 import db
 import notifications
-from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, admins_for_city, CITIES, CATEGORIES
+from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CITY_ADMINS,
+                   CONFIRM_MINUTES, is_admin, is_super_admin, admins_for_city, CITIES, CATEGORIES)
 
 db.init_db()
 
@@ -1610,6 +1612,95 @@ def api_admin_stats_reset():
         return jsonify({"ok": False, "error": "forbidden"}), 403
     res = db.reset_statistics()
     return jsonify({"ok": True, **res})
+
+
+# ------------------- Админы и продавцы (только супер-админ) -------------------
+
+def _super(data):
+    """Проверка «это супер-админ» — общая для всех операций с правами."""
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id") or not is_super_admin(int(user["id"])):
+        return None
+    return user
+
+
+@app.route("/api/admin/staff", methods=["POST"])
+def api_admin_staff():
+    """Список тех, у кого есть доступ. Показываем И добавленных из приложения,
+    И прописанных в настройках сервера: иначе непонятно, почему человек остаётся
+    админом после удаления. Записи из настроек помечены и не удаляются отсюда."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not _super(data):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    rows = []
+    for r in db.list_staff():
+        uid = int(r["user_id"])
+        rows.append({"user_id": uid, "city": r["city"] or "", "note": r["note"] or "",
+                     "source": "app", "can_remove": not is_super_admin(uid),
+                     "is_super": is_super_admin(uid)})
+    known = {r["user_id"] for r in rows}
+
+    # Из переменных окружения: владельцы, продавцы городов, супер-админы.
+    from_env = [(uid, "") for uid in ADMIN_IDS]
+    for city, ids in CITY_ADMINS.items():
+        from_env += [(uid, city) for uid in ids]
+    from_env += [(uid, "") for uid in SUPER_ADMIN_IDS]
+    for uid, city in from_env:
+        if uid in known:
+            continue
+        known.add(uid)
+        rows.append({"user_id": uid, "city": city, "note": "", "source": "env",
+                     "can_remove": False, "is_super": is_super_admin(uid)})
+
+    return jsonify({"ok": True, "staff": rows, "cities": CITIES})
+
+
+@app.route("/api/admin/staff/add", methods=["POST"])
+def api_admin_staff_add():
+    data = request.get_json(force=True, silent=True) or {}
+    if not (su := _super(data)):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        uid = int(str(data.get("user_id", "")).strip())
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if uid <= 0:
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    city = (data.get("city") or "").strip()
+    if city and city not in CITIES and city not in {l["name"] for l in db.get_locations()}:
+        return jsonify({"ok": False, "error": "bad_city"}), 400
+    db.add_staff(uid, city, (data.get("note") or "").strip()[:64], int(su["id"]))
+    config.refresh_staff()       # права должны действовать сразу, а не через полминуты
+    _bg(_notify_new_admin, uid, city)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/staff/remove", methods=["POST"])
+def api_admin_staff_remove():
+    data = request.get_json(force=True, silent=True) or {}
+    if not _super(data):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        uid = int(str(data.get("user_id", "")).strip())
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    # Супер-админа не трогаем ничем и никогда — это последний ключ от магазина.
+    if is_super_admin(uid):
+        return jsonify({"ok": False, "error": "super_protected"}), 400
+    db.remove_staff(uid)
+    config.refresh_staff()
+    return jsonify({"ok": True})
+
+
+def _notify_new_admin(uid, city):
+    """Сообщаем человеку, что доступ выдан: иначе он не узнает, что теперь админ."""
+    where = f" по точке «{city}»" if city else ""
+    try:
+        tg.send_message(uid, f"🛠 Вам выдали доступ продавца{where}.\n"
+                             f"Откройте приложение — появится раздел «Управление».")
+    except Exception as e:
+        print(f"Не смог уведомить нового админа {uid}: {e}")
 
 
 # ------------------- Розыгрыш (админ) -------------------

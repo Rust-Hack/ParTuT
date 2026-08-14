@@ -6,7 +6,12 @@ config.py — общие настройки и справочники.
 """
 
 import os
+import threading
+import time
+
 from dotenv import load_dotenv
+
+import db
 
 load_dotenv()
 
@@ -65,9 +70,45 @@ CITY_ADMINS = {                                # продавцы по горо�
 }
 
 
+# --- Админы из приложения (их супер-админ добавляет прямо в Mini App) ---
+# Права спрашивают на КАЖДЫЙ админ-запрос, поэтому список ненадолго кэшируем:
+# без этого каждая проверка прав — отдельный поход в базу.
+_STAFF_TTL = 30
+_staff_cache = {"at": 0.0, "by_city": {}}
+_staff_lock = threading.Lock()
+
+
+def _staff_by_city():
+    """{'': {id...}, 'minsk': {id...}} из базы. Если база недоступна или таблицы
+    ещё нет — возвращаем пусто, и права считаются только по переменным окружения:
+    сломанная база не должна отбирать доступ у владельца."""
+    now = time.time()
+    with _staff_lock:
+        if now - _staff_cache["at"] < _STAFF_TTL:
+            return _staff_cache["by_city"]
+    try:
+        by_city = db.staff_ids_by_city()
+    except Exception as e:
+        print(f"Не удалось прочитать админов из базы: {e}")
+        by_city = {}
+    with _staff_lock:
+        _staff_cache["at"] = now
+        _staff_cache["by_city"] = by_city
+    return by_city
+
+
+def refresh_staff():
+    """Сбросить кэш — вызывается сразу после добавления/удаления админа,
+    чтобы права начали действовать немедленно, а не через полминуты."""
+    with _staff_lock:
+        _staff_cache["at"] = 0.0
+
+
 def all_admin_ids():
     ids = set(ADMIN_IDS) | set(SUPER_ADMIN_IDS)     # супер-админ всегда среди админов
     for city_ids in CITY_ADMINS.values():
+        ids |= city_ids
+    for city_ids in _staff_by_city().values():      # добавленные из приложения
         ids |= city_ids
     return ids
 
@@ -77,11 +118,13 @@ def is_admin(user_id):
 
 
 def admins_for_city(city):
-    """Кому отправлять заказ этого города. Если продавец не задан — владельцу."""
-    ids = CITY_ADMINS.get(city) or set()
+    """Кому отправлять заказ этого города. Если продавец города не задан —
+    владельцу: заказ обязан кому-то прийти, иначе его просто никто не увидит."""
+    staff = _staff_by_city()
+    ids = set(CITY_ADMINS.get(city) or set()) | set(staff.get(city) or set())
     if ids:
         return ids
-    return set(ADMIN_IDS)
+    return set(ADMIN_IDS) | set(staff.get("") or set())
 
 
 # --- Реквизиты оплаты (МЕНЯЙТЕ ПОД СЕБЯ). Обычный текст — его показывает приложение. ---

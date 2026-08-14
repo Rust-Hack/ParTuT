@@ -252,6 +252,21 @@ def init_db():
         )
     """)
 
+    # Админы и продавцы, добавленные из приложения (супер-админом).
+    # Те, кто прописан в переменных окружения на хостинге, живут отдельно и
+    # отсюда НЕ удаляются — это защита от потери доступа: даже если из
+    # приложения снести всех, владелец из настроек сервера останется админом.
+    # city пустой = админ над всеми городами; заполненный = продавец города.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS staff (
+            user_id  BIGINT PRIMARY KEY,
+            city     TEXT,
+            note     TEXT,
+            added_by BIGINT,
+            added_at TEXT
+        )
+    """)
+
     # Сами картинки (товары, чеки). Telegram хранит их по file_id, но качать оттуда
     # долго — два запроса на каждое фото. Скачиваем ОДИН раз и держим тут, чтобы
     # перезапуск сервера не заставлял качать всё заново.
@@ -1281,6 +1296,54 @@ def set_setting(key, value):
         cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
     conn.close()
+
+
+# ---------- Админы и продавцы (управляются из приложения) ----------
+
+def list_staff():
+    """Все, кого супер-админ добавил через приложение."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM staff ORDER BY city, user_id")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def add_staff(user_id, city="", note="", added_by=None):
+    """Добавляет админа/продавца. Повторный вызов обновляет город и подпись."""
+    conn = connect()
+    cur = conn.cursor()
+    if USE_PG:
+        cur.execute(
+            """INSERT INTO staff (user_id, city, note, added_by, added_at)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET city = EXCLUDED.city, note = EXCLUDED.note""",
+            (user_id, city or "", note or "", added_by, _now_str()),
+        )
+    else:
+        cur.execute("INSERT OR REPLACE INTO staff (user_id, city, note, added_by, added_at) "
+                    "VALUES (?, ?, ?, ?, ?)", (user_id, city or "", note or "", added_by, _now_str()))
+    conn.commit()
+    conn.close()
+
+
+def remove_staff(user_id):
+    """Убирает из приложения. Если этот id прописан в настройках сервера —
+    доступ у человека останется, поэтому список показывает источник записи."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM staff WHERE user_id = %s"), (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def staff_ids_by_city():
+    """{'': {id,...}, 'minsk': {id,...}} — для проверки прав и рассылки заказов."""
+    out = {}
+    for row in list_staff():
+        out.setdefault(row["city"] or "", set()).add(int(row["user_id"]))
+    return out
 
 
 # ---------- Картинки ----------
