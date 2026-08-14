@@ -12,8 +12,10 @@ bot.py — тонкая оболочка вокруг Mini App.
 Покупок и управления заказами в самом чате нет — только приложение.
 """
 
+import datetime
 import html
 import json
+import os
 import time
 import threading
 import telebot
@@ -29,7 +31,7 @@ load_dotenv()
 # Общие настройки и справочники берём из config.py (их же использует server.py).
 from config import (
     BOT_TOKEN, WEBAPP_URL, CATEGORIES, CITIES,
-    ADMIN_IDS, is_admin, is_super_admin,
+    ADMIN_IDS, SUPER_ADMIN_IDS, is_admin, is_super_admin,
 )
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -266,10 +268,10 @@ def handle_approval(call, user_id, data):
         pass
 
 
-def _safe_send(user_id, text):
+def _safe_send(user_id, text, parse_mode=None):
     """Отправка клиенту с защитой: если он заблокировал бота — не роняем работу."""
     try:
-        bot.send_message(user_id, text)
+        bot.send_message(user_id, text, parse_mode=parse_mode)
     except Exception as e:
         print(f"Не смог написать клиенту {user_id}: {e}")
 
@@ -593,6 +595,42 @@ def parse_int(text):
 
 CANCEL_UNPAID_HOURS = 24   # авто-отмена карточных заказов без чека спустя столько часов
 
+# Сводка дня владельцу: во сколько (час) и часовой пояс (сервер Render — UTC, Минск = UTC+3).
+SUMMARY_HOUR = int(os.environ.get("SUMMARY_HOUR", "21"))
+SUMMARY_TZ_OFFSET = int(os.environ.get("SUMMARY_TZ_OFFSET", "3"))
+_last_summary_date = None   # дата последней отправленной сводки (в памяти процесса)
+
+
+def _daily_summary_text():
+    """Короткая сводка по бизнесу за день для владельца."""
+    s = db.get_business_stats(1)
+    lines = [f"📅 <b>Итоги за день</b>",
+             f"💰 Выручка (выдано): <b>{s['revenue']:.2f} Br</b>",
+             f"✅ Выдано заказов: {s['orders']}",
+             f"🧾 Средний чек: {s['avg_check']:.2f} Br",
+             f"⏳ Ждут вас сейчас: {s['inwork_count']} на {s['inwork_total']:.2f} Br",
+             f"🆕 Новых клиентов: {s['new_users']}"]
+    if s.get("top"):
+        top = "; ".join(f"{t['name']} ×{t['qty']}" for t in s["top"][:3])
+        lines.append(f"🏆 Топ: {top}")
+    return "\n".join(lines)
+
+
+def _maybe_send_daily_summary():
+    """Раз в сутки, после SUMMARY_HOUR по минскому времени, шлём сводку супер-админам."""
+    global _last_summary_date
+    local = datetime.datetime.utcnow() + datetime.timedelta(hours=SUMMARY_TZ_OFFSET)
+    if local.hour < SUMMARY_HOUR or _last_summary_date == local.date():
+        return
+    _last_summary_date = local.date()
+    try:
+        text = _daily_summary_text()
+    except Exception as e:
+        print(f"Не смог собрать сводку дня: {e}")
+        return
+    for admin_id in SUPER_ADMIN_IDS:
+        _safe_send(admin_id, text, parse_mode="HTML")
+
 
 def _reminder_loop():
     """Раз в минуту: напоминает продавцам о заказах, ждущих одобрения (раз в 10 мин на заказ),
@@ -606,6 +644,7 @@ def _reminder_loop():
                 if o:
                     _safe_send(o["user_id"], f"⏳ Заказ #{o['id']} отменён — чек не был загружен. "
                                              "Товар вернулся в наличие, монеты возвращены. Оформите заново, если нужно.")
+            _maybe_send_daily_summary()
         except Exception as e:
             print(f"Ошибка фонового цикла заказов: {e}")
         time.sleep(60)

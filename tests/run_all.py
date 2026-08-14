@@ -6,8 +6,9 @@ import sys
 
 import test_order_lifecycle
 import test_messaging
+import test_stats
 
-MODULES = [test_order_lifecycle, test_messaging]
+MODULES = [test_order_lifecycle, test_messaging, test_stats]
 
 
 def main():

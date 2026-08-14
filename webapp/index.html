@@ -916,6 +916,7 @@
   <div class="view" id="ordersView">
     <div class="viewhead"><h2>📦 Заказы</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="ordersClose">Закрыть</button></div>
+    <input id="ordersSearch" class="admsearch" placeholder="🔍 Поиск: № заказа, имя или id клиента" style="margin-bottom:10px">
     <div class="ochips" id="ordersFilter"></div>
     <div id="ordersList"></div>
   </div>
@@ -3042,7 +3043,7 @@
     }
 
     // ============ Заказы (управление продавцом) ============
-    let adminOrders = [], ordersStatusFilter = "active";
+    let adminOrders = [], ordersStatusFilter = "active", ordersSearch = "";
     const OSTATUS = {
       new:       { label: "Ждёт чек",            cls: "new" },
       paid:      { label: "Ждёт подтверждения",  cls: "paid" },
@@ -3056,6 +3057,7 @@
     ];
 
     $("ordersClose").onclick = () => $("ordersView").classList.remove("show");
+    $("ordersSearch").oninput = (e) => { ordersSearch = e.target.value; renderOrders(); };
 
     async function loadAdminOrders() {
       $("ordersList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
@@ -3082,9 +3084,21 @@
       return o.status === f;
     }
 
+    function orderMatchesSearch(o) {
+      const q = ordersSearch.trim().toLowerCase();
+      if (!q) return true;
+      return String(o.id).includes(q)
+        || (o.username || "").toLowerCase().includes(q)
+        || String(o.user_id).includes(q)
+        || (o.phone || "").toLowerCase().includes(q);
+    }
+
     function renderOrders() {
-      const list = adminOrders.filter(orderMatchesFilter);
-      if (!list.length) { $("ordersList").innerHTML = `<p style="color:var(--hint)">Заказов нет.</p>`; return; }
+      const list = adminOrders.filter(o => orderMatchesFilter(o) && orderMatchesSearch(o));
+      if (!list.length) {
+        const msg = ordersSearch.trim() ? "Ничего не найдено." : "Заказов нет.";
+        $("ordersList").innerHTML = `<p style="color:var(--hint)">${msg}</p>`; return;
+      }
       $("ordersList").innerHTML = list.map(o => {
         const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
         const items = (o.items || []).map(it =>
