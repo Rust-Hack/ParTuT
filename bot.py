@@ -11,11 +11,14 @@ bot.py — тонкая оболочка вокруг Mini App.
 """
 
 import json
+import time
+import threading
 import telebot
 from telebot import types
 from dotenv import load_dotenv
 
 import db
+import notifications
 
 # --- Подготовка ---
 load_dotenv()
@@ -619,10 +622,22 @@ def parse_int(text):
         return None
 
 
+def _reminder_loop():
+    """Каждую минуту напоминает продавцам о заказах, ждущих обработки (раз в 10 минут на заказ)."""
+    while True:
+        try:
+            for order in db.orders_needing_reminder(10):
+                notifications.remind_sellers(bot, order)
+        except Exception as e:
+            print(f"Ошибка напоминаний о заказах: {e}")
+        time.sleep(60)
+
+
 # --- Запуск ---
 def run():
     """Запускает бота (long polling). Зовётся при прямом запуске bot.py или из run.py."""
     print("Бот-оболочка запущен. (Ctrl+C — остановить)")
+    threading.Thread(target=_reminder_loop, daemon=True).start()   # повтор-напоминания продавцам
     bot.infinity_polling()
 
 

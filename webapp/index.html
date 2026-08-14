@@ -3010,6 +3010,8 @@
         const deliv = o.delivery_method
           ? `<div class="odeliv">🚚 ${esc(o.delivery_method)}${o.delivery_address ? ": " + esc(o.delivery_address) : ""}${o.delivery_fee ? ` (+${o.delivery_fee.toFixed(2)} Br)` : ""}${o.payment_method ? " · " + (PM[o.payment_method] || o.payment_method) : ""}</div>`
           : "";
+        const contact = (o.phone ? `<div class="odeliv">📞 ${esc(o.phone)}</div>` : "")
+          + (o.comment ? `<div class="odeliv">💬 ${esc(o.comment)}</div>` : "");
         let acts = "";
         if (o.status === "paid") acts = `<button class="ok" data-oact="confirm" data-oid="${o.id}">✅ Подтвердить</button><button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отклонить</button>`;
         else if (o.status === "confirmed") acts = `<button class="issue" data-oact="issued" data-oid="${o.id}">📦 Выдан</button><button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отклонить</button>`;
@@ -3020,7 +3022,7 @@
               <div class="ocard-sub">${esc(o.city)} · ${who}<br>${esc(o.created_at)}</div></div>
             <span class="obadge ${st.cls}">${st.label}</span>
           </div>
-          ${deliv}
+          ${deliv}${contact}
           <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} Br</span></div></div>
           ${receipt}
           <div class="oacts">${acts}</div>

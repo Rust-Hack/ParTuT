@@ -50,21 +50,32 @@ def notify_sellers(bot, order_id):
     comment = (order["comment"] or "").strip() if "comment" in order.keys() else ""
     if comment:
         lines.append(f"💬 Комментарий: {comment}")
+    lines.append("")
+    lines.append("🔧 Обработайте в приложении: Управление → Заказы")
     text = "\n".join(lines)
-
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("✅ Подтвердить оплату", callback_data=f"admord:confirm:{order_id}"))
-    kb.add(
-        types.InlineKeyboardButton("📦 Выдан", callback_data=f"admord:issued:{order_id}"),
-        types.InlineKeyboardButton("✖️ Отклонить", callback_data=f"admord:reject:{order_id}"),
-    )
 
     for admin_id in admins_for_city(order["city"]):
         try:
             if order["receipt_file_id"]:
-                bot.send_photo(admin_id, order["receipt_file_id"], caption=text,
-                               reply_markup=kb, parse_mode="HTML")
+                bot.send_photo(admin_id, order["receipt_file_id"], caption=text, parse_mode="HTML")
             else:
-                bot.send_message(admin_id, text, reply_markup=kb, parse_mode="HTML")
+                bot.send_message(admin_id, text, parse_mode="HTML")
         except Exception as e:
             print(f"Не смог отправить заказ #{order_id} админу {admin_id}: {e}")
+    db.touch_order_reminded(order_id)     # запускаем отсчёт до напоминания
+
+
+def remind_sellers(bot, order):
+    """Короткое повторное напоминание продавцу, что заказ ещё не обработан."""
+    method = order["delivery_method"] or ""
+    st = {"paid": "ждёт подтверждения оплаты", "confirmed": "ждёт выдачи"}.get(order["status"], "ждёт обработки")
+    text = (f"⏰ <b>Напоминание: заказ #{order['id']} {st}</b>\n"
+            f"🏙 {CITIES.get(order['city'], order['city'])} · {order['total']:.2f} BYN"
+            + (f" · {method}" if method else "")
+            + "\n\n🔧 Обработайте в приложении: Управление → Заказы")
+    for admin_id in admins_for_city(order["city"]):
+        try:
+            bot.send_message(admin_id, text, parse_mode="HTML")
+        except Exception as e:
+            print(f"Не смог напомнить о заказе #{order['id']} админу {admin_id}: {e}")
+    db.touch_order_reminded(order["id"])

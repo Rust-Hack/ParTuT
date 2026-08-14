@@ -1431,6 +1431,29 @@ def get_open_order(user_id):
     return row
 
 
+def touch_order_reminded(order_id):
+    """Отмечает, что по заказу только что отправлено уведомление/напоминание продавцу."""
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE orders SET reminded_at = %s WHERE id = %s"), (now, order_id))
+    conn.commit()
+    conn.close()
+
+
+def orders_needing_reminder(minutes=10):
+    """Заказы, ожидающие обработки продавцом (paid/confirmed), по которым напоминание
+    не отправлялось дольше `minutes`. Для повторного напоминания продавцу."""
+    cutoff = (datetime.datetime.now() - datetime.timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M")
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM orders WHERE status IN ('paid','confirmed') "
+                   "AND (reminded_at IS NULL OR reminded_at <= %s) ORDER BY id"), (cutoff,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def set_order_status(order_id, status):
     conn = connect()
     cur = conn.cursor()
