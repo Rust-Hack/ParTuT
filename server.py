@@ -23,6 +23,7 @@ import hashlib
 import html
 import json
 import random
+import threading
 import time
 from urllib.parse import parse_qsl
 
@@ -73,6 +74,34 @@ DEV_USER_ID = next(iter(ADMIN_IDS), 0)
 
 _file_path_cache = {}      # кэш путей к файлам Telegram (чтобы не звать get_file каждый раз)
 _photo_cache = {}          # кэш самих картинок в памяти: file_id -> (bytes, content_type)
+
+# --- Кэш в памяти для частых чтений (каталог/точки/доставка/бренды) ---
+# Эти данные меняются редко (через админку), а читаются на каждом открытии.
+# Кэш убирает лишние round-trip'ы к Neon. При любой правке — _cache_bust().
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+def _cache_get(key):
+    with _cache_lock:
+        item = _cache.get(key)
+        if item and item[0] > time.time():
+            return item[1]
+        if item:
+            _cache.pop(key, None)
+    return None
+
+
+def _cache_set(key, value, ttl):
+    with _cache_lock:
+        _cache[key] = (time.time() + ttl, value)
+    return value
+
+
+def _cache_bust():
+    """Сбросить весь кэш чтений — вызываем после любой правки данных."""
+    with _cache_lock:
+        _cache.clear()
 
 
 # ============================================================
@@ -189,6 +218,26 @@ def api_admin_request_decide():
 #  СТРАНИЦА
 # ============================================================
 
+# Пути, которые меняют кэшируемые данные (каталог/точки/доставка/бренды/склад).
+# После успешного запроса на такой путь — сбрасываем кэш чтений, чтобы данные были свежими.
+_WRITE_PATHS = {
+    "/api/admin/product", "/api/admin/product/update", "/api/admin/product/variants",
+    "/api/admin/product/delete", "/api/admin/photo",
+    "/api/admin/location", "/api/admin/location/delete",
+    "/api/admin/delivery", "/api/admin/delivery/update", "/api/admin/delivery/delete",
+    "/api/admin/brand", "/api/admin/brand/delete",
+    "/api/admin/settings/update", "/api/admin/stats/reset",
+    "/api/order", "/api/order/cancel", "/api/admin/order/status",   # меняют остаток на складе
+}
+
+
+@app.after_request
+def _bust_cache_on_write(resp):
+    if request.method == "POST" and request.path in _WRITE_PATHS and 200 <= resp.status_code < 300:
+        _cache_bust()
+    return resp
+
+
 _GZIP_TYPES = ("text/html", "text/css", "application/javascript",
                "text/javascript", "application/json", "image/svg+xml")
 
@@ -278,7 +327,11 @@ def api_age():
 
 @app.route("/api/locations")
 def api_locations():
-    return jsonify([{"id": r["id"], "name": r["name"]} for r in db.get_locations()])
+    cached = _cache_get("locations")
+    if cached is None:
+        cached = _cache_set("locations",
+                            [{"id": r["id"], "name": r["name"]} for r in db.get_locations()], 300)
+    return jsonify(cached)
 
 
 def _delivery_json(m):
@@ -296,23 +349,28 @@ def _delivery_json(m):
 def api_delivery():
     """Способы получения для точки (для оформления заказа)."""
     city = request.args.get("city", "")
-    return jsonify([_delivery_json(m) for m in db.get_delivery_methods(city)])
+    key = f"delivery:{city}"
+    cached = _cache_get(key)
+    if cached is None:
+        cached = _cache_set(key, [_delivery_json(m) for m in db.get_delivery_methods(city)], 300)
+    return jsonify(cached)
 
 
 # ============================================================
 #  ТОВАРЫ
 # ============================================================
 
-@app.route("/api/products")
-def api_products():
-    city = request.args.get("city")
+def _all_products_payload():
+    """Полный список товаров (все точки). Кэш 30с — витрина открывается без похода в базу.
+    Заказ всё равно проверяет остаток по живой базе, так что кратковременный лаг склада не опасен."""
+    cached = _cache_get("products")
+    if cached is not None:
+        return cached
     variants_by = {}
     for v in db.get_all_variants():
         variants_by.setdefault(v["product_id"], []).append({"flavor": v["flavor"], "stock": v["stock"]})
     out = []
     for p in db.get_all_products():
-        if city and p["city"] != city:
-            continue
         out.append({
             "id": p["id"], "name": p["name"], "price": p["price"],
             "stock": p["stock"], "is_hit": p["is_hit"],
@@ -323,6 +381,15 @@ def api_products():
             "variants": variants_by.get(p["id"], []),
             "photo_url": (f"/api/photo?file_id={p['photo']}" if p["photo"] else None),
         })
+    return _cache_set("products", out, 30)
+
+
+@app.route("/api/products")
+def api_products():
+    city = request.args.get("city")
+    out = _all_products_payload()
+    if city:
+        out = [p for p in out if p["city"] == city]
     return jsonify(out)
 
 
@@ -1387,6 +1454,12 @@ def api_admin_stats():
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
     period = data.get("period", "30d")
+    # Тяжёлый расчёт (~15 запросов) — кэшируем на 60с. Сбрасывается при изменении заказов
+    # (через _WRITE_PATHS), так что цифры остаются актуальными после реальных продаж.
+    cached = _cache_get(f"stats:{period}")
+    if cached is not None:
+        return jsonify({"ok": True, "stats": cached})
+
     days = PERIOD_DAYS.get(period, 30)
     stats = db.get_business_stats(days)          # всё считается в SQL
 
@@ -1399,6 +1472,7 @@ def api_admin_stats():
     stats["products_total"] = len(products)
     stats["games"] = db.get_game_stats()
     stats["period"] = period
+    _cache_set(f"stats:{period}", stats, 60)
     return jsonify({"ok": True, "stats": stats})
 
 
@@ -1601,6 +1675,10 @@ def api_admin_location_delete():
 @app.route("/api/brands")
 def api_brands():
     category = request.args.get("category")
+    key = f"brands:{category or 'all'}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return jsonify(cached)
     out = []
     for b in db.get_brands(category):
         try:
@@ -1608,7 +1686,7 @@ def api_brands():
         except Exception:
             flavors = []
         out.append({"id": b["id"], "name": b["name"], "category": b["category"], "flavors": flavors})
-    return jsonify(out)
+    return jsonify(_cache_set(key, out, 300))
 
 
 @app.route("/api/admin/brand", methods=["POST"])

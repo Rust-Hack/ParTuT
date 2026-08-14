@@ -25,17 +25,31 @@ from server import app         # Flask-приложение Mini App
 
 
 def _keep_warm():
-    """Пингуем свой же /health, чтобы Render (free) не усыплял сервис после простоя.
-    Работает только если задан RENDER_EXTERNAL_URL (его выдаёт Render автоматически)."""
-    url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
-    if not url:
+    """Держим «тёплыми» и веб-сервис Render, и базу Neon — иначе первый запрос после
+    простоя тормозит (Render засыпает без входящих запросов, Neon-compute — без запросов к БД).
+      • HTTP-пинг своего /health — не даёт Render уснуть (нужен RENDER_EXTERNAL_URL);
+      • лёгкий SELECT 1 — не даёт уснуть Neon-compute."""
+    if os.environ.get("KEEP_WARM", "1") != "1":     # можно выключить, если жрёт лимиты тарифа
+        print("keep-warm выключен (KEEP_WARM=0)")
         return
+    url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
     while True:
-        time.sleep(600)         # каждые 10 минут (порог засыпания Render — 15 мин)
+        time.sleep(240)         # каждые 4 минуты (Neon засыпает ~через 5 мин простоя)
+        # 1) будим/держим Neon
         try:
-            requests.get(url + "/health", timeout=10)
+            conn = db.connect()
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            conn.close()
         except Exception as e:
-            print(f"keep-warm пинг не удался: {e}")
+            print(f"keep-warm БД не удался: {e}")
+        # 2) держим Render (только если знаем свой адрес)
+        if url:
+            try:
+                requests.get(url + "/health", timeout=10)
+            except Exception as e:
+                print(f"keep-warm пинг не удался: {e}")
 
 
 def main():
