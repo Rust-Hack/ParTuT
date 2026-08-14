@@ -33,6 +33,7 @@ from flask import Flask, jsonify, request, Response, send_from_directory
 
 import config
 import db
+import errors
 import notifications
 from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CITY_ADMINS,
                    CONFIRM_MINUTES, is_admin, is_super_admin, admins_for_city, CITIES, CATEGORIES)
@@ -125,7 +126,10 @@ def _bg(fn, *args, **kwargs):
         try:
             fn(*args, **kwargs)
         except Exception as e:
-            print(f"Фоновая задача {getattr(fn, '__name__', fn)} упала: {e}")
+            # Здесь живут уведомления продавцам о новых заказах. Молчаливое
+            # падение тут означает «заказ пришёл, но никто о нём не узнал» —
+            # худший сорт поломки, поэтому сообщаем владельцу.
+            errors.report(tg, f"фоновая задача {getattr(fn, '__name__', fn)}", e)
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -262,6 +266,17 @@ _WRITE_PATHS = {
     # без сброса продавец до полуминуты видел бы старое число.
     "/api/notify-me": ("products",),
 }
+
+
+@app.errorhandler(Exception)
+def _report_unhandled(e):
+    """Любая необработанная ошибка запроса. Раньше она уходила в логи Render,
+    где её никто не видел, а покупатель просто получал пустой экран."""
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return e                      # 404 и прочие штатные ответы — не поломка
+    errors.report(tg, f"{request.method} {request.path}", e)
+    return jsonify({"ok": False, "error": "server_error"}), 500
 
 
 @app.after_request

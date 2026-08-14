@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 
 import config
 import db
+import errors
 import notifications
 
 # --- Подготовка ---
@@ -705,7 +706,10 @@ def _reminder_loop():
             _maybe_send_daily_summary()
             _maybe_send_backup()
         except Exception as e:
-            print(f"Ошибка фонового цикла заказов: {e}")
+            # Этот цикл шлёт напоминания, отменяет брошенные заказы и делает
+            # резервную копию. Если он сломается тихо, не работать будет всё
+            # сразу — и узнать об этом было бы неоткуда.
+            errors.report(bot, "фоновый цикл заказов", e)
         time.sleep(60)
 
 
