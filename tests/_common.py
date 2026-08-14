@@ -30,9 +30,15 @@ def _send_message(cid, text, **kw):
     SENT.append((cid, text, kw.get("parse_mode")))
 
 
+def _photo_size(file_id, width):
+    return type("P", (), {"file_id": file_id, "width": width})()
+
+
 def _send_photo(cid, *a, **kw):
     SENT.append((cid, kw.get("caption", ""), kw.get("parse_mode")))
-    return type("M", (), {"photo": [type("P", (), {"file_id": "fid"})()]})()
+    # Telegram возвращает несколько размеров одной картинки — самый большой последним.
+    sizes = [_photo_size("fid_s", 90), _photo_size("fid_m", 800), _photo_size("fid", 1280)]
+    return type("M", (), {"photo": sizes})()
 
 
 server.tg.send_message = _send_message

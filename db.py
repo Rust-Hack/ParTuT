@@ -32,6 +32,7 @@ else:
 # Диалектные различия, которые встречаются в наших запросах:
 ID_COL = "SERIAL PRIMARY KEY" if USE_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
 GREATEST = "GREATEST" if USE_PG else "max"   # ограничение остатка снизу нулём
+BLOB_COL = "BYTEA" if USE_PG else "BLOB"     # колонка для двоичных данных (картинок)
 
 
 # --- Пул соединений к Postgres (Neon): держим их «тёплыми» и переиспользуем ---
@@ -122,6 +123,7 @@ def init_db():
             stock       INTEGER NOT NULL DEFAULT 0,
             is_hit      INTEGER NOT NULL DEFAULT 0,
             photo       TEXT,
+            photo_thumb TEXT,
             description TEXT,
             brand       TEXT,
             flavor      TEXT,
@@ -250,6 +252,19 @@ def init_db():
         )
     """)
 
+    # Сами картинки (товары, чеки). Telegram хранит их по file_id, но качать оттуда
+    # долго — два запроса на каждое фото. Скачиваем ОДИН раз и держим тут, чтобы
+    # перезапуск сервера не заставлял качать всё заново.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS photo_blobs (
+            file_id      TEXT PRIMARY KEY,
+            content_type TEXT NOT NULL,
+            data         {BLOB_COL} NOT NULL,
+            size         INTEGER NOT NULL DEFAULT 0,
+            created_at   TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
@@ -273,7 +288,8 @@ def _ensure_product_columns():
     conn = connect()
     cur = conn.cursor()
     cols = _table_columns(cur, "products")
-    for c in ("brand", "flavor", "strength", "volume"):
+    # photo_thumb — file_id уменьшенной копии для сетки каталога (см. _pick_photo_sizes)
+    for c in ("brand", "flavor", "strength", "volume", "photo_thumb"):
         if c not in cols:
             cur.execute(f"ALTER TABLE products ADD COLUMN {c} TEXT")
     conn.commit()
@@ -1267,6 +1283,68 @@ def set_setting(key, value):
     conn.close()
 
 
+# ---------- Картинки ----------
+
+def get_photo_blob(file_id):
+    """Картинка из базы: (данные, content_type). None — если её там ещё нет."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT data, content_type FROM photo_blobs WHERE file_id = %s"), (file_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    # Postgres отдаёт BYTEA как memoryview — Flask нужен обычный bytes.
+    return bytes(row["data"]), row["content_type"]
+
+
+def save_photo_blob(file_id, content_type, data):
+    """Кладёт скачанную картинку в базу, чтобы больше не ходить за ней в Telegram."""
+    payload = psycopg2.Binary(data) if USE_PG else sqlite3.Binary(data)
+    conn = connect()
+    cur = conn.cursor()
+    if USE_PG:
+        cur.execute(
+            """INSERT INTO photo_blobs (file_id, content_type, data, size, created_at)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (file_id) DO NOTHING""",
+            (file_id, content_type, payload, len(data), _now_str()),
+        )
+    else:
+        cur.execute(
+            "INSERT OR IGNORE INTO photo_blobs (file_id, content_type, data, size, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (file_id, content_type, payload, len(data), _now_str()),
+        )
+    conn.commit()
+    conn.close()
+
+
+def is_product_photo(file_id):
+    """Это картинка товара (а не чек об оплате)?
+
+    Фото товаров стоит хранить у себя: их немного и их смотрят все покупатели.
+    Чеки — наоборот, по штуке на заказ и смотрит их один продавец один раз,
+    поэтому в базу они не попадают, чтобы не забить бесплатное место."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT 1 AS x FROM products WHERE photo = %s OR photo_thumb = %s LIMIT 1"),
+                (file_id, file_id))
+    found = cur.fetchone() is not None
+    conn.close()
+    return found
+
+
+def photo_blob_stats():
+    """Сколько картинок лежит в базе и сколько места занимают (для админ-статистики)."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM photo_blobs")
+    row = cur.fetchone()
+    conn.close()
+    return {"count": int(row["n"]), "bytes": int(row["bytes"])}
+
+
 # ---------- Товары ----------
 
 def get_products(city, category):
@@ -1322,7 +1400,7 @@ def add_product(city, category, name, price, stock, is_hit=0, description="",
 
 
 # Какие колонки разрешено менять (защита: имя колонки нельзя подставить параметром).
-_EDITABLE = {"name", "price", "stock", "is_hit", "description", "photo",
+_EDITABLE = {"name", "price", "stock", "is_hit", "description", "photo", "photo_thumb",
              "brand", "flavor", "strength", "volume", "category", "city"}
 
 

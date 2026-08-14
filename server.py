@@ -74,6 +74,9 @@ DEV_USER_ID = next(iter(ADMIN_IDS), 0)
 
 _file_path_cache = {}      # кэш путей к файлам Telegram (чтобы не звать get_file каждый раз)
 _photo_cache = {}          # кэш самих картинок в памяти: file_id -> (bytes, content_type)
+_photo_cache_lock = threading.Lock()
+_photo_cache_bytes = 0     # сколько памяти занято картинками
+PHOTO_CACHE_MAX_BYTES = int(os.environ.get("PHOTO_CACHE_MB", "48")) * 1024 * 1024
 
 # --- Кэш в памяти для частых чтений (каталог/точки/доставка/бренды) ---
 # Эти данные меняются редко (через админку), а читаются на каждом открытии.
@@ -423,6 +426,9 @@ def _all_products_payload():
             "strength": p["strength"] or "", "volume": p["volume"] or "",
             "variants": variants_by.get(p["id"], []),
             "photo_url": (f"/api/photo?file_id={p['photo']}" if p["photo"] else None),
+            # Для сетки каталога — копия поменьше. У старых товаров её нет, тогда
+            # отдаём полноразмерную: витрина в любом случае что-то покажет.
+            "thumb_url": (f"/api/photo?file_id={p['photo_thumb'] or p['photo']}" if p["photo"] else None),
         })
     return _cache_set("products", out, 30)
 
@@ -442,12 +448,28 @@ def api_photo():
     if not file_id:
         return Response("no file_id", status=404)
 
-    # 1. Если картинка уже скачивалась — отдаём из памяти (мгновенно).
+    # file_id намертво привязан к содержимому картинки: оно никогда не меняется.
+    # Значит браузеру достаточно один раз сверить ETag — и не качать заново.
+    if request.headers.get("If-None-Match") == f'"{file_id}"':
+        return _photo_not_modified(file_id)
+
+    # 1. Уже в памяти этого процесса — отдаём мгновенно.
     cached = _photo_cache.get(file_id)
     if cached:
-        return _photo_response(cached[0], cached[1])
+        return _photo_response(cached[0], cached[1], file_id)
 
-    # 2. Иначе тянем из Telegram один раз и запоминаем.
+    # 2. Есть в базе — значит когда-то качали. Перезапуск сервера это переживает.
+    try:
+        stored = db.get_photo_blob(file_id)
+    except Exception as e:
+        stored = None
+        print(f"Не удалось прочитать фото {file_id} из базы: {e}")
+    if stored:
+        _photo_cache_put(file_id, stored[0], stored[1])
+        return _photo_response(stored[0], stored[1], file_id)
+
+    # 3. Первый раз: тянем из Telegram (два запроса) и сохраняем, чтобы это был
+    #    последний раз — и для этого процесса, и для всех будущих.
     try:
         path = _file_path_cache.get(file_id)
         if not path:
@@ -457,20 +479,72 @@ def api_photo():
         r = requests.get(url, timeout=15)
         r.raise_for_status()
         ctype = r.headers.get("Content-Type", "image/jpeg")
-        if len(_photo_cache) < 200:              # простой предохранитель по размеру
-            _photo_cache[file_id] = (r.content, ctype)
-        return _photo_response(r.content, ctype)
+        _photo_cache_put(file_id, r.content, ctype)
+        _bg(_store_photo_blob, file_id, ctype, r.content)   # запись в базу не задерживает ответ
+        return _photo_response(r.content, ctype, file_id)
     except Exception as e:
         _file_path_cache.pop(file_id, None)      # путь мог протухнуть — сбросим, чтобы взять заново
         print(f"Ошибка отдачи фото {file_id}: {e}")
         return Response("photo error", status=404)
 
 
-def _photo_response(content, ctype):
-    """Ответ с картинкой + заголовок кэша, чтобы браузер/Telegram не запрашивали её повторно."""
-    resp = Response(content, content_type=ctype)
-    resp.headers["Cache-Control"] = "public, max-age=86400"   # кэш на сутки
+GRID_PHOTO_MIN_WIDTH = 480     # карточка каталога ~190px, но экраны телефонов 2-3x
+
+
+def _pick_photo_sizes(sizes):
+    """Из набора копий, который вернул Telegram, берём две: большую и для сетки.
+
+    Telegram сам хранит одну картинку в нескольких размерах (обычно 90/320/800/1280).
+    Раньше мы всегда брали самую большую — и гоняли её в каталог, где она
+    показывается в ~190 пикселей шириной. Теперь для сетки берём копию поменьше,
+    а полноразмерную оставляем для карточки товара. Своего ресайза не нужно."""
+    sizes = list(sizes or [])
+    if not sizes:
+        return None, None
+    ordered = sorted(sizes, key=lambda s: getattr(s, "width", 0) or 0)
+    full = ordered[-1]
+    grid = next((s for s in ordered if (getattr(s, "width", 0) or 0) >= GRID_PHOTO_MIN_WIDTH), full)
+    return full.file_id, grid.file_id
+
+
+def _store_photo_blob(file_id, ctype, content):
+    try:
+        if db.is_product_photo(file_id):     # чеки в базе не держим, см. is_product_photo
+            db.save_photo_blob(file_id, ctype, content)
+    except Exception as e:
+        print(f"Не удалось сохранить фото {file_id} в базу: {e}")
+
+
+def _photo_cache_put(file_id, content, ctype):
+    """Кладёт картинку в память под общий лимит по весу.
+
+    Считаем именно байты, а не штуки: раньше лимит был «200 картинок», и при
+    полноразмерных фото это могло съесть сотни мегабайт — на Render их нет."""
+    with _photo_cache_lock:
+        if file_id in _photo_cache:
+            return
+        global _photo_cache_bytes
+        if _photo_cache_bytes + len(content) > PHOTO_CACHE_MAX_BYTES:
+            return
+        _photo_cache[file_id] = (content, ctype)
+        _photo_cache_bytes += len(content)
+
+
+def _photo_headers(resp, file_id):
+    # immutable = «не перепроверяй вообще»: содержимое по этому file_id не изменится.
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    resp.headers["ETag"] = f'"{file_id}"'
     return resp
+
+
+def _photo_response(content, ctype, file_id):
+    """Ответ с картинкой + заголовки кэша, чтобы браузер не запрашивал её повторно."""
+    return _photo_headers(Response(content, content_type=ctype), file_id)
+
+
+def _photo_not_modified(file_id):
+    """304: у браузера уже есть эта картинка — тело не шлём."""
+    return _photo_headers(Response(status=304), file_id)
 
 
 # ============================================================
@@ -1321,12 +1395,13 @@ def api_admin_photo():
     try:
         msg = tg.send_photo(int(user["id"]), file.read(),
                             caption="🖼 Фото товара сохранено", disable_notification=True)
-        file_id = msg.photo[-1].file_id
+        file_id, thumb_id = _pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото товара: {e}")
         return jsonify({"ok": False, "error": "send_failed"}), 500
 
     db.update_field(pid, "photo", file_id)
+    db.update_field(pid, "photo_thumb", thumb_id)
     return jsonify({"ok": True})
 
 
