@@ -104,6 +104,17 @@ def _cache_bust():
         _cache.clear()
 
 
+def _bg(fn, *args, **kwargs):
+    """Запускает побочный эффект (уведомления в Telegram) в фоне — чтобы ответ клиенту
+    не ждал сетевых обращений к Telegram. Заказ уже сохранён в БД до вызова."""
+    def _run():
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:
+            print(f"Фоновая задача {getattr(fn, '__name__', fn)} упала: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+
+
 # ============================================================
 #  ПРОВЕРКА ПОДЛИННОСТИ (initData от Telegram)
 # ============================================================
@@ -550,8 +561,8 @@ def api_order():
     needs_receipt = (payment == "card")
     if not needs_receipt:
         db.set_order_status(order_id, "paid")          # ждёт одобрения продавца
-        notifications.notify_sellers(tg, order_id)
-        _notify_client(user_id, _client_order_summary(order_id))   # подтверждение клиенту в чат
+        # уведомления (продавцам + клиенту) — в фоне, чтобы «Оформить» отвечал сразу
+        _bg(_notify_new_order, order_id, user_id)
 
     return jsonify({
         "ok": True,
@@ -608,7 +619,7 @@ def api_receipt():
 
     if file_id:
         db.set_order_receipt(order_id, file_id)     # статус -> paid, чек сохранён
-        notifications.notify_sellers(tg, order_id)  # заказ уходит продавцу города
+        _bg(notifications.notify_sellers, tg, order_id)  # продавцам — в фоне, не тормозим ответ
         return jsonify({"ok": True})
 
     return jsonify({"ok": False, "error": "send_failed"}), 500
@@ -1311,6 +1322,12 @@ def _notify_client(user_id, text):
         print(f"Не смог уведомить клиента {user_id}: {e}")
 
 
+def _notify_new_order(order_id, user_id):
+    """Побочные эффекты нового заказа: уведомить продавцов и клиента (вызывается в фоне)."""
+    notifications.notify_sellers(tg, order_id)
+    _notify_client(user_id, _client_order_summary(order_id))
+
+
 def _client_order_summary(order_id):
     """Сводка заказа для клиента (подтверждение оформления в чате)."""
     o = db.get_order(order_id)
@@ -1421,7 +1438,7 @@ def api_admin_order_status():
         msg = (f"✅ Оплата по заказу #{oid} подтверждена! Готовим к выдаче. Спасибо! 🌿"
                if order["payment_method"] == "card"
                else f"✅ Заказ #{oid} подтверждён! Готовим к выдаче. Спасибо! 🌿")
-        _notify_client(client_id, msg)
+        _bg(_notify_client, client_id, msg)
     elif action == "issued":
         # выдать можно только оплаченный (paid) или уже подтверждённый (confirmed) заказ,
         # но НЕ 'new' (неоплаченный картой) — иначе кэшбэк без оплаты.
@@ -1430,12 +1447,12 @@ def api_admin_order_status():
         db.add_coins(client_id, int(_order_subtotal(order)) * COINS_PER_BYN)   # кэшбэк с товаров (без доставки)
         db.add_wheel_progress(client_id, _order_item_count(order))   # прогресс колеса
         _reward_referrer(client_id, order["total"])   # % и бонус пригласившему
-        _notify_client(client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
+        _bg(_notify_client, client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
         if not db.cancel_order(oid, OPEN):          # атомарно: canceled + возврат склада/монет
             return jsonify({"ok": False, "error": "closed"}), 409
-        _notify_client(client_id, f"К сожалению, заказ #{oid} отклонён продавцом. "
-                                  "Если это ошибка — напишите нам, разберёмся.")
+        _bg(_notify_client, client_id, f"К сожалению, заказ #{oid} отклонён продавцом. "
+                                       "Если это ошибка — напишите нам, разберёмся.")
     else:
         return jsonify({"ok": False, "error": "bad_action"}), 400
     return jsonify({"ok": True})
