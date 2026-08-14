@@ -1197,6 +1197,8 @@ def api_admin_stats():
     products = db.get_all_products()             # склад — не зависит от периода
     stats["low_stock"] = [{"name": p["name"], "city": p["city"], "stock": p["stock"]}
                           for p in products if 0 < p["stock"] <= 3][:12]
+    stats["out_stock"] = [{"name": p["name"], "city": p["city"]}
+                          for p in products if p["stock"] <= 0][:12]
     stats["out_of_stock"] = sum(1 for p in products if p["stock"] <= 0)
     stats["products_total"] = len(products)
     stats["games"] = db.get_game_stats()

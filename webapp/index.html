@@ -2525,9 +2525,9 @@
       const cityRows = (s.revenue_by_city || []).length
         ? hbars(s.revenue_by_city.map(c => ({ label: c.city, value: c.total, sub: money(c.total) })))
         : `<div class="statrow"><span style="color:var(--hint)">Ещё нет выданных заказов</span></div>`;
-      const lowRows = (s.low_stock || []).length
-        ? s.low_stock.map(p => `<div class="statrow"><span>${esc(p.name)} · ${esc(p.city)}</span><b style="color:var(--warn)">${p.stock} шт</b></div>`).join("")
-        : `<div class="statrow"><span style="color:var(--hint)">Всё в достатке</span></div>`;
+      const outR = (s.out_stock || []).map(p => `<div class="statrow"><span>${esc(p.name)} · ${esc(p.city)}</span><b style="color:var(--danger)">нет в наличии</b></div>`).join("");
+      const lowR = (s.low_stock || []).map(p => `<div class="statrow"><span>${esc(p.name)} · ${esc(p.city)}</span><b style="color:var(--warn)">осталось ${p.stock} шт</b></div>`).join("");
+      const stockRows = (outR + lowR) || `<div class="statrow"><span style="color:var(--hint)">Всё в достатке — пополнять не нужно 👍</span></div>`;
       const pl = PERIOD_LABEL[statsPeriod];
 
       $("statsBody").innerHTML = periodSelHtml() + `
@@ -2549,11 +2549,15 @@
           <div class="statrow"><span>Покупали хоть раз</span><b>${s.total_buyers}</b></div>
           <div class="statrow"><span>Повторные покупатели</span><b>${s.repeat_buyers} (${repeatPct}%)</b></div>
         </div>
-        <div class="stathead">🪙 Монеты (лояльность)</div><div class="statlist">
-          <div class="statrow"><span>В обороте у клиентов</span><b>${s.coins_circulation} 🪙</b></div>
-          ${gamesRows(s.games || {})}
+        <div class="stathead">🪙 Монеты лояльности <span class="stathint">клиенты копят и тратят скидкой · 100 монет = 1 Br</span></div>
+        <div class="statlist">
+          <div class="statrow"><span>Накоплено у всех клиентов</span><b>${s.coins_circulation} 🪙</b></div>
+          <div class="statrow"><span>Если все потратят — скидок на</span><b style="color:var(--warn)">${money(s.coins_circulation / 100)}</b></div>
         </div>
-        <div class="stathead">⚠️ Мало на складе <span class="stathint">≤3 шт · ${s.out_of_stock} нет в наличии</span></div><div class="statlist">${lowRows}</div>
+        <div class="stathead">🎮 Игры на монеты <span class="stathint">колесо (бесплатно за покупки) и слот (за монеты)</span></div>
+        <div class="statlist">${gamesRows(s.games || {})}</div>
+        <div class="stathead">📦 Склад <span class="stathint">пополни, чтобы не терять продажи</span></div>
+        <div class="statlist">${stockRows}</div>
         ${(me && me.is_super) ? `<button class="closebtn" id="resetStats" style="color:var(--danger);margin-top:18px">🧹 Сбросить статистику (тестовые данные)</button>` : ""}`;
       bindPeriodBtns();
       if ($("resetStats")) $("resetStats").onclick = resetStats;
@@ -2580,14 +2584,14 @@
     function gamesRows(g) {
       const w = { spins: g.wheel_spins || 0, paid: g.wheel_paid || 0 };
       const sl = { spins: g.slot_spins || 0, bet: g.slot_bet || 0, paid: g.slot_paid || 0 };
-      const net = sl.bet - sl.paid;   // «прибыль казино» слота (ставки − выплаты)
+      const net = sl.bet - sl.paid;   // ставки − выплаты = осталось у заведения
       return `
-        <div class="statrow"><span>🎡 Колесо — прокрутов</span><b>${w.spins}</b></div>
-        <div class="statrow"><span>🎡 Колесо — выплачено</span><b>${w.paid} 🪙</b></div>
-        <div class="statrow"><span>🎰 Слот — прокрутов</span><b>${sl.spins}</b></div>
-        <div class="statrow"><span>🎰 Слот — ставок</span><b>${sl.bet} 🪙</b></div>
-        <div class="statrow"><span>🎰 Слот — выплачено</span><b>${sl.paid} 🪙</b></div>
-        <div class="statrow"><span>🎰 Слот — баланс (ставки−выплаты)</span><b style="color:${net >= 0 ? '#2e9e4f' : 'var(--danger)'}">${net} 🪙</b></div>`;
+        <div class="statrow"><span>🎡 Колесо — прокрутили раз</span><b>${w.spins}</b></div>
+        <div class="statrow"><span>🎡 Колесо — раздали монет</span><b>${w.paid} 🪙</b></div>
+        <div class="statrow"><span>🎰 Слот — прокрутили раз</span><b>${sl.spins}</b></div>
+        <div class="statrow"><span>🎰 Слот — поставили монет</span><b>${sl.bet} 🪙</b></div>
+        <div class="statrow"><span>🎰 Слот — выиграли монет</span><b>${sl.paid} 🪙</b></div>
+        <div class="statrow"><span>🎰 Слот — осталось у заведения</span><b style="color:${net >= 0 ? '#2e9e4f' : 'var(--danger)'}">${net} 🪙</b></div>`;
     }
 
     // ----- Розыгрыш (админ) -----
