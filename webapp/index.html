@@ -1492,6 +1492,7 @@
         const r = await fetch("/api/support", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, text, order_id: supportOrderId }) });
         const d = await r.json();
         if (d.ok && d.delivered) { closeOverlay($("supportOverlay")); alertMsg("Отправлено ✅ Менеджер ответит в этом чате."); }
+        else if (d.error === "cooldown") alertMsg(`Слишком часто. Подождите ${d.retry_after || 20} сек.`);
         else alertMsg("Не удалось отправить. Попробуйте позже.");
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("supportSend").disabled = false; $("supportSend").textContent = "Отправить"; }

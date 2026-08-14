@@ -22,6 +22,7 @@ import hashlib
 import html
 import json
 import random
+import time
 from urllib.parse import parse_qsl
 
 import requests
@@ -534,6 +535,10 @@ def api_order_cancel():
     return jsonify({"ok": True})
 
 
+SUPPORT_COOLDOWN = 20          # антиспам: не чаще 1 сообщения в поддержку за столько секунд
+_support_last = {}             # uid -> время последнего сообщения (в памяти процесса)
+
+
 @app.route("/api/support", methods=["POST"])
 def api_support():
     """Клиент пишет в поддержку — доставляем сообщение менеджеру(ам) через бота."""
@@ -545,6 +550,13 @@ def api_support():
     if not text:
         return jsonify({"ok": False, "error": "empty"}), 400
     uid = int(user["id"])
+
+    # Антиспам: не даём заваливать менеджера — один вопрос раз в SUPPORT_COOLDOWN сек.
+    now = time.time()
+    wait = SUPPORT_COOLDOWN - (now - _support_last.get(uid, 0))
+    if wait > 0:
+        return jsonify({"ok": False, "error": "cooldown", "retry_after": int(wait) + 1}), 429
+    _support_last[uid] = now
     uname = user.get("username")
     name = user.get("first_name") or (f"@{uname}" if uname else "клиент")
     who = _contact_link(uname, uid, name)   # кликабельно: открыть чат с клиентом
