@@ -407,6 +407,20 @@
     .obadge.confirmed { background: rgba(76,175,80,.16); color: #2e9e4f; }
     .obadge.issued { background: var(--surface-2); color: var(--text); }
     .obadge.canceled { background: rgba(239,83,80,.14); color: var(--danger); }
+    /* Трекер статуса заказа */
+    .otrack { display: flex; margin: 14px 0 6px; }
+    .ostep { flex: 1; text-align: center; position: relative; }
+    .ostep::after { content: ""; position: absolute; top: 10px; left: 50%; width: 100%; height: 3px; background: var(--line); z-index: 0; }
+    .ostep:last-child::after { display: none; }
+    .ostep.done::after { background: #2e9e4f; }
+    .ostep .dot { position: relative; z-index: 1; width: 22px; height: 22px; border-radius: 50%; background: var(--surface-2); color: var(--hint); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; }
+    .ostep.active .dot { background: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+    .ostep.done .dot { background: #2e9e4f; color: #fff; }
+    .ostep .lbl { font-size: 11px; color: var(--hint); margin-top: 5px; }
+    .ostep.active .lbl, .ostep.done .lbl { color: var(--text); font-weight: 600; }
+    .ocanceled { text-align: center; color: var(--danger); font-weight: 700; padding: 12px 0 4px; }
+    .odetails { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; }
+    .odetails .statrow span:first-child { color: var(--hint); }
     .oitems { margin: 10px 0; border-top: 1px solid var(--line); padding-top: 10px; }
     .oitem { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; padding: 3px 0; }
     .oitem span:last-child { color: var(--hint); white-space: nowrap; }
@@ -2883,16 +2897,47 @@
         const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
         const items = (o.items || []).map(it =>
           `<div class="oitem"><span>${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} ${CUR}</span></div>`).join("");
+        const pm = { card: "💳 Картой", cash: "💵 Наличными", none: "🚕 При получении" }[o.payment_method] || "";
+        const details = [
+          o.delivery_method ? ["Получение", o.delivery_method + (o.delivery_address ? " · " + esc(o.delivery_address) : "")] : null,
+          pm ? ["Оплата", pm] : null,
+          o.delivery_fee ? ["Доставка", (+o.delivery_fee).toFixed(2) + " " + "Br"] : null,
+          o.comment ? ["Комментарий", esc(o.comment)] : null,
+        ].filter(Boolean).map(([k, v]) => `<div class="statrow"><span>${k}</span><b>${v}</b></div>`).join("");
+        const needReceipt = o.status === "new" && o.payment_method === "card";
+        const payBtn = needReceipt ? `<button class="bigbtn" data-pay="${idx}" style="margin-top:10px">📷 Загрузить чек</button>` : "";
         return `<div class="ocard">
           <div class="ocard-top">
             <div><div class="ocard-id">Заказ #${o.id}</div><div class="ocard-sub">${esc(o.city)} · ${esc(o.created_at)}</div></div>
             <span class="obadge ${st.cls}">${st.label}</span>
           </div>
-          <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} ${CUR}</span></div></div>
-          <button class="bigbtn" data-repeat="${idx}" style="margin-top:10px">🔁 Повторить заказ</button>
+          ${orderTracker(o.status)}
+          <div class="oitems" style="margin-top:8px">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} ${CUR}</span></div></div>
+          ${details ? `<div class="odetails">${details}</div>` : ""}
+          ${payBtn}
+          <button class="bigbtn" data-repeat="${idx}" style="margin-top:10px;background:var(--surface-2);color:var(--text)">🔁 Повторить заказ</button>
         </div>`;
       }).join("");
       $("myOrdersList").querySelectorAll("[data-repeat]").forEach(b => b.onclick = () => repeatOrder(myOrders[+b.dataset.repeat]));
+      $("myOrdersList").querySelectorAll("[data-pay]").forEach(b => b.onclick = () => {
+        const o = myOrders[+b.dataset.pay];
+        currentOrder = { order_id: o.id, confirm_minutes: 15 };
+        $("receiptFile").click();
+      });
+    }
+    // Трекер: Оформлен → Подтверждён → Выдан (или «отклонён»).
+    function orderTracker(status) {
+      if (status === "canceled") return `<div class="ocanceled">✖️ Заказ отклонён</div>`;
+      const stage = status === "issued" ? 3 : status === "confirmed" ? 2 : 1;
+      const s1 = "done";
+      const s2 = stage >= 2 ? "done" : "active";
+      const s3 = stage >= 3 ? "done" : (stage >= 2 ? "active" : "");
+      const d = (cls, done) => `<div class="dot">${done ? "✓" : ""}</div>`;
+      return `<div class="otrack">
+        <div class="ostep ${s1}">${d(s1, true)}<div class="lbl">Оформлен</div></div>
+        <div class="ostep ${s2}">${d(s2, stage >= 2)}<div class="lbl">Подтверждён</div></div>
+        <div class="ostep ${s3}">${d(s3, stage >= 3)}<div class="lbl">Выдан</div></div>
+      </div>`;
     }
     function repeatOrder(o) {
       const unavail = [], toAdd = [];
