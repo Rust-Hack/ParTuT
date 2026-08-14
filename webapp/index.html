@@ -5,18 +5,53 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>ParTuT</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // Тему ставим ДО первой отрисовки. Иначе заставка успевает мигнуть тёмной
+    // стеной, а через мгновение перекраситься в светлую — это заметно глазу.
+    // Логика та же, что в initTheme(): сохранённый выбор, иначе тема Telegram.
+    (function () {
+      try {
+        var tgApp = window.Telegram && window.Telegram.WebApp;
+        var saved = localStorage.getItem("theme");
+        var sys = (tgApp && tgApp.colorScheme) ||
+          (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", saved || sys);
+      } catch (e) {}
+    })();
+  </script>
   <style>
     /* ============================================================
        ТЕМЫ. Все цвета — через переменные. Светлая по умолчанию,
        тёмная включается атрибутом <html data-theme="dark">.
        Меняя значения здесь, вы меняете весь дизайн разом.
        ============================================================ */
+    /* Светлая тема — «пар на свету». Тёмная показывает пар ночью: неон светит
+       сквозь него. Светлая — тот же пар днём, поэтому фон не нейтрально-серый,
+       а холодный молочный с бирюзой, и даже текст уведён в фирменный оттенок:
+       так экран выглядит одним материалом, а не белым шаблоном с бирюзовой
+       кнопкой сверху. */
     :root {
-      --page:#f3f4f6; --surface:#ffffff; --surface-2:#f4f5f7; --img-bg:#f4f5f7;
-      --text:#14161a; --hint:#8b909a; --line:#eceef1;
-      --accent:#0aa6a6; --on-accent:#ffffff; --accent-soft:#e2f7f7;
-      --danger:#ef5350; --warn:#ff9800; --shadow:0 2px 10px rgba(20,22,26,.06);
+      --page:#e9f1f2; --surface:#ffffff; --surface-2:#dde9eb; --img-bg:#eaf3f4;
+      --text:#0c2229; --hint:#4e6e76; --line:#d5e4e7;
+      /* #067c82 вместо прежней #0aa6a6: та давала на белом контраст 2.99:1 —
+         цена в карточке и белый «+» на кнопке не дотягивали до нормы 4.5:1 */
+      --accent:#067c82; --on-accent:#ffffff; --accent-soft:#d9f0f1;
+      /* warn служит и фоном бейджа под белым текстом, и цветом текста на белом,
+         поэтому взят достаточно тёмный: проходит контраст в обе стороны */
+      --danger:#c62f2b; --warn:#a35400; --shadow:0 2px 10px rgba(8,40,48,.08);
       --brand-neon:#0bb6b6; --brand-glow:transparent;
+      /* Облачное свечение вверху экрана — дневной родственник неонового ореола */
+      --bloom:radial-gradient(125% 46% at 50% 7%, rgba(6,124,130,.15), rgba(6,124,130,.05) 42%, transparent 72%);
+      /* Кирпичная стена (заставка, игры). Днём швы тёмные, а верхняя грань
+         кирпича светлая — так свет падает сверху, как в реальной кладке.
+         Ночью наоборот: швы чёрные, грань холодная. */
+      --brick-base:#dfeaec;
+      --brick-img:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23bcd2d6' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23ffffff' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+      --cloud-stroke:#067c82; --splash-title:#0c2229; --splash-sub:#3d6b72; --glow-rgb:6,124,130;
+      /* Та же кладка фоном всего приложения. Швы подобраны под цвет страницы, а
+         не под цвет заставки: фон остаётся прежней светлоты, поэтому карточки
+         по-прежнему «висят» над ним, а стена читается только в промежутках. */
+      --wall-img:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23cfe0e3' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23f7fcfc' stroke-width='1' fill='none'/%3E%3C/svg%3E");
       --header-h:58px; --nav-h:70px;
       --safe-top:0px; /* высота «чёлки»/статус-бара в полноэкранном режиме, задаётся из JS */
     }
@@ -27,11 +62,27 @@
       --accent:#35e0e0; --on-accent:#04232a; --accent-soft:#0e333c;
       --danger:#ff6b6b; --warn:#ffb020; --shadow:0 2px 14px rgba(0,0,0,.55);
       --brand-neon:#5ff2f2; --brand-glow:rgba(95,242,242,.55);
+      --bloom:none;                 /* ночью светит неон, дневное облако не нужно */
+      --brick-base:#0e222b;
+      --brick-img:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23081419' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23163039' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+      --cloud-stroke:#5ff2f2; --splash-title:#ffffff; --splash-sub:#bfeef2; --glow-rgb:95,242,242;
+      /* Ночью швы наоборот СВЕТЛЕЕ фона: тёмный шов на почти чёрной странице
+         был бы не виден вовсе. */
+      --wall-img:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%230d1f27' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23132b34' stroke-width='1' fill='none'/%3E%3C/svg%3E");
     }
 
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    html { overflow-x: hidden; }
-    body { margin: 0; background: var(--page); color: var(--text);
+    /* Фон живёт на html, а не на body: так облачное свечение остаётся ПОД всем
+       содержимым и не перекрывается фоном body. attachment:fixed — свечение
+       стоит на месте при прокрутке, как свет в комнате, а не едет со списком. */
+    /* Два слоя: облачное свечение сверху, кирпичная кладка под ним. В тёмной теме
+       --bloom равен none — слой просто не рисуется, и остаётся одна стена. */
+    html { overflow-x: hidden; background-color: var(--page);
+      background-image: var(--bloom), var(--wall-img);
+      background-repeat: no-repeat, repeat;
+      background-size: auto, 118px 58px;
+      background-attachment: fixed, fixed; }
+    body { margin: 0; background: transparent; color: var(--text);
       font-family: -apple-system, "Segoe UI", Roboto, sans-serif; overflow-x: hidden; }
     button { font-family: inherit; cursor: pointer; }
 
@@ -42,6 +93,9 @@
     .brand .logo { width: 30px; height: 30px; color: var(--brand-neon); }
     html[data-theme="dark"] .brand .logo { filter: drop-shadow(0 0 3px var(--brand-glow)) drop-shadow(0 0 8px var(--brand-glow)); }
     html[data-theme="dark"] .brand .logo path { fill: rgba(95,242,242,.10); }
+    /* Днём облако не светится, а рассеивает свет — тот же жест, другая физика */
+    html:not([data-theme="dark"]) .brand .logo { filter: drop-shadow(0 1px 5px rgba(6,124,130,.30)); }
+    html:not([data-theme="dark"]) .brand .logo path { fill: rgba(6,124,130,.07); }
     .brand-text { font-size: 19px; font-weight: 800; letter-spacing: .5px; }
     html[data-theme="dark"] .brand-text { color: #fff; text-shadow: 0 0 10px var(--brand-glow); }
     .point { display: flex; align-items: center; gap: 6px; background: var(--surface-2); color: var(--text);
@@ -75,13 +129,28 @@
     .grid { padding: 4px 12px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .card { background: var(--surface); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; position: relative; display: flex; flex-direction: column; }
     .imgwrap { position: relative; width: 100%; aspect-ratio: 1/1; background: var(--img-bg); display: flex; align-items: center; justify-content: center; }
+    /* Свет, собравшийся за товаром, — как в лайтбоксе. Появляется на каждой
+       карточке, поэтому фирменный жест видно там, куда правда смотрят. */
+    html:not([data-theme="dark"]) .imgwrap,
+    html:not([data-theme="dark"]) .pd-img { background: radial-gradient(78% 62% at 50% 24%, #ffffff, var(--img-bg) 72%); }
     .imgwrap img { width: 100%; height: 100%; object-fit: contain; padding: 10px; }
     .imgwrap .ph { font-size: 46px; }
-    .tagbadge { background: var(--accent); color: var(--on-accent); font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
-    .tagbadge.warn { background: var(--warn); color: #fff; }
-    .tagbadge.hit { background: #ff8c1a; color: #fff; }
-    .tagbadge.alt { background: var(--surface-2); color: var(--text); }
+    /* Бейджи выстроены по громкости, а не покрашены в разные цвета наугад:
+         спокойные (мг, мл)  — характеристика, её читают уже заинтересовавшись;
+         «Мало»              — предупреждение, заметное, но не кричащее;
+         «Хит»               — единственный громкий, потому что он один такой.
+       Тёмный текст на янтаре вместо белого: белый на оранжевом давал 2.4:1 и
+       на солнце не читался вовсе. */
+    .tagbadge { background: var(--accent-soft); color: var(--text); font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+    .tagbadge.alt { background: var(--accent-soft); color: var(--text); }
+    .tagbadge.warn { background: #ffeccc; color: #8a4b00; }
+    .tagbadge.hit { background: #ffb020; color: #3a2600; }
+    .tagbadge.out { background: var(--text); color: var(--surface); }
     .badges-tr { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; z-index: 1; }
+    /* Отсутствующий товар остаётся в списке (цена и вкус ещё интересны), но
+       гаснет, чтобы не соперничать за внимание с тем, что можно купить. */
+    .card.out .imgwrap img, .card.out .imgwrap .ph { opacity: .4; }
+    .card.out .cname, .card.out .cprice { opacity: .6; }
     .csub { font-size: 11.5px; color: var(--hint); margin: -4px 0 8px; }
     .pd-info { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
     .pd-info span { color: var(--hint); }
@@ -172,7 +241,11 @@
     .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
 
     .swipe-dim { position: fixed; inset: 0; background: #000; opacity: 0; z-index: 49; pointer-events: none; display: none; }
-    .view { position: fixed; inset: 0; background: var(--page); z-index: 50; display: none; flex-direction: column; padding: calc(26px + var(--safe-top)) 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+    /* Полноэкранные виды продолжают ту же стену: иначе, открыв товар, попадаешь
+       на другую по фактуре поверхность, будто вышел из магазина. */
+    .view { position: fixed; inset: 0; background-color: var(--page);
+      background-image: var(--wall-img); background-size: 118px 58px; background-attachment: fixed;
+      z-index: 50; display: none; flex-direction: column; padding: calc(26px + var(--safe-top)) 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
     .view.show { display: flex; }
     .view .icon { font-size: 54px; text-align: center; margin: 10px 0; }
     .view h2 { font-size: 21px; margin: 0 0 8px; text-align: center; }
@@ -441,9 +514,16 @@
       position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
     .pd-img img { width: 100%; height: 100%; object-fit: contain; padding: 16px; }
     .pd-img .ph { font-size: 76px; }
-    .pd-name { font-size: 22px; font-weight: 800; margin: 16px 0 6px; text-align: left; }
+    /* Скопом под .view — иначе общие правила .view h2 / .view p (они специфичнее
+       одного класса) гасят и размер, и выравнивание: название товара уезжало в
+       центр 21-м кеглем вместо 22-го слева, а описание — в центр 14-м.
+       Название и цена должны стоять по одной левой линии, как в чеке. */
+    /* Текст товара лежит на белой карточке, как и всё остальное в приложении:
+       набирать характеристики прямо по кирпичу — значит читать сквозь фактуру. */
+    .pd-card { background: var(--surface); border-radius: 18px; box-shadow: var(--shadow); padding: 2px 16px 16px; margin-top: 14px; }
+    .view h2.pd-name { font-size: 22px; font-weight: 800; margin: 16px 0 6px; text-align: left; }
     .pd-price { color: var(--accent); font-size: 24px; font-weight: 800; }
-    .pd-desc { color: var(--hint); font-size: 15px; line-height: 1.5; margin-top: 12px; text-align: left; }
+    .view p.pd-desc { color: var(--hint); font-size: 15px; line-height: 1.5; margin-top: 12px; text-align: left; }
     /* prodBody — собственный скролл (иначе flex:1 ломает прокрутку длинных карточек) */
     #prodBody { min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
     .pd-actions { padding-top: 16px; display: flex; gap: 12px; align-items: center; flex: 0 0 auto; }
@@ -506,17 +586,18 @@
     #splash { position: fixed; inset: 0; z-index: 100; overflow: hidden;
       display: flex; align-items: center; justify-content: center;
       border: 1px solid transparent;
-      background-color: #0e222b;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23081419' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23163039' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+      background-color: var(--brick-base);
+      background-image: var(--brick-img);
       background-size: 118px 58px;
       animation: edgePulse 1.4s ease-in-out 1.5s both, splashOut .6s ease 3.1s forwards; }
     .splash-logo { text-align: center; animation: logoOut .4s ease 3.1s forwards; }
     .splash-cloud { width: 140px; height: 140px; }
     /* контур рисуется линией */
-    .cloud-line { fill: none; stroke: #5ff2f2; stroke-dasharray: 100; stroke-dashoffset: 100;
+    .cloud-line { fill: none; stroke: var(--cloud-stroke); stroke-dasharray: 100; stroke-dashoffset: 100;
       animation: cloudDraw 1.5s ease .2s forwards; }
-    /* размытая копия под контуром = свечение по форме (без квадрата), мигает 3 раза */
-    .cloud-glow { fill: none; stroke: #5ff2f2; opacity: 0;
+    /* размытая копия под контуром = свечение по форме (без квадрата), мигает 3 раза.
+       Днём та же размытая копия читается не как неон, а как мягкий ореол света. */
+    .cloud-glow { fill: none; stroke: var(--cloud-stroke); opacity: 0;
       animation: glowFlash 1.4s ease-in-out 1.5s both; }
     @keyframes cloudDraw { to { stroke-dashoffset: 0; } }
     /* 3 вспышки, каждая ярче — синхронно с текстом и краями */
@@ -528,25 +609,30 @@
     }
     @keyframes edgePulse {
       0% { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
-      14% { box-shadow: inset 0 0 16px rgba(95,242,242,.18); border-color: rgba(95,242,242,.12); }
+      14% { box-shadow: inset 0 0 16px rgba(var(--glow-rgb),.18); border-color: rgba(var(--glow-rgb),.12); }
       28% { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
-      50% { box-shadow: inset 0 0 28px rgba(95,242,242,.3); border-color: rgba(95,242,242,.2); }
+      50% { box-shadow: inset 0 0 28px rgba(var(--glow-rgb),.3); border-color: rgba(var(--glow-rgb),.2); }
       64% { box-shadow: inset 0 0 0 transparent; border-color: transparent; }
-      86%,100% { box-shadow: inset 0 0 44px rgba(95,242,242,.45), inset 0 0 7px rgba(95,242,242,.6); border-color: rgba(95,242,242,.3); }
+      86%,100% { box-shadow: inset 0 0 44px rgba(var(--glow-rgb),.45), inset 0 0 7px rgba(var(--glow-rgb),.6); border-color: rgba(var(--glow-rgb),.3); }
     }
     .splash-title { font-size: 36px; font-weight: 800; letter-spacing: 1px; margin-top: 8px;
-      color: #fff; opacity: 0;
+      color: var(--splash-title); opacity: 0;
       animation: splashFade .6s ease 1s forwards, textPulse 1.4s ease-in-out 1.5s both; }
-    .splash-sub { font-size: 13px; letter-spacing: 5px; color: #bfeef2; opacity: 0;
+    .splash-sub { font-size: 13px; letter-spacing: 5px; color: var(--splash-sub); opacity: 0;
       animation: splashFade .6s ease 1.25s forwards, textPulse 1.4s ease-in-out 1.5s both; }
+    /* Днём буквы не светятся: ореол бывает вокруг источника света, а не вокруг
+       тёмной надписи — иначе текст выглядит просто размытым. Пульсацию оставляем
+       облаку, а название проявляется чисто. */
+    html:not([data-theme="dark"]) .splash-title { animation: splashFade .6s ease 1s forwards; }
+    html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s forwards; }
     @keyframes splashFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
     @keyframes textPulse {
       0% { text-shadow: none; }
-      14% { text-shadow: 0 0 6px rgba(95,242,242,.6); }
+      14% { text-shadow: 0 0 6px rgba(var(--glow-rgb),.6); }
       28% { text-shadow: none; }
-      50% { text-shadow: 0 0 9px rgba(95,242,242,.8); }
+      50% { text-shadow: 0 0 9px rgba(var(--glow-rgb),.8); }
       64% { text-shadow: none; }
-      86%,100% { text-shadow: 0 0 5px rgba(95,242,242,.95), 0 0 11px rgba(95,242,242,.5); }
+      86%,100% { text-shadow: 0 0 5px rgba(var(--glow-rgb),.95), 0 0 11px rgba(var(--glow-rgb),.5); }
     }
     @keyframes logoOut { to { opacity: 0; } }
     @keyframes splashOut { to { opacity: 0; visibility: hidden; } }
@@ -1312,17 +1398,30 @@
         && (!brandFilters.length || brandFilters.includes(p.brand))
         && (!s || p.name.toLowerCase().includes(s)));
     }
-    function productBadges(p) {
+    // withSpecs=false на карточке товара: там крепость и объём уже перечислены
+    // таблицей характеристик прямо под фото, дублировать их бейджами незачем.
+    function productBadges(p, withSpecs = true) {
       const b = [];
       // У жидкостей — крепость (мг) и объём (мл). У одноразок затяжки НЕ показываем (они в названии).
-      if (p.category === "liquid") {
+      if (withSpecs && p.category === "liquid") {
         if (p.strength) b.push(`<span class="tagbadge">${esc(withUnit(p.strength, "мг"))}</span>`);
         if (p.volume) b.push(`<span class="tagbadge alt">${esc(withUnit(p.volume, "мл"))}</span>`);
       }
-      if (p.is_hit) b.push(`<span class="tagbadge hit">🔥 Хит</span>`);
-      else if (p.stock > 0 && p.stock <= 3) b.push(`<span class="tagbadge warn">Мало</span>`);
+      // Отсутствие важнее любой похвалы: если товара нет, «хит» уже не новость.
+      if (p.stock <= 0) b.push(`<span class="tagbadge out">Нет в наличии</span>`);
+      else if (p.is_hit) b.push(`<span class="tagbadge hit">🔥 Хит</span>`);
+      else if (p.stock <= 3) b.push(`<span class="tagbadge warn">Осталось ${p.stock}</span>`);
       return b.length ? `<div class="badges-tr">${b.join("")}</div>` : "";
     }
+    // Подпись под названием. Название почти всегда уже содержит и бренд, и вкус
+    // («Elf Bar BC10000 Кислое яблоко»), поэтому повторять их целиком — значит
+    // писать одно и то же дважды. Показываем только то, чего в названии нет.
+    function subtitleFor(p) {
+      const name = (p.name || "").toLowerCase();
+      const parts = [p.brand, p.flavor].filter(Boolean).filter(v => !name.includes(v.toLowerCase()));
+      return parts.join(" · ");
+    }
+
     function hasVariants(p) { return p.variants && p.variants.length > 0; }
     function variantStock(p, flavor) { const v = (p.variants || []).find(x => x.flavor === flavor); return v ? v.stock : 0; }
     function cartKey(id, flavor) { return flavor ? id + "::" + flavor : "" + id; }
@@ -1335,10 +1434,12 @@
     function cardHtml(p) {
       const photo = p.photo_url ? `<img src="${thumbOf(p)}" alt="" loading="lazy" decoding="async" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
       const isFav = favs.includes(p.id);
-      const sub = [p.brand, p.flavor].filter(Boolean).join(" · ");
+      const sub = subtitleFor(p);
       let ctrl;
       if (p.stock <= 0) {
-        ctrl = `<button class="plus" disabled>×</button>`;
+        // Крестик на кнопке был загадкой: кнопка есть, а нажать нельзя и неясно
+        // почему. Товара нет — значит и кнопки нет, а причина написана бейджем.
+        ctrl = "";
       } else if (hasVariants(p)) {
         ctrl = `<button class="pickbtn" data-pick="${p.id}">Выбрать</button>`;
       } else {
@@ -1347,7 +1448,7 @@
           ? `<div class="mini"><button data-dec="${p.id}">−</button><span>${qty}</span><button data-inc="${p.id}">+</button></div>`
           : `<button class="plus" data-inc="${p.id}">+</button>`;
       }
-      return `<div class="card"><div class="imgwrap">${photo}${productBadges(p)}
+      return `<div class="card${p.stock <= 0 ? " out" : ""}"><div class="imgwrap">${photo}${productBadges(p)}
           <button class="fav ${isFav?'on':''}" data-fav="${p.id}">${isFav?'♥':'♡'}</button></div>
         <div class="cbody"><p class="cname" data-open="${p.id}">${esc(p.name)}</p>
           ${sub ? `<div class="csub">${esc(sub)}</div>` : ""}
@@ -2426,12 +2527,14 @@
           }).join("") + `</div>`;
       }
 
-      $("prodBody").innerHTML = `<div class="pd-img">${photo}${productBadges(p)}</div>
-        <h2 class="pd-name">${esc(p.name)}</h2>
-        <div class="pd-price">${p.price.toFixed(2)} ${CUR}</div>
-        ${infoHtml}
-        ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}
-        ${flavorHtml}`;
+      $("prodBody").innerHTML = `<div class="pd-img">${photo}${productBadges(p, false)}</div>
+        <div class="pd-card">
+          <h2 class="pd-name">${esc(p.name)}</h2>
+          <div class="pd-price">${p.price.toFixed(2)} ${CUR}</div>
+          ${infoHtml}
+          ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}
+          ${flavorHtml}
+        </div>`;
       $("prodBody").querySelectorAll("[data-fladd]").forEach(b => b.onclick = () => flavorQty(b.dataset.fladd, +1));
       $("prodBody").querySelectorAll("[data-flinc]").forEach(b => b.onclick = () => flavorQty(b.dataset.flinc, +1));
       $("prodBody").querySelectorAll("[data-fldec]").forEach(b => b.onclick = () => flavorQty(b.dataset.fldec, -1));
