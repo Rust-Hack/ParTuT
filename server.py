@@ -1204,6 +1204,17 @@ def api_admin_stats():
     return jsonify({"ok": True, "stats": stats})
 
 
+@app.route("/api/admin/stats/reset", methods=["POST"])
+def api_admin_stats_reset():
+    """Сброс тестовой статистики (заказы + счётчики игр) — только супер-админ."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id") or not is_super_admin(int(user["id"])):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    res = db.reset_statistics()
+    return jsonify({"ok": True, **res})
+
+
 # ------------------- Розыгрыш (админ) -------------------
 
 @app.route("/api/admin/raffle", methods=["POST"])

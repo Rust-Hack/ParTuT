@@ -1093,6 +1093,23 @@ def get_game_stats():
     return {r["key"]: r["n"] for r in rows}
 
 
+def reset_statistics(orders=True, games=True):
+    """Сброс тестовой статистики: удаляет заказы и/или обнуляет игровые счётчики.
+    Возвращает {orders: сколько_удалено}."""
+    conn = connect()
+    cur = conn.cursor()
+    n_orders = 0
+    if orders:
+        cur.execute("SELECT COUNT(*) AS c FROM orders")
+        n_orders = cur.fetchone()["c"]
+        cur.execute("DELETE FROM orders")
+    if games:
+        cur.execute("DELETE FROM game_stats")
+    conn.commit()
+    conn.close()
+    return {"orders": n_orders}
+
+
 def get_business_stats(days=None):
     """Сводная бизнес-аналитика за период (days=None → всё время). Считается в SQL.
     Возвращает выручку, заказы, средний чек, воронку статусов, по городам, по дням,

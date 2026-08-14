@@ -2538,8 +2538,23 @@
           <div class="statrow"><span>В обороте у клиентов</span><b>${s.coins_circulation} 🪙</b></div>
           ${gamesRows(s.games || {})}
         </div>
-        <div class="stathead">⚠️ Мало на складе <span class="stathint">≤3 шт · ${s.out_of_stock} нет в наличии</span></div><div class="statlist">${lowRows}</div>`;
+        <div class="stathead">⚠️ Мало на складе <span class="stathint">≤3 шт · ${s.out_of_stock} нет в наличии</span></div><div class="statlist">${lowRows}</div>
+        ${(me && me.is_super) ? `<button class="closebtn" id="resetStats" style="color:var(--danger);margin-top:18px">🧹 Сбросить статистику (тестовые данные)</button>` : ""}`;
       bindPeriodBtns();
+      if ($("resetStats")) $("resetStats").onclick = resetStats;
+    }
+    function resetStats() {
+      const go = async () => {
+        try {
+          const r = await fetch("/api/admin/stats/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+          const d = await r.json();
+          if (d.ok) { alertMsg(`Готово ✅ Удалено заказов: ${d.orders}. Статистика обнулена.`); loadStats(); }
+          else alertMsg(d.error === "forbidden" ? "Только для супер-админа." : "Не удалось.");
+        } catch (e) { alertMsg("Сеть недоступна."); }
+      };
+      const msg = "Удалить ВСЕ заказы и обнулить счётчики игр? Отменить нельзя.";
+      if (tg && tg.showConfirm) tg.showConfirm(msg, ok => { if (ok) go(); });
+      else if (confirm(msg)) go();
     }
     function bindPeriodBtns() {
       document.querySelectorAll("#statsBody .periodbtn").forEach(b => b.onclick = () => {
