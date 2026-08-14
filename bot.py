@@ -2,12 +2,14 @@
 bot.py — тонкая оболочка вокруг Mini App.
 
 Весь магазин (каталог, корзина, оплата, чек) теперь ВНУТРИ приложения (server.py + webapp).
-Бот делает только три вещи:
+Бот делает только:
   1. Открывает приложение (кнопка «🛍 Магазин»).
   2. Даёт владельцу админку товаров (/admin) — клиент её не видит.
-  3. Присылает продавцам заказы и кнопки статусов (Подтвердить/Выдан/Отклонить).
+  3. Уведомляет продавцов о новых заказах и НАПОМИНАЕТ каждые 10 мин, пока
+     заказ не обработан. Управление заказами — в приложении (не в чате).
+  4. Подтверждает заявки обычных админов супер-админу (кнопки Разрешить/Отклонить).
 
-Покупок в самом чате больше нет — только приложение.
+Покупок и управления заказами в самом чате нет — только приложение.
 """
 
 import json
@@ -182,7 +184,7 @@ def on_button(call):
         handle_approval(call, user_id, data)
         return
 
-    # Все админские кнопки (adm..., admord...) — только для админов/продавцов.
+    # Админские кнопки (adm... — управление товарами в чате) — только для админов.
     if data.startswith("adm") and is_admin(user_id):
         handle_admin_callback(call, chat_id, user_id, data)
         return
@@ -234,64 +236,6 @@ def handle_approval(call, user_id, data):
         pass
 
 
-# ============================================================
-#  ЗАКАЗЫ: действия продавца
-# ============================================================
-
-def handle_order_action(call, chat_id, action, order_id):
-    """Продавец нажал кнопку статуса заказа (подтвердить / выдан / отклонить)."""
-    order = db.get_order(order_id)
-    if not order:
-        bot.answer_callback_query(call.id, "Заказ не найден", show_alert=True)
-        return
-
-    client_id = order["user_id"]
-    OPEN = ["new", "paid", "confirmed"]                 # состояния до выдачи/отмены
-
-    if action == "confirm":
-        if not db.set_order_status_if(order_id, "confirmed", ["new", "paid"]):
-            bot.answer_callback_query(call.id, "Заказ уже закрыт", show_alert=True)
-            return
-        bot.answer_callback_query(call.id, "Оплата подтверждена ✅")
-        _safe_send(client_id,
-                   f"✅ Оплата по заказу #{order_id} подтверждена!\n"
-                   f"Ждём вас {order['pickup_time']}. Спасибо! 🌿")
-    elif action == "issued":
-        if not db.set_order_status_if(order_id, "issued", OPEN):   # коины/прогресс РОВНО один раз
-            bot.answer_callback_query(call.id, "Заказ уже выдан или отклонён", show_alert=True)
-            return
-        db.add_coins(client_id, int(order["total"]))
-        db.add_wheel_progress(client_id, sum(int(i.get("qty", 0)) for i in json.loads(order["items"])))
-        rr = db.reward_referrer_for_order(client_id, order["total"])   # % и бонус пригласившему
-        if rr and rr["earned"] > 0:
-            _safe_send(rr["referrer"], f"🎉 Ваш реферал сделал заказ! +{rr['earned']} 🪙"
-                       + (f" (+{rr['bonus']} 🪙 за первый заказ)" if rr["first"] else ""))
-        bot.answer_callback_query(call.id, "Отмечено: выдан 📦")
-        _safe_send(client_id,
-                   f"Заказ #{order_id} выдан. Спасибо, что выбрали нас! 🙌")
-    elif action == "reject":
-        if not db.set_order_status_if(order_id, "canceled", OPEN):   # возврат остатка/монет один раз
-            bot.answer_callback_query(call.id, "Заказ уже выдан или отклонён", show_alert=True)
-            return
-        db.restore_order_stock(order)                  # вернуть товар на склад (с учётом вкусов)
-        if order["coins_used"]:                         # вернуть списанные монеты
-            db.add_coins(client_id, order["coins_used"])
-        bot.answer_callback_query(call.id, "Заказ отклонён")
-        _safe_send(client_id,
-                   f"К сожалению, заказ #{order_id} отклонён продавцом. "
-                   "Если это ошибка — напишите нам, разберёмся.")
-    else:
-        bot.answer_callback_query(call.id)
-        return
-
-    status_ru = {"confirmed": "оплата подтверждена ✅",
-                 "issued": "выдан 📦", "canceled": "отклонён ✖️"}
-    try:
-        bot.send_message(chat_id, f"Заказ #{order_id}: {status_ru.get(action, action)}")
-    except Exception:
-        pass
-
-
 def _safe_send(user_id, text):
     """Отправка клиенту с защитой: если он заблокировал бота — не роняем работу."""
     try:
@@ -331,11 +275,6 @@ def admin_cat_keyboard():
 def handle_admin_callback(call, chat_id, user_id, data):
     """Разбирает нажатия админских кнопок (все, что начинаются с 'adm')."""
     parts = data.split(":")     # напр. "admset:price:5" -> ["admset","price","5"]
-
-    # --- Действия продавца над заказом ---
-    if data.startswith("admord:"):
-        handle_order_action(call, chat_id, parts[1], int(parts[2]))
-        return
 
     if data == "adm:menu":
         bot.answer_callback_query(call.id)

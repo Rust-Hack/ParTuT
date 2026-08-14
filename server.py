@@ -444,6 +444,7 @@ def api_order():
     if not needs_receipt:
         db.set_order_status(order_id, "confirmed")     # оплаты онлайн нет — сразу к выдаче
         notifications.notify_sellers(tg, order_id)
+        _notify_client(user_id, _client_order_summary(order_id))   # подтверждение клиенту в чат
 
     return jsonify({
         "ok": True,
@@ -1083,10 +1084,38 @@ def api_admin_photo():
 
 def _notify_client(user_id, text):
     """Сообщение клиенту о смене статуса заказа (не роняем запрос, если заблокировал бота)."""
+    if not text:
+        return
     try:
         tg.send_message(int(user_id), text)
     except Exception as e:
         print(f"Не смог уведомить клиента {user_id}: {e}")
+
+
+def _client_order_summary(order_id):
+    """Сводка заказа для клиента (подтверждение оформления в чате)."""
+    o = db.get_order(order_id)
+    if not o:
+        return None
+    try:
+        items = json.loads(o["items"])
+    except (TypeError, ValueError):
+        items = []
+    lines = [f"🧾 Заказ #{o['id']} принят!", ""]
+    for it in items:
+        lines.append(f"• {it['name']} × {it['qty']}")
+    method = o["delivery_method"] or ""
+    if method:
+        addr = o["delivery_address"] or ""
+        lines.append("")
+        lines.append(f"🚚 {method}" + (f": {addr}" if addr else ""))
+    pm = {"card": "💳 картой", "cash": "💵 наличными", "none": "🚕 при получении"}.get(o["payment_method"] or "", "")
+    if pm:
+        lines.append(f"Оплата: {pm}")
+    lines.append(f"💰 Итого: {o['total']:.2f} Br")
+    lines.append("")
+    lines.append("Статус — в приложении: Профиль → Мои заказы. Уведомим об изменениях 🔔")
+    return "\n".join(lines)
 
 
 def _reward_referrer(buyer_id, order_total):
@@ -1160,8 +1189,7 @@ def api_admin_order_status():
     if action == "confirm":
         if not db.set_order_status_if(oid, "confirmed", ["new", "paid"]):
             return jsonify({"ok": False, "error": "closed"}), 409
-        _notify_client(client_id, f"✅ Оплата по заказу #{oid} подтверждена!\n"
-                                  f"Ждём вас {order['pickup_time']}. Спасибо! 🌿")
+        _notify_client(client_id, f"✅ Оплата по заказу #{oid} подтверждена! Готовим к выдаче. Спасибо! 🌿")
     elif action == "issued":
         if not db.set_order_status_if(oid, "issued", OPEN):   # переход применится один раз
             return jsonify({"ok": False, "error": "closed"}), 409
