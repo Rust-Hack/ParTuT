@@ -98,10 +98,18 @@ def _cache_set(key, value, ttl):
     return value
 
 
-def _cache_bust():
-    """Сбросить весь кэш чтений — вызываем после любой правки данных."""
+def _cache_bust(*prefixes):
+    """Сбросить кэш чтений. Без аргументов — весь; с префиксами — только нужные ключи.
+
+    Точечный сброс важен для заказов: заказ меняет ТОЛЬКО остатки (каталог и статистику),
+    а способы доставки/точки/бренды остаются прежними. Раньше любой заказ чистил всё,
+    и следующий покупатель снова ждал Neon на экране «Способ получения»."""
     with _cache_lock:
-        _cache.clear()
+        if not prefixes:
+            _cache.clear()
+            return
+        for k in [k for k in _cache if k.startswith(prefixes)]:
+            _cache.pop(k, None)
 
 
 def _bg(fn, *args, **kwargs):
@@ -230,22 +238,46 @@ def api_admin_request_decide():
 # ============================================================
 
 # Пути, которые меняют кэшируемые данные (каталог/точки/доставка/бренды/склад).
-# После успешного запроса на такой путь — сбрасываем кэш чтений, чтобы данные были свежими.
+# Значение — какие ключи кэша сбросить после успешного запроса; пустой кортеж = весь кэш.
+# Заказы трогают только остатки, поэтому чистят каталог и статистику, а не всё подряд.
+_STOCK_KEYS = ("products", "stats")
 _WRITE_PATHS = {
-    "/api/admin/product", "/api/admin/product/update", "/api/admin/product/variants",
-    "/api/admin/product/delete", "/api/admin/photo",
-    "/api/admin/location", "/api/admin/location/delete",
-    "/api/admin/delivery", "/api/admin/delivery/update", "/api/admin/delivery/delete",
-    "/api/admin/brand", "/api/admin/brand/delete",
-    "/api/admin/settings/update", "/api/admin/stats/reset",
-    "/api/order", "/api/order/cancel", "/api/admin/order/status",   # меняют остаток на складе
+    "/api/admin/product": (), "/api/admin/product/update": (),
+    "/api/admin/product/variants": (), "/api/admin/product/delete": (),
+    "/api/admin/photo": (),
+    "/api/admin/location": (), "/api/admin/location/delete": (),
+    "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),
+    "/api/admin/brand": (), "/api/admin/brand/delete": (),
+    "/api/admin/settings/update": (), "/api/admin/stats/reset": (),
+    "/api/order": _STOCK_KEYS,                  # меняют остаток на складе
+    "/api/order/cancel": _STOCK_KEYS,
+    "/api/admin/order/status": _STOCK_KEYS,
 }
 
 
 @app.after_request
 def _bust_cache_on_write(resp):
-    if request.method == "POST" and request.path in _WRITE_PATHS and 200 <= resp.status_code < 300:
-        _cache_bust()
+    if request.method == "POST" and 200 <= resp.status_code < 300:
+        keys = _WRITE_PATHS.get(request.path)
+        if keys is not None:
+            _cache_bust(*keys)
+    return resp
+
+
+@app.before_request
+def _start_timer():
+    request._t0 = time.time()
+
+
+@app.after_request
+def _log_slow(resp):
+    """Пишем в лог только медленные запросы (>700 мс) — чтобы в логах Render было видно,
+    ЧТО именно тормозит, а не гадать. Быстрые запросы лог не засоряют."""
+    t0 = getattr(request, "_t0", None)
+    if t0 is not None:
+        ms = int((time.time() - t0) * 1000)
+        if ms >= 700:
+            print(f"[медленно] {request.method} {request.path} — {ms} мс")
     return resp
 
 
@@ -446,16 +478,24 @@ def _photo_response(content, ctype):
 # ============================================================
 
 def _payment_info():
-    """Реквизиты оплаты: из настроек магазина, иначе — значение из config."""
-    return db.get_setting("payment_info", PAYMENT_INFO)
+    """Реквизиты оплаты: из настроек магазина, иначе — значение из config.
+    Кэшируем: настройки меняются раз в год, а читались на каждом оформлении заказа."""
+    cached = _cache_get("settings:payment_info")
+    if cached is None:
+        cached = _cache_set("settings:payment_info", db.get_setting("payment_info", PAYMENT_INFO), 300)
+    return cached
 
 
 def _confirm_minutes():
     """Через сколько минут продавец подтверждает: из настроек, иначе — из config."""
-    try:
-        return int(db.get_setting("confirm_minutes", CONFIRM_MINUTES))
-    except (TypeError, ValueError):
-        return CONFIRM_MINUTES
+    cached = _cache_get("settings:confirm_minutes")
+    if cached is None:
+        try:
+            val = int(db.get_setting("confirm_minutes", CONFIRM_MINUTES))
+        except (TypeError, ValueError):
+            val = CONFIRM_MINUTES
+        cached = _cache_set("settings:confirm_minutes", val, 300)
+    return cached
 
 
 @app.route("/api/order", methods=["POST"])
@@ -466,25 +506,36 @@ def api_order():
         return jsonify({"ok": False, "error": "auth"}), 401
 
     user_id = int(user["id"])
-    if not db.is_age_ok(user_id):
-        return jsonify({"ok": False, "error": "age"}), 403
-
     username = user.get("username") or user.get("first_name") or str(user_id)
 
-    # Цены и наличие берём из БАЗЫ, а не из того, что прислал клиент.
-    items, total, cities = [], 0.0, set()
+    # Разбираем корзину клиента (id + количество), чтобы одним запросом взять товары.
+    raw_items = []
     for ri in data.get("items", []):
         try:
             pid, qty = int(ri.get("id")), int(ri.get("qty", 0))
         except (TypeError, ValueError):
             continue
-        flavor = (ri.get("flavor") or "").strip() or None
-        p = db.get_product(pid)
-        if not p or qty <= 0:
+        if qty > 0:
+            raw_items.append((pid, qty, (ri.get("flavor") or "").strip() or None))
+    try:
+        method_id = int(data.get("delivery_method_id"))
+    except (TypeError, ValueError):
+        method_id = None
+
+    # ОДИН поход в базу за всем сразу: 18+, монеты, товары, вкусы, способ получения.
+    ctx = db.get_checkout_data(user_id, [pid for pid, _, _ in raw_items], method_id)
+    if not ctx["age_ok"]:
+        return jsonify({"ok": False, "error": "age"}), 403
+
+    # Цены и наличие берём из БАЗЫ, а не из того, что прислал клиент.
+    items, total, cities = [], 0.0, set()
+    for pid, qty, flavor in raw_items:
+        p = ctx["products"].get(pid)
+        if not p:
             continue
         if flavor:
             # товар-модель со вкусами: остаток берём у нужного варианта
-            avail = {v["flavor"]: v["stock"] for v in db.get_variants(pid)}.get(flavor, 0)
+            avail = ctx["variants"].get(pid, {}).get(flavor, 0)
             if avail <= 0:
                 continue
             real_qty = min(qty, avail)
@@ -506,12 +557,8 @@ def api_order():
     city = cities.pop()
     subtotal = round(total, 2)
 
-    # 1. Способ получения (доставка/самовывоз) — берём метод точки по id.
-    method = None
-    try:
-        method = db.get_delivery_method(int(data.get("delivery_method_id")))
-    except (TypeError, ValueError):
-        method = None
+    # 1. Способ получения (доставка/самовывоз) — метод точки, взят вместе с товарами.
+    method = ctx["method"]
     if not method or method["city"] != city:
         return jsonify({"ok": False, "error": "bad_delivery"}), 400
     address = (data.get("delivery_address") or "").strip()
@@ -527,40 +574,26 @@ def api_order():
     else:
         payment = "none"
 
-    # 3. Списание монет: 1 монета = COIN_VALUE Br, но не больше суммы товаров.
-    #    round() убирает float-погрешность (25/0.01 = 2499.999…), spend_coins списывает атомарно.
-    coins_used, discount = 0, 0.0
+    # 3. Сколько монет пробуем списать: 1 монета = COIN_VALUE Br, но не больше суммы товаров.
+    #    round() убирает float-погрешность (25/0.01 = 2499.999…). Само списание — внутри
+    #    транзакции place_order (атомарно, защищает от гонки и двойного клика).
+    spend = 0
     if data.get("use_coins") and subtotal > 0:
-        max_spend = int(round(subtotal / COIN_VALUE))
-        spend = min(db.get_coins(user_id), max_spend)
-        if spend > 0 and db.spend_coins(user_id, spend):   # атомарно, защищает от гонки
-            coins_used = spend
-            discount = round(spend * COIN_VALUE, 2)
+        spend = min(ctx["coins"], int(round(subtotal / COIN_VALUE)))
 
-    total = round(subtotal - discount + fee, 2)   # товары − скидка + доставка
-
-    try:
-        order_id = db.create_order(user_id, username, city, items, total, "")
-    except Exception:
-        if coins_used:                             # заказ не создан — вернём списанные монеты
-            db.add_coins(user_id, coins_used)
-        raise
-    comment = (data.get("comment") or "").strip()
-    phone = (data.get("phone") or "").strip()
-    db.set_order_delivery(order_id, method["name"], address, fee, payment, comment, phone)
-    if coins_used:
-        db.set_order_coins_used(order_id, coins_used)
-    for it in items:
-        if it.get("flavor"):
-            db.change_variant_stock(it["id"], it["flavor"], -it["qty"])
-        else:
-            db.change_stock(it["id"], -it["qty"])
-
-    # Карта → клиент грузит чек. Наличные/такси → сразу продавцу, но ЖДЁТ ОДОБРЕНИЯ
-    # (статус 'paid' = ждёт подтверждения продавца, а НЕ авто-подтверждается).
+    # Карта → клиент грузит чек (статус 'new'). Наличные/такси → сразу продавцу,
+    # но статус 'paid' = ЖДЁТ подтверждения продавца, а НЕ авто-подтверждается.
     needs_receipt = (payment == "card")
+
+    # Заказ, монеты и склад — одной транзакцией (один commit вместо десятка).
+    order_id, coins_used, total = db.place_order(
+        user_id, username, city, items, subtotal, fee, COIN_VALUE, spend,
+        method["name"], address, payment,
+        (data.get("comment") or "").strip(), (data.get("phone") or "").strip(),
+        "new" if needs_receipt else "paid")
+    discount = round(coins_used * COIN_VALUE, 2)
+
     if not needs_receipt:
-        db.set_order_status(order_id, "paid")          # ждёт одобрения продавца
         # уведомления (продавцам + клиенту) — в фоне, чтобы «Оформить» отвечал сразу
         _bg(_notify_new_order, order_id, user_id)
 

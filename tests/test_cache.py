@@ -1,5 +1,5 @@
 """Кэш чтений: каталог отдаётся из памяти, но сбрасывается при изменениях."""
-from _common import db, client, server, Checker, as_admin
+from _common import db, client, server, Checker, as_admin, as_user
 
 
 def run():
@@ -36,7 +36,27 @@ def run():
     d2 = len(client.get("/api/delivery?city=minsk").get_json())
     c("после сброса: 3 способа", d2 == 3)
 
-    return c.fails
+    # --- Заказ сбрасывает кэш ТОЧЕЧНО ---
+    # Заказ меняет только остатки, поэтому обязан обновить каталог, но НЕ выбрасывать
+    # способы доставки: иначе следующий покупатель снова ждёт базу на экране оформления.
+    c2 = Checker("Заказ сбрасывает кэш точечно")
+    as_user(7171, "cachebuyer")
+    db.set_age_ok(7171)
+    pid = db.add_product("minsk", "pods", "CacheOrderPod", 15, 4)
+    mid = db.get_delivery_methods("minsk")[0]["id"]
+    client.get("/api/products"); client.get("/api/delivery?city=minsk")   # прогрели кэш
+
+    db.add_delivery_method("minsk", "Тайный способ", False, "", "", 0, True)  # в обход эндпоинта
+    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                        "payment_method": "cash", "items": [{"id": pid, "qty": 1}]})
+    c2("заказ оформлен", (r.get_json() or {}).get("ok"))
+
+    prods = {p["name"]: p for p in client.get("/api/products").get_json()}
+    c2("каталог обновился: остаток 4 → 3", prods.get("CacheOrderPod", {}).get("stock") == 3)
+    d3 = len(client.get("/api/delivery?city=minsk").get_json())
+    c2("кэш доставки НЕ сброшен заказом (всё ещё 3)", d3 == 3)
+
+    return c.fails + c2.fails
 
 
 if __name__ == "__main__":

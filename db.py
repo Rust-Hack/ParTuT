@@ -1383,6 +1383,111 @@ def create_order(user_id, username, city, items, total, pickup_time):
     return order_id
 
 
+def get_checkout_data(user_id, product_ids, method_id):
+    """Всё, что нужно для оформления заказа, — за ОДНО подключение и 4 запроса.
+
+    Раньше сервер дёргал базу отдельно на каждый товар (get_product + get_variants),
+    отдельно на 18+, монеты и способ доставки — на Neon это ~8 сетевых поездок,
+    и кнопка «Оформить» заметно висла. Здесь всё берётся разом.
+
+    Возвращает: {age_ok, coins, products: {id: row}, variants: {id: {flavor: stock}}, method}
+    """
+    ids = [int(i) for i in dict.fromkeys(product_ids)]     # уникальные, порядок сохраняем
+    conn = connect()
+    cur = conn.cursor()
+
+    cur.execute(_q("SELECT age_ok, COALESCE(coins, 0) AS coins FROM users WHERE user_id = %s"),
+                (user_id,))
+    u = cur.fetchone()
+    age_ok = bool(u and u["age_ok"] == 1)
+    coins = int(u["coins"]) if u else 0
+
+    products, variants = {}, {}
+    if ids:
+        marks = ",".join(["%s"] * len(ids))
+        cur.execute(_q(f"SELECT * FROM products WHERE id IN ({marks})"), tuple(ids))
+        products = {int(r["id"]): dict(r) for r in cur.fetchall()}
+        cur.execute(_q(f"SELECT * FROM product_variants WHERE product_id IN ({marks})"), tuple(ids))
+        for v in cur.fetchall():
+            variants.setdefault(int(v["product_id"]), {})[v["flavor"]] = v["stock"]
+
+    method = None
+    if method_id is not None:
+        cur.execute(_q("SELECT * FROM delivery_methods WHERE id = %s"), (method_id,))
+        row = cur.fetchone()
+        method = dict(row) if row else None
+
+    conn.close()
+    return {"age_ok": age_ok, "coins": coins, "products": products,
+            "variants": variants, "method": method}
+
+
+def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins_to_spend,
+                method_name, address, payment, comment, phone, status):
+    """Создаёт заказ целиком за ОДНУ транзакцию: списывает монеты, вставляет заказ
+    со всеми полями доставки, снимает остатки со склада (и по вкусам).
+
+    Раньше это были create_order + set_order_delivery + set_order_coins_used +
+    change_stock на каждую позицию + set_order_status — каждая со своим commit'ом.
+    Теперь один commit: меньше поездок к базе и заказ не может «застрять» наполовину.
+
+    Возвращает (order_id, coins_used, total).
+    """
+    created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn = connect()
+    cur = conn.cursor()
+    try:
+        # 1. Монеты — списываем условно (только если хватает баланса), это же и защита от гонки.
+        coins_used = 0
+        spend = int(coins_to_spend or 0)
+        if spend > 0:
+            cur.execute(_q("""UPDATE users SET coins = COALESCE(coins, 0) - %s
+                              WHERE user_id = %s AND COALESCE(coins, 0) >= %s"""),
+                        (spend, user_id, spend))
+            if cur.rowcount > 0:
+                coins_used = spend
+
+        discount = round(coins_used * coin_value, 2)
+        total = round(subtotal - discount + fee, 2)
+
+        # 2. Сам заказ — сразу со всеми полями (без последующих UPDATE).
+        order_id = _insert_id(
+            cur,
+            """INSERT INTO orders (user_id, username, city, items, total, pickup_time, status,
+                                   created_at, coins_used, delivery_method, delivery_address,
+                                   delivery_fee, payment_method, comment, phone)
+               VALUES (%s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (user_id, username, city, json.dumps(items, ensure_ascii=False), total, status,
+             created_at, coins_used, method_name, address, float(fee or 0), payment,
+             (comment or "").strip()[:500], (phone or "").strip()[:40]),
+        )
+
+        # 3. Склад: у товаров со вкусами списываем вариант, у обычных — сам товар.
+        touched_variants = set()
+        for it in items:
+            if it.get("flavor"):
+                cur.execute(_q(f"UPDATE product_variants SET stock = {GREATEST}(0, stock - %s) "
+                               "WHERE product_id = %s AND flavor = %s"),
+                            (it["qty"], it["id"], it["flavor"]))
+                touched_variants.add(it["id"])
+            else:
+                cur.execute(_q(f"UPDATE products SET stock = {GREATEST}(0, stock - %s) WHERE id = %s"),
+                            (it["qty"], it["id"]))
+        # общий остаток товара-модели = сумма остатков вкусов
+        for pid in touched_variants:
+            cur.execute(_q("""UPDATE products SET stock =
+                              (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                              WHERE id = %s"""), (pid, pid))
+
+        conn.commit()
+    except Exception:
+        conn.rollback()      # ничего не применилось: ни монеты, ни склад, ни заказ
+        conn.close()
+        raise
+    conn.close()
+    return order_id, coins_used, total
+
+
 def get_order(order_id):
     conn = connect()
     cur = conn.cursor()

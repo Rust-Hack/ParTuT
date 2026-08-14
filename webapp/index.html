@@ -2216,13 +2216,20 @@
     // ----- Оформление: способ получения + оплата -----
     let deliveryMethods = [], selMethod = null, selPayment = null, selAddress = "", selComment = "", selPhone = "";
     const deliveryCache = {};        // city -> способы получения (чтобы оформление открывалось мгновенно)
-    async function fetchDeliveryFor(c) {
-      if (!c) return [];
-      try {
-        const r = await fetch(`/api/delivery?city=${encodeURIComponent(c)}`);
-        deliveryCache[c] = await r.json();
-      } catch (e) { deliveryCache[c] = deliveryCache[c] || []; }
-      return deliveryCache[c];
+    const deliveryPending = {};      // city -> запрос «в полёте» (чтобы не слать второй такой же)
+    function fetchDeliveryFor(c) {
+      if (!c) return Promise.resolve([]);
+      // Если запрос за этой точкой уже летит — ждём его, а не запускаем дубль.
+      if (deliveryPending[c]) return deliveryPending[c];
+      deliveryPending[c] = (async () => {
+        try {
+          const r = await fetch(`/api/delivery?city=${encodeURIComponent(c)}`);
+          deliveryCache[c] = await r.json();
+        } catch (e) { deliveryCache[c] = deliveryCache[c] || []; }
+        finally { delete deliveryPending[c]; }
+        return deliveryCache[c];
+      })();
+      return deliveryPending[c];
     }
     function prefetchDelivery() { if (city && !deliveryCache[city]) fetchDeliveryFor(city); }
     $("deliveryClose").onclick = () => closeOverlay($("deliveryOverlay"));
@@ -2233,10 +2240,12 @@
       if (deliveryCache[city]) {
         deliveryMethods = deliveryCache[city];   // мгновенно из кэша
         renderDelivery();
-        fetchDeliveryFor(city);                  // тихо обновим на случай изменений
+        if (!deliveryPending[city]) fetchDeliveryFor(city);   // тихо обновим на случай изменений
       } else {
         $("deliveryBody").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+        const openedFor = city;
         deliveryMethods = await fetchDeliveryFor(city);
+        if (openedFor !== city) return;          // пока грузилось, точку сменили — не рисуем чужое
         renderDelivery();
       }
     }
@@ -2290,13 +2299,20 @@
       if ($("delComment")) $("delComment").oninput = () => { selComment = $("delComment").value; };
       if ($("delSubmit")) $("delSubmit").onclick = doSubmitOrder;
     }
+    let submitting = false;          // защита от второго нажатия, пока заказ оформляется
     async function doSubmitOrder() {
+      if (submitting) return;
       const m = deliveryMethods[selMethod]; if (!m) return;
       if (m.needs_address && !selAddress.trim()) { alertMsg("Введите " + (m.address_label || "адрес").toLowerCase()); return; }
       if (m.needs_payment && !selPayment) { alertMsg("Выберите способ оплаты."); return; }
       const items = Object.values(cart).map(it => ({ id: it.product_id, qty: it.qty, flavor: it.flavor || undefined }));
       if (!items.length) return;
-      closeOverlay($("deliveryOverlay"));
+      // Окно НЕ закрываем сразу: пока ждём сервер, показываем это на кнопке,
+      // иначе экран выглядит зависшим и хочется нажать ещё раз.
+      submitting = true;
+      const btn = $("delSubmit");
+      const btnText = btn ? btn.textContent : "";
+      if (btn) { btn.disabled = true; btn.textContent = "Оформляем…"; }
       try {
         const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
           initData, city, items, use_coins: useCoins,
@@ -2306,8 +2322,9 @@
         const d = await r.json();
         if (!d.ok) {
           const errs = { auth: "Откройте магазин из бота.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек.", bad_delivery: "Выберите способ получения.", no_address: "Введите адрес.", bad_payment: "Выберите оплату." };
-          alertMsg(errs[d.error] || "Ошибка оформления."); return;
+          alertMsg(errs[d.error] || "Ошибка оформления."); return;   // окно оставляем — можно поправить
         }
+        closeOverlay($("deliveryOverlay"));
         currentOrder = d;
         if (d.coins_used) bonus.coins = Math.max(0, (bonus.coins || 0) - d.coins_used);
         useCoins = false;
@@ -2326,6 +2343,10 @@
         }
         fetchBonus();
       } catch (e) { alertMsg("Сеть недоступна."); }
+      finally {
+        submitting = false;
+        if (btn) { btn.disabled = false; btn.textContent = btnText; }
+      }
     }
     $("uploadBtn").onclick = () => $("receiptFile").click();
     $("payCancel").onclick = () => $("payView").classList.remove("show");
