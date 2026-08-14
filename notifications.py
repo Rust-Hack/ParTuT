@@ -40,10 +40,12 @@ def notify_sellers(bot, order_id):
     lines.append(f"<b>Итого: {order['total']:.2f} BYN</b>")
 
     uname = order["username"] or ""
+    uid = order["user_id"]
     if uname and not uname.isdigit():
-        lines.append(f"👤 Клиент: @{uname}")
+        # @username кликабелен; ссылка t.me открывает чат сразу
+        lines.append(f'👤 Клиент: <a href="https://t.me/{uname}">@{uname}</a> (id <code>{uid}</code>)')
     else:
-        lines.append(f"👤 Клиент id: <code>{order['user_id']}</code>")
+        lines.append(f'👤 Клиент: <a href="tg://user?id={uid}">открыть чат</a> (id <code>{uid}</code>)')
     phone = (order["phone"] or "").strip() if "phone" in order.keys() else ""
     if phone:
         lines.append(f"📞 Телефон: {phone}")

@@ -19,6 +19,7 @@ server.py — веб-сервер Mini App (вся витрина внутри �
 import os
 import hmac
 import hashlib
+import html
 import json
 import random
 from urllib.parse import parse_qsl
@@ -545,13 +546,26 @@ def api_support():
         return jsonify({"ok": False, "error": "empty"}), 400
     uid = int(user["id"])
     uname = user.get("username")
-    who = f"@{uname}" if uname else (user.get("first_name") or "клиент")
-    msg = (f"💬 Вопрос от {who} (id {uid}):\n{text}\n\n"
-           f"Ответить: /reply {uid} ваш текст")
+    name = user.get("first_name") or (f"@{uname}" if uname else "клиент")
+    who = _contact_link(uname, uid, name)   # кликабельно: открыть чат с клиентом
+
+    # Необязательная привязка к заказу: проверяем, что заказ принадлежит клиенту.
+    order_tag = ""
+    try:
+        oid = int(data.get("order_id"))
+        o = db.get_order(oid)
+        if o and o["user_id"] == uid:
+            order_tag = f" по заказу #{oid}"
+    except (TypeError, ValueError):
+        pass
+
+    msg = (f"💬 Вопрос от {who} (id <code>{uid}</code>){order_tag}:\n"
+           f"{html.escape(text)}\n\n"
+           f"Открыть чат: {_contact_link(uname, uid, 'написать клиенту')}  ·  или /reply {uid} ваш текст")
     delivered = 0
     for sid in SUPPORT_IDS:
         try:
-            tg.send_message(sid, msg)
+            tg.send_message(sid, msg, parse_mode="HTML")
             delivered += 1
         except Exception as e:
             print(f"Не смог доставить вопрос в поддержку {sid}: {e}")
@@ -562,7 +576,8 @@ def api_support():
 def api_admin_message():
     """Админ пишет клиенту — доставляем сообщение клиенту через бота."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         target = int(data.get("user_id"))
@@ -571,8 +586,11 @@ def api_admin_message():
     text = (data.get("text") or "").strip()[:2000]
     if not text:
         return jsonify({"ok": False, "error": "empty"}), 400
+    contact = _contact_link(admin.get("username"), int(admin["id"]), "написать менеджеру")
+    msg = (f"💬 Сообщение от магазина:\n{html.escape(text)}\n\n"
+           f"По любым вопросам: {contact}")
     try:
-        tg.send_message(target, f"💬 Сообщение от магазина:\n{text}")
+        tg.send_message(target, msg, parse_mode="HTML")
         return jsonify({"ok": True, "sent": True})
     except Exception as e:
         print(f"Не смог отправить сообщение клиенту {target}: {e}")
@@ -1154,6 +1172,19 @@ def api_admin_photo():
 
 # ------------------- Заказы (управление в приложении) -------------------
 
+def _contact_link(username, uid, label=None):
+    """HTML-ссылка «открыть чат в ТГ» по @username (t.me) или по id (tg://user).
+    label — текст ссылки (по умолчанию @username или имя/id)."""
+    username = (username or "").lstrip("@").strip()
+    if username:
+        url = f"https://t.me/{username}"
+        text = label or f"@{username}"
+    else:
+        url = f"tg://user?id={uid}"
+        text = label or str(uid)
+    return f'<a href="{url}">{html.escape(text)}</a>'
+
+
 def _notify_client(user_id, text):
     """Сообщение клиенту о смене статуса заказа (не роняем запрос, если заблокировал бота)."""
     if not text:
@@ -1265,16 +1296,20 @@ def api_admin_order_status():
 
     action = data.get("action")
     client_id = order["user_id"]
-    OPEN = ["new", "paid", "confirmed"]        # состояния до выдачи/отмены
+    OPEN = ["new", "paid", "confirmed"]        # состояния до выдачи/отмены (для отклонения)
     if action == "confirm":
-        if not db.set_order_status_if(oid, "confirmed", ["new", "paid"]):
+        # подтвердить можно ТОЛЬКО оплаченный/готовый заказ (paid).
+        # 'new' = карточный заказ без чека → сначала оплата, иначе нельзя.
+        if not db.set_order_status_if(oid, "confirmed", ["paid"]):
             return jsonify({"ok": False, "error": "closed"}), 409
         msg = (f"✅ Оплата по заказу #{oid} подтверждена! Готовим к выдаче. Спасибо! 🌿"
                if order["payment_method"] == "card"
                else f"✅ Заказ #{oid} подтверждён! Готовим к выдаче. Спасибо! 🌿")
         _notify_client(client_id, msg)
     elif action == "issued":
-        if not db.set_order_status_if(oid, "issued", OPEN):   # переход применится один раз
+        # выдать можно только оплаченный (paid) или уже подтверждённый (confirmed) заказ,
+        # но НЕ 'new' (неоплаченный картой) — иначе кэшбэк без оплаты.
+        if not db.set_order_status_if(oid, "issued", ["paid", "confirmed"]):   # применится один раз
             return jsonify({"ok": False, "error": "closed"}), 409
         db.add_coins(client_id, int(_order_subtotal(order)) * COINS_PER_BYN)   # кэшбэк с товаров (без доставки)
         db.add_wheel_progress(client_id, _order_item_count(order))   # прогресс колеса

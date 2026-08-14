@@ -12,6 +12,7 @@ bot.py — тонкая оболочка вокруг Mini App.
 Покупок и управления заказами в самом чате нет — только приложение.
 """
 
+import html
 import json
 import time
 import threading
@@ -127,8 +128,16 @@ def on_reply(message):
     except ValueError:
         bot.send_message(message.chat.id, "Неверный id клиента.")
         return
+    # контакт ответившего админа — чтобы клиент мог сразу открыть чат в ТГ
+    au = (message.from_user.username or "").strip()
+    if au:
+        contact = f'<a href="https://t.me/{au}">@{au}</a>'
+    else:
+        contact = f'<a href="tg://user?id={message.from_user.id}">написать менеджеру</a>'
+    reply = (f"💬 Ответ от магазина:\n{html.escape(parts[2])}\n\n"
+             f"По любым вопросам: {contact}")
     try:
-        bot.send_message(target, f"💬 Ответ от магазина:\n{parts[2]}")
+        bot.send_message(target, reply, parse_mode="HTML")
         bot.send_message(message.chat.id, f"✅ Отправлено клиенту {target}")
     except Exception as e:
         bot.send_message(message.chat.id, f"Не удалось отправить (клиент не запускал бота?): {e}")
