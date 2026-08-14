@@ -318,6 +318,12 @@ def _ensure_order_columns():
         cur.execute("ALTER TABLE orders ADD COLUMN delivery_fee REAL DEFAULT 0")
     if "payment_method" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN payment_method TEXT")
+    if "comment" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN comment TEXT")
+    if "phone" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN phone TEXT")
+    if "reminded_at" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN reminded_at TEXT")   # для повторного напоминания продавцу
     conn.commit()
     conn.close()
 
@@ -523,12 +529,12 @@ def set_order_coins_used(order_id, coins):
     conn.close()
 
 
-def set_order_delivery(order_id, method, address, fee, payment):
+def set_order_delivery(order_id, method, address, fee, payment, comment="", phone=""):
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("""UPDATE orders SET delivery_method = %s, delivery_address = %s,
-                      delivery_fee = %s, payment_method = %s WHERE id = %s"""),
-                (method, address, float(fee or 0), payment, order_id))
+                      delivery_fee = %s, payment_method = %s, comment = %s, phone = %s WHERE id = %s"""),
+                (method, address, float(fee or 0), payment, (comment or "").strip()[:500], (phone or "").strip()[:40], order_id))
     conn.commit()
     conn.close()
 

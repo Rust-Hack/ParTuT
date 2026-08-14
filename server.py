@@ -428,7 +428,9 @@ def api_order():
         if coins_used:                             # заказ не создан — вернём списанные монеты
             db.add_coins(user_id, coins_used)
         raise
-    db.set_order_delivery(order_id, method["name"], address, fee, payment)
+    comment = (data.get("comment") or "").strip()
+    phone = (data.get("phone") or "").strip()
+    db.set_order_delivery(order_id, method["name"], address, fee, payment, comment, phone)
     if coins_used:
         db.set_order_coins_used(order_id, coins_used)
     for it in items:
@@ -1122,6 +1124,8 @@ def _order_json(o):
         "delivery_address": (o["delivery_address"] or ""),
         "delivery_fee": round(o["delivery_fee"] or 0, 2),
         "payment_method": (o["payment_method"] or ""),
+        "comment": (o["comment"] or "") if "comment" in o.keys() else "",
+        "phone": (o["phone"] or "") if "phone" in o.keys() else "",
         "receipt_url": (f"/api/photo?file_id={o['receipt_file_id']}" if o["receipt_file_id"] else None),
     }
 

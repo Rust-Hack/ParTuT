@@ -165,6 +165,9 @@
     .paypick .opt { flex: 1; text-align: center; margin-bottom: 0; }
     .dpickup { background: var(--surface-2); border-radius: 13px; padding: 14px; font-size: 14px; font-weight: 600; }
     .dnote { color: var(--hint); font-size: 13.5px; padding: 4px 2px; }
+    .osum { background: var(--surface-2); border-radius: 13px; padding: 12px 14px; margin-top: 16px; }
+    .osum-r { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 0; color: var(--hint); }
+    .osum-total { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 10px; font-size: 17px; font-weight: 800; color: var(--text); }
     .opt.active { background: var(--accent-soft); color: var(--accent); }
     .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
 
@@ -2153,11 +2156,11 @@
     }
 
     // ----- Оформление: способ получения + оплата -----
-    let deliveryMethods = [], selMethod = null, selPayment = null, selAddress = "";
+    let deliveryMethods = [], selMethod = null, selPayment = null, selAddress = "", selComment = "", selPhone = "";
     $("deliveryClose").onclick = () => closeOverlay($("deliveryOverlay"));
     async function openDelivery() {
       if (!Object.keys(cart).length) return;
-      selMethod = null; selPayment = null; selAddress = "";
+      selMethod = null; selPayment = null; selAddress = ""; selComment = ""; selPhone = "";
       $("deliveryBody").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
       $("deliveryOverlay").classList.add("show");
       try {
@@ -2190,13 +2193,30 @@
           extra += `<div class="dnote">Оплата не нужна — продавец свяжется с вами.</div>`;
           canSubmit = true;
         }
+        // Телефон + комментарий (по желанию)
+        extra += `<div class="dlabel">Телефон для связи (по желанию)</div><input id="delPhone" class="admsearch" inputmode="tel" placeholder="+375 ..." value="${esc(selPhone)}">`;
+        extra += `<div class="dlabel">Комментарий (по желанию)</div><input id="delComment" class="admsearch" placeholder="этаж, подъезд, пожелания…" value="${esc(selComment)}">`;
       }
-      const fee = selMethod !== null ? deliveryMethods[selMethod].fee : 0;
-      const btn = `<button class="bigbtn" id="delSubmit" ${canSubmit ? "" : "disabled"} style="margin-top:14px">Оформить${fee ? ` · +${fee.toFixed(2)} Br` : ""}</button>`;
-      $("deliveryBody").innerHTML = `<div class="dlabel">Способ получения</div>${methodBtns}${extra}${btn}`;
+      // Итог с разбивкой (live)
+      const subtotal = cartTotal();
+      const coinVal = bonus.coin_value || 0.01;
+      const maxCoins = Math.min(bonus.coins || 0, Math.floor(subtotal / coinVal));
+      const discount = useCoins ? +(maxCoins * coinVal).toFixed(2) : 0;
+      const fee = selMethod !== null ? (deliveryMethods[selMethod].fee || 0) : 0;
+      const finalTotal = +(subtotal - discount + fee).toFixed(2);
+      const sum = `<div class="osum">
+        <div class="osum-r"><span>Товары</span><span>${subtotal.toFixed(2)} Br</span></div>
+        ${discount > 0 ? `<div class="osum-r"><span>Скидка монетами</span><span style="color:#2e9e4f">−${discount.toFixed(2)} Br</span></div>` : ""}
+        ${fee > 0 ? `<div class="osum-r"><span>Доставка</span><span>+${fee.toFixed(2)} Br</span></div>` : ""}
+        <div class="osum-r osum-total"><span>Итого</span><span>${finalTotal.toFixed(2)} Br</span></div>
+      </div>`;
+      const btn = `<button class="bigbtn" id="delSubmit" ${canSubmit ? "" : "disabled"} style="margin-top:14px">Оформить · ${finalTotal.toFixed(2)} Br</button>`;
+      $("deliveryBody").innerHTML = `<div class="dlabel">Способ получения</div>${methodBtns}${extra}${sum}${btn}`;
       $("deliveryBody").querySelectorAll("[data-dm]").forEach(b => b.onclick = () => { selMethod = +b.dataset.dm; selPayment = null; selAddress = ""; renderDelivery(); });
       $("deliveryBody").querySelectorAll("[data-pm]").forEach(b => b.onclick = () => { selPayment = b.dataset.pm; renderDelivery(); });
       if ($("delAddr")) $("delAddr").oninput = () => { selAddress = $("delAddr").value; };
+      if ($("delPhone")) $("delPhone").oninput = () => { selPhone = $("delPhone").value; };
+      if ($("delComment")) $("delComment").oninput = () => { selComment = $("delComment").value; };
       if ($("delSubmit")) $("delSubmit").onclick = doSubmitOrder;
     }
     async function doSubmitOrder() {
@@ -2210,6 +2230,7 @@
         const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
           initData, city, items, use_coins: useCoins,
           delivery_method_id: m.id, delivery_address: selAddress.trim(),
+          comment: selComment.trim(), phone: selPhone.trim(),
           payment_method: m.needs_payment ? selPayment : "none" }) });
         const d = await r.json();
         if (!d.ok) {

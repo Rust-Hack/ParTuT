@@ -44,6 +44,12 @@ def notify_sellers(bot, order_id):
         lines.append(f"👤 Клиент: @{uname}")
     else:
         lines.append(f"👤 Клиент id: <code>{order['user_id']}</code>")
+    phone = (order["phone"] or "").strip() if "phone" in order.keys() else ""
+    if phone:
+        lines.append(f"📞 Телефон: {phone}")
+    comment = (order["comment"] or "").strip() if "comment" in order.keys() else ""
+    if comment:
+        lines.append(f"💬 Комментарий: {comment}")
     text = "\n".join(lines)
 
     kb = types.InlineKeyboardMarkup()
