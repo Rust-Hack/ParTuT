@@ -357,6 +357,10 @@
     .statcard { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 14px; }
     .statcard .statnum { font-size: 21px; font-weight: 800; color: var(--accent); }
     .statcard .statlab { color: var(--hint); font-size: 12.5px; margin-top: 3px; }
+    .statdelta { font-size: 12px; font-weight: 700; margin-top: 5px; }
+    .statdelta.up { color: #2e9e4f; }
+    .statdelta.down { color: var(--danger); }
+    .statdelta.flat { color: var(--hint); }
     .stathead { font-weight: 800; margin: 20px 0 8px; }
     .stathint { color: var(--hint); font-size: 12px; font-weight: 500; margin-left: 6px; }
     .statlist { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 4px 14px; }
@@ -2502,6 +2506,17 @@
       const money = (v) => `${(+v).toFixed(2)} ${CUR}`;
       const moneyShort = (v) => `${Math.round(+v)} Br`;
       const repeatPct = s.total_buyers ? Math.round(s.repeat_buyers / s.total_buyers * 100) : 0;
+      // Дельта к прошлому периоду: ▲/▼ % (без сравнения при period=all).
+      const delta = (cur, key) => {
+        if (!s.prev) return "";
+        const p = s.prev[key];
+        if (p == null) return "";
+        if (p === 0) return cur > 0 ? `<div class="statdelta up">▲ ново</div>` : `<div class="statdelta flat">— 0</div>`;
+        const pct = Math.round((cur - p) / p * 100);
+        const cls = pct > 0 ? "up" : pct < 0 ? "down" : "flat";
+        const arr = pct > 0 ? "▲" : pct < 0 ? "▼" : "—";
+        return `<div class="statdelta ${cls}">${arr} ${Math.abs(pct)}% <span style="color:var(--hint);font-weight:500">пред.</span></div>`;
+      };
       const statusRows = Object.entries(s.by_status || {})
         .map(([k, v]) => `<div class="statrow"><span>${STATUS_RU[k] || k}</span><b>${v}</b></div>`).join("") || `<div class="statrow"><span>Заказов нет</span></div>`;
       const topRows = (s.top || []).length
@@ -2517,10 +2532,10 @@
 
       $("statsBody").innerHTML = periodSelHtml() + `
         <div class="statgrid">
-          <div class="statcard"><div class="statnum">${money(s.revenue)}</div><div class="statlab">Выручка · ${pl}</div></div>
-          <div class="statcard"><div class="statnum">${s.orders}</div><div class="statlab">Заказов · ${pl}</div></div>
-          <div class="statcard"><div class="statnum">${money(s.avg_check)}</div><div class="statlab">Средний чек</div></div>
-          <div class="statcard"><div class="statnum">${s.buyers_period}</div><div class="statlab">Покупателей · ${pl}</div></div>
+          <div class="statcard"><div class="statnum">${money(s.revenue)}</div><div class="statlab">Выручка · ${pl}</div>${delta(s.revenue, "revenue")}</div>
+          <div class="statcard"><div class="statnum">${s.orders}</div><div class="statlab">Заказов · ${pl}</div>${delta(s.orders, "orders")}</div>
+          <div class="statcard"><div class="statnum">${money(s.avg_check)}</div><div class="statlab">Средний чек</div>${delta(s.avg_check, "avg_check")}</div>
+          <div class="statcard"><div class="statnum">${s.buyers_period}</div><div class="statlab">Покупателей · ${pl}</div>${delta(s.buyers_period, "buyers")}</div>
         </div>
         ${dayChart(s.daily || [], "revenue", "Выручка по дням", moneyShort)}
         ${dayChart(s.daily || [], "orders", "Заказы по дням", (v) => `${v} шт`)}

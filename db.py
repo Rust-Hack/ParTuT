@@ -1202,9 +1202,27 @@ def get_business_stats(days=None):
     cur.execute("SELECT COALESCE(SUM(coins),0) AS s FROM users")
     coins_circulation = int(cur.fetchone()["s"] or 0)
 
+    # Сравнение с ПРЕДЫДУЩИМ таким же окном (только для конкретного периода)
+    prev = None
+    if days:
+        prev_start = (now - datetime.timedelta(days=2 * days - 1)).strftime("%Y-%m-%d 00:00")
+        cur.execute(_q("SELECT COUNT(*) AS c, COALESCE(SUM(total),0) AS s FROM orders "
+                       "WHERE status='issued' AND created_at >= %s AND created_at < %s"), (prev_start, cutoff))
+        r = cur.fetchone()
+        p_cnt = r["c"]
+        p_rev = float(r["s"] or 0)
+        cur.execute(_q("SELECT COUNT(DISTINCT user_id) AS c FROM orders "
+                       "WHERE status='issued' AND created_at >= %s AND created_at < %s"), (prev_start, cutoff))
+        p_buyers = cur.fetchone()["c"]
+        cur.execute(_q("SELECT COUNT(*) AS c FROM users WHERE created_at >= %s AND created_at < %s"), (prev_start, cutoff))
+        p_new = cur.fetchone()["c"]
+        prev = {"revenue": round(p_rev, 2), "orders": p_cnt,
+                "avg_check": round(p_rev / p_cnt, 2) if p_cnt else 0,
+                "buyers": p_buyers, "new_users": p_new}
+
     conn.close()
     return {
-        "period_days": days,
+        "period_days": days, "prev": prev,
         "revenue": round(revenue, 2), "orders": issued_count, "avg_check": round(avg_check, 2),
         "inwork_total": round(inwork_total, 2), "inwork_count": inwork_count,
         "by_status": by_status, "revenue_by_city": revenue_by_city, "daily": daily, "top": top,
