@@ -2966,6 +2966,8 @@
         ].filter(Boolean).map(([k, v]) => `<div class="statrow"><span>${k}</span><b>${v}</b></div>`).join("");
         const needReceipt = o.status === "new" && o.payment_method === "card";
         const payBtn = needReceipt ? `<button class="bigbtn" data-pay="${idx}" style="margin-top:10px">📷 Загрузить чек</button>` : "";
+        const canCancel = (o.status === "new" || o.status === "paid");
+        const cancelBtn = canCancel ? `<button class="closebtn" data-cancel="${idx}" style="color:var(--danger);margin-top:8px">Отменить заказ</button>` : "";
         return `<div class="ocard">
           <div class="ocard-top">
             <div><div class="ocard-id">Заказ #${o.id}</div><div class="ocard-sub">${esc(o.city)} · ${esc(o.created_at)}</div></div>
@@ -2976,14 +2978,29 @@
           ${details ? `<div class="odetails">${details}</div>` : ""}
           ${payBtn}
           <button class="bigbtn" data-repeat="${idx}" style="margin-top:10px;background:var(--surface-2);color:var(--text)">🔁 Повторить заказ</button>
+          ${cancelBtn}
         </div>`;
       }).join("");
       $("myOrdersList").querySelectorAll("[data-repeat]").forEach(b => b.onclick = () => repeatOrder(myOrders[+b.dataset.repeat]));
+      $("myOrdersList").querySelectorAll("[data-cancel]").forEach(b => b.onclick = () => cancelMyOrder(myOrders[+b.dataset.cancel]));
       $("myOrdersList").querySelectorAll("[data-pay]").forEach(b => b.onclick = () => {
         const o = myOrders[+b.dataset.pay];
         currentOrder = { order_id: o.id, confirm_minutes: 15 };
         $("receiptFile").click();
       });
+    }
+    function cancelMyOrder(o) {
+      const go = async () => {
+        try {
+          const r = await fetch("/api/order/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, order_id: o.id }) });
+          const d = await r.json();
+          if (d.ok) { alertMsg("Заказ отменён. Монеты возвращены."); openMyOrders(); fetchBonus(); }
+          else alertMsg(d.error === "too_late" ? "Заказ уже подтверждён — отмена через поддержку." : "Не удалось отменить.");
+        } catch (e) { alertMsg("Сеть недоступна."); }
+      };
+      const msg = `Отменить заказ #${o.id}?`;
+      if (tg && tg.showConfirm) tg.showConfirm(msg, ok => { if (ok) go(); });
+      else if (confirm(msg)) go();
     }
     // Трекер: Оформлен → Подтверждён → Выдан (или «отклонён»).
     function orderTracker(status) {

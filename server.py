@@ -29,7 +29,7 @@ from flask import Flask, jsonify, request, Response, send_from_directory
 
 import db
 import notifications
-from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, CITIES, CATEGORIES
+from config import BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, admins_for_city, CITIES, CATEGORIES
 
 db.init_db()
 
@@ -506,6 +506,31 @@ def api_receipt():
         return jsonify({"ok": True})
 
     return jsonify({"ok": False, "error": "send_failed"}), 500
+
+
+@app.route("/api/order/cancel", methods=["POST"])
+def api_order_cancel():
+    """Клиент отменяет свой заказ ДО подтверждения продавцом (статус new/paid)."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    try:
+        oid = int(data.get("order_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    order = db.get_order(oid)
+    if not order or order["user_id"] != int(user["id"]):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    if not db.cancel_order(oid, ["new", "paid"]):   # после подтверждения — только через продавца
+        return jsonify({"ok": False, "error": "too_late"}), 400
+    # сообщим продавцам города, чтобы не обрабатывали
+    try:
+        for admin_id in admins_for_city(order["city"]):
+            tg.send_message(admin_id, f"❌ Клиент отменил заказ #{oid}.")
+    except Exception as e:
+        print(f"Не смог уведомить об отмене #{oid}: {e}")
+    return jsonify({"ok": True})
 
 
 @app.route("/api/support", methods=["POST"])
@@ -1181,6 +1206,14 @@ def _order_item_count(o):
         return 0
 
 
+def _order_subtotal(o):
+    """Стоимость ТОЛЬКО товаров (без доставки) — база для кэшбэка."""
+    try:
+        return sum(float(it.get("price", 0)) * int(it.get("qty", 0)) for it in json.loads(o["items"]))
+    except (TypeError, ValueError):
+        return float(o["total"] or 0)
+
+
 def _order_json(o):
     try:
         items = json.loads(o["items"])
@@ -1243,16 +1276,13 @@ def api_admin_order_status():
     elif action == "issued":
         if not db.set_order_status_if(oid, "issued", OPEN):   # переход применится один раз
             return jsonify({"ok": False, "error": "closed"}), 409
-        db.add_coins(client_id, int(order["total"]) * COINS_PER_BYN)
+        db.add_coins(client_id, int(_order_subtotal(order)) * COINS_PER_BYN)   # кэшбэк с товаров (без доставки)
         db.add_wheel_progress(client_id, _order_item_count(order))   # прогресс колеса
         _reward_referrer(client_id, order["total"])   # % и бонус пригласившему
         _notify_client(client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
-        if not db.set_order_status_if(oid, "canceled", OPEN):   # нельзя отклонить выданный/уже отклонённый
+        if not db.cancel_order(oid, OPEN):          # атомарно: canceled + возврат склада/монет
             return jsonify({"ok": False, "error": "closed"}), 409
-        db.restore_order_stock(order)               # вернуть остаток (с учётом вкусов) — ровно один раз
-        if order["coins_used"]:                      # вернуть списанные монеты
-            db.add_coins(client_id, order["coins_used"])
         _notify_client(client_id, f"К сожалению, заказ #{oid} отклонён продавцом. "
                                   "Если это ошибка — напишите нам, разберёмся.")
     else:

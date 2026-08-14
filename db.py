@@ -1431,6 +1431,31 @@ def get_open_order(user_id):
     return row
 
 
+def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
+    """Атомарно отменяет заказ из разрешённых состояний: возврат склада + монет.
+    Возвращает order (для уведомления) или None, если уже закрыт/недопустимо."""
+    order = get_order(order_id)
+    if not order:
+        return None
+    if not set_order_status_if(order_id, "canceled", list(allowed)):
+        return None
+    restore_order_stock(order)
+    if order["coins_used"]:
+        add_coins(order["user_id"], order["coins_used"])
+    return order
+
+
+def stale_new_orders(hours=24):
+    """Карточные заказы, застрявшие в 'new' (чек не загружен) дольше `hours` — на авто-отмену."""
+    cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM orders WHERE status = 'new' AND created_at <= %s"), (cutoff,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def touch_order_reminded(order_id):
     """Отмечает, что по заказу только что отправлено уведомление/напоминание продавцу."""
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")

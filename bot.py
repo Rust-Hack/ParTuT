@@ -582,14 +582,23 @@ def parse_int(text):
         return None
 
 
+CANCEL_UNPAID_HOURS = 24   # авто-отмена карточных заказов без чека спустя столько часов
+
+
 def _reminder_loop():
-    """Каждую минуту напоминает продавцам о заказах, ждущих обработки (раз в 10 минут на заказ)."""
+    """Раз в минуту: напоминает продавцам о заказах, ждущих одобрения (раз в 10 мин на заказ),
+    и авто-отменяет брошенные карточные заказы без чека (спустя CANCEL_UNPAID_HOURS)."""
     while True:
         try:
             for order in db.orders_needing_reminder(10):
                 notifications.remind_sellers(bot, order)
+            for order in db.stale_new_orders(CANCEL_UNPAID_HOURS):
+                o = db.cancel_order(order["id"], ["new"])   # вернёт склад/монеты
+                if o:
+                    _safe_send(o["user_id"], f"⏳ Заказ #{o['id']} отменён — чек не был загружен. "
+                                             "Товар вернулся в наличие, монеты возвращены. Оформите заново, если нужно.")
         except Exception as e:
-            print(f"Ошибка напоминаний о заказах: {e}")
+            print(f"Ошибка фонового цикла заказов: {e}")
         time.sleep(60)
 
 
