@@ -358,7 +358,26 @@
     .statcard .statnum { font-size: 21px; font-weight: 800; color: var(--accent); }
     .statcard .statlab { color: var(--hint); font-size: 12.5px; margin-top: 3px; }
     .stathead { font-weight: 800; margin: 20px 0 8px; }
+    .stathint { color: var(--hint); font-size: 12px; font-weight: 500; margin-left: 6px; }
     .statlist { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 4px 14px; }
+    /* Дашборд: период + графики */
+    .periodsel { display: flex; gap: 6px; margin-bottom: 14px; position: sticky; top: -4px; z-index: 1; }
+    .periodbtn { flex: 1; padding: 9px 0; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 13px; font-weight: 700; }
+    .periodbtn.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+    .chartwrap { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 14px; margin-bottom: 10px; }
+    .charttop { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+    .charttop b { font-size: 15px; }
+    .charttop span { color: var(--hint); font-size: 12px; }
+    .chart { display: flex; align-items: flex-end; gap: 2px; height: 110px; }
+    .cbar { flex: 1; min-width: 3px; display: flex; align-items: flex-end; height: 100%; }
+    .cbar i { display: block; width: 100%; background: linear-gradient(var(--accent), rgba(53,224,224,.35)); border-radius: 2px 2px 0 0; min-height: 2px; }
+    .chartx { display: flex; justify-content: space-between; color: var(--hint); font-size: 11px; margin-top: 6px; }
+    .hbar { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+    .hbar-l { width: 40%; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hbar-t { flex: 1; background: var(--surface-2); border-radius: 6px; height: 12px; overflow: hidden; }
+    .hbar-t i { display: block; height: 100%; background: var(--accent); border-radius: 6px; min-width: 2px; }
+    .hbar-v { font-size: 12px; font-weight: 700; color: var(--hint); min-width: 52px; text-align: right; white-space: nowrap; }
+    html[data-theme="dark"] .chartwrap { border: 1px solid rgba(95,242,242,.22); box-shadow: var(--shadow), 0 0 15px rgba(95,242,242,.10); }
     .statrow { display: flex; justify-content: space-between; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
     .statrow:last-child { border-bottom: none; }
     html[data-theme="dark"] .statcard, html[data-theme="dark"] .statlist { border: 1px solid rgba(95,242,242,.22); box-shadow: var(--shadow), 0 0 15px rgba(95,242,242,.10); }
@@ -2441,42 +2460,92 @@
     const STATUS_RU = { new: "Ждут чек", paid: "Ждут подтверждения", confirmed: "Подтверждены", issued: "Выданы", canceled: "Отклонены" };
     $("mStats").onclick = openStats;
     $("statsClose").onclick = () => $("statsView").classList.remove("show");
+    let statsPeriod = "30d";
+    const PERIOD_LABEL = { today: "сегодня", "7d": "7 дней", "30d": "30 дней", all: "всё время" };
     async function openStats() {
       $("statsView").classList.add("show");
-      $("statsBody").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      await loadStats();
+    }
+    function periodSelHtml() {
+      return `<div class="periodsel">` + ["today", "7d", "30d", "all"].map(p =>
+        `<button class="periodbtn ${p === statsPeriod ? "on" : ""}" data-period="${p}">${{ today: "Сегодня", "7d": "7 дней", "30d": "30 дней", all: "Всё" }[p]}</button>`).join("") + `</div>`;
+    }
+    // Вертикальный столбчатый график по дням.
+    function dayChart(daily, valKey, title, fmt) {
+      const vals = daily.map(d => d[valKey]);
+      const max = Math.max(1, ...vals);
+      const total = vals.reduce((a, b) => a + b, 0);
+      const bars = daily.map(d => `<div class="cbar"><i style="height:${Math.round(d[valKey] / max * 100)}%"></i></div>`).join("");
+      const dl = (s) => s ? s.slice(8, 10) + "." + s.slice(5, 7) : "";
+      return `<div class="chartwrap">
+        <div class="charttop"><b>${title}</b><span>всего ${fmt(total)} · пик ${fmt(max)}</span></div>
+        <div class="chart">${bars}</div>
+        <div class="chartx"><span>${dl(daily[0] && daily[0].date)}</span><span>${dl(daily[daily.length - 1] && daily[daily.length - 1].date)}</span></div>
+      </div>`;
+    }
+    // Горизонтальные полоски (топ товаров / города).
+    function hbars(rows) {
+      const max = Math.max(1, ...rows.map(r => r.value));
+      return rows.map(r => `<div class="hbar"><div class="hbar-l">${esc(r.label)}</div><div class="hbar-t"><i style="width:${Math.round(r.value / max * 100)}%"></i></div><div class="hbar-v">${r.sub}</div></div>`).join("");
+    }
+    async function loadStats() {
+      $("statsBody").innerHTML = periodSelHtml() + `<p style="color:var(--hint)">Загрузка…</p>`;
+      bindPeriodBtns();
       let s;
       try {
-        const r = await fetch("/api/admin/stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const r = await fetch("/api/admin/stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, period: statsPeriod }) });
         const d = await r.json();
-        if (!d.ok) { $("statsBody").innerHTML = `<p style="color:var(--hint)">Не удалось загрузить.</p>`; return; }
+        if (!d.ok) { $("statsBody").innerHTML = periodSelHtml() + `<p style="color:var(--hint)">Не удалось загрузить.</p>`; bindPeriodBtns(); return; }
         s = d.stats;
-      } catch (e) { $("statsBody").innerHTML = `<p style="color:var(--hint)">Сеть недоступна.</p>`; return; }
+      } catch (e) { $("statsBody").innerHTML = periodSelHtml() + `<p style="color:var(--hint)">Сеть недоступна.</p>`; bindPeriodBtns(); return; }
 
       const money = (v) => `${(+v).toFixed(2)} ${CUR}`;
+      const moneyShort = (v) => `${Math.round(+v)} Br`;
+      const repeatPct = s.total_buyers ? Math.round(s.repeat_buyers / s.total_buyers * 100) : 0;
       const statusRows = Object.entries(s.by_status || {})
         .map(([k, v]) => `<div class="statrow"><span>${STATUS_RU[k] || k}</span><b>${v}</b></div>`).join("") || `<div class="statrow"><span>Заказов нет</span></div>`;
       const topRows = (s.top || []).length
-        ? s.top.map(t => `<div class="statrow"><span>${esc(t.name)}</span><b>${t.qty} шт</b></div>`).join("")
+        ? hbars(s.top.map(t => ({ label: t.name, value: t.qty, sub: `${t.qty} шт · ${moneyShort(t.revenue)}` })))
         : `<div class="statrow"><span style="color:var(--hint)">Пока нет продаж</span></div>`;
       const cityRows = (s.revenue_by_city || []).length
-        ? s.revenue_by_city.map(c => `<div class="statrow"><span>${esc(c.city)}</span><b>${money(c.total)}</b></div>`).join("")
+        ? hbars(s.revenue_by_city.map(c => ({ label: c.city, value: c.total, sub: money(c.total) })))
         : `<div class="statrow"><span style="color:var(--hint)">Ещё нет выданных заказов</span></div>`;
       const lowRows = (s.low_stock || []).length
         ? s.low_stock.map(p => `<div class="statrow"><span>${esc(p.name)} · ${esc(p.city)}</span><b style="color:var(--warn)">${p.stock} шт</b></div>`).join("")
         : `<div class="statrow"><span style="color:var(--hint)">Всё в достатке</span></div>`;
+      const pl = PERIOD_LABEL[statsPeriod];
 
-      $("statsBody").innerHTML = `
+      $("statsBody").innerHTML = periodSelHtml() + `
         <div class="statgrid">
-          <div class="statcard"><div class="statnum">${money(s.issued_total)}</div><div class="statlab">Выручка (выдано)</div></div>
-          <div class="statcard"><div class="statnum">${money(s.inwork_total)}</div><div class="statlab">Ожидается (в работе)</div></div>
-          <div class="statcard"><div class="statnum">${s.orders_total}</div><div class="statlab">Заказов всего</div></div>
-          <div class="statcard"><div class="statnum">${s.out_of_stock} / ${s.products_total}</div><div class="statlab">Нет в наличии / всего</div></div>
+          <div class="statcard"><div class="statnum">${money(s.revenue)}</div><div class="statlab">Выручка · ${pl}</div></div>
+          <div class="statcard"><div class="statnum">${s.orders}</div><div class="statlab">Заказов · ${pl}</div></div>
+          <div class="statcard"><div class="statnum">${money(s.avg_check)}</div><div class="statlab">Средний чек</div></div>
+          <div class="statcard"><div class="statnum">${s.buyers_period}</div><div class="statlab">Покупателей · ${pl}</div></div>
         </div>
-        <div class="stathead">Заказы по статусам</div><div class="statlist">${statusRows}</div>
-        <div class="stathead">Топ товаров (по продажам)</div><div class="statlist">${topRows}</div>
-        <div class="stathead">Выручка по точкам</div><div class="statlist">${cityRows}</div>
-        <div class="stathead">Мало на складе (≤3)</div><div class="statlist">${lowRows}</div>
-        <div class="stathead">🎰 Игры (в монетах)</div><div class="statlist">${gamesRows(s.games || {})}</div>`;
+        ${dayChart(s.daily || [], "revenue", "Выручка по дням", moneyShort)}
+        ${dayChart(s.daily || [], "orders", "Заказы по дням", (v) => `${v} шт`)}
+        <div class="stathead">🏆 Топ товаров <span class="stathint">${pl}</span></div><div class="statlist">${topRows}</div>
+        <div class="stathead">🏙 Выручка по точкам <span class="stathint">${pl}</span></div><div class="statlist">${cityRows}</div>
+        <div class="stathead">📦 Заказы по статусам <span class="stathint">${pl}</span></div><div class="statlist">${statusRows}
+          <div class="statrow"><span>В работе (ждут выдачи)</span><b>${money(s.inwork_total)}</b></div></div>
+        <div class="stathead">👥 Пользователи</div><div class="statlist">
+          <div class="statrow"><span>Всего пользователей</span><b>${s.users_total}</b></div>
+          <div class="statrow"><span>Новых · ${pl}</span><b>${s.new_users}</b></div>
+          <div class="statrow"><span>Покупали хоть раз</span><b>${s.total_buyers}</b></div>
+          <div class="statrow"><span>Повторные покупатели</span><b>${s.repeat_buyers} (${repeatPct}%)</b></div>
+        </div>
+        <div class="stathead">🪙 Монеты (лояльность)</div><div class="statlist">
+          <div class="statrow"><span>В обороте у клиентов</span><b>${s.coins_circulation} 🪙</b></div>
+          ${gamesRows(s.games || {})}
+        </div>
+        <div class="stathead">⚠️ Мало на складе <span class="stathint">≤3 шт · ${s.out_of_stock} нет в наличии</span></div><div class="statlist">${lowRows}</div>`;
+      bindPeriodBtns();
+    }
+    function bindPeriodBtns() {
+      document.querySelectorAll("#statsBody .periodbtn").forEach(b => b.onclick = () => {
+        if (b.dataset.period === statsPeriod) return;
+        statsPeriod = b.dataset.period; haptic("impact", "light"); loadStats();
+      });
     }
     function gamesRows(g) {
       const w = { spins: g.wheel_spins || 0, paid: g.wheel_paid || 0 };

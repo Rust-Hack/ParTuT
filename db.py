@@ -297,6 +297,8 @@ def _ensure_user_columns():
         cur.execute("ALTER TABLE users ADD COLUMN ref_activated INTEGER DEFAULT 0")
     if "ref_earned" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN ref_earned INTEGER DEFAULT 0")
+    if "created_at" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN created_at TEXT")   # дата первого захода (для «новые юзеры»)
     conn.commit()
     conn.close()
 
@@ -556,12 +558,13 @@ def is_age_ok(user_id):
 
 def ensure_user_get_age(user_id):
     """Создаёт пользователя (если нет) и возвращает его 18+ — за одно подключение."""
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     if USE_PG:
-        cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+        cur.execute("INSERT INTO users (user_id, created_at) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, now))
     else:
-        cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        cur.execute("INSERT OR IGNORE INTO users (user_id, created_at) VALUES (?, ?)", (user_id, now))
     cur.execute(_q("SELECT age_ok FROM users WHERE user_id = %s"), (user_id,))
     row = cur.fetchone()
     conn.commit()
@@ -590,13 +593,14 @@ def set_age_ok(user_id):
 # ---------- Пользователи: бонусы и рефералы ----------
 
 def ensure_user(user_id):
-    """Создаёт строку пользователя, если её ещё нет."""
+    """Создаёт строку пользователя, если её ещё нет (с датой первого захода)."""
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     if USE_PG:
-        cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+        cur.execute("INSERT INTO users (user_id, created_at) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, now))
     else:
-        cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        cur.execute("INSERT OR IGNORE INTO users (user_id, created_at) VALUES (?, ?)", (user_id, now))
     conn.commit()
     conn.close()
 
@@ -680,10 +684,11 @@ def get_bonus_stats(user_id):
     conn = connect()
     cur = conn.cursor()
     # создать пользователя при первом заходе
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     if USE_PG:
-        cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+        cur.execute("INSERT INTO users (user_id, created_at) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, now))
     else:
-        cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        cur.execute("INSERT OR IGNORE INTO users (user_id, created_at) VALUES (?, ?)", (user_id, now))
     cur.execute(_q("SELECT coins, ref_earned FROM users WHERE user_id = %s"), (user_id,))
     row = cur.fetchone()
     coins = (row["coins"] if row and row["coins"] else 0)
@@ -1086,6 +1091,110 @@ def get_game_stats():
     rows = cur.fetchall()
     conn.close()
     return {r["key"]: r["n"] for r in rows}
+
+
+def get_business_stats(days=None):
+    """Сводная бизнес-аналитика за период (days=None → всё время). Считается в SQL.
+    Возвращает выручку, заказы, средний чек, воронку статусов, по городам, по дням,
+    топ товаров, метрики пользователей и монеты в обороте."""
+    now = datetime.datetime.now()
+    cutoff = (now - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00") if days else None
+    conn = connect()
+    cur = conn.cursor()
+
+    # Выручка/заказы (выданные) за период
+    if cutoff:
+        cur.execute(_q("SELECT COUNT(*) AS c, COALESCE(SUM(total),0) AS s FROM orders WHERE status='issued' AND created_at >= %s"), (cutoff,))
+    else:
+        cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(total),0) AS s FROM orders WHERE status='issued'")
+    row = cur.fetchone()
+    issued_count = row["c"]
+    revenue = float(row["s"] or 0)
+    avg_check = revenue / issued_count if issued_count else 0
+
+    # В работе (текущий пайплайн — не зависит от периода)
+    cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(total),0) AS s FROM orders WHERE status IN ('paid','confirmed')")
+    row = cur.fetchone()
+    inwork_count = row["c"]
+    inwork_total = float(row["s"] or 0)
+
+    # Воронка статусов за период
+    if cutoff:
+        cur.execute(_q("SELECT status AS st, COUNT(*) AS c FROM orders WHERE created_at >= %s GROUP BY status"), (cutoff,))
+    else:
+        cur.execute("SELECT status AS st, COUNT(*) AS c FROM orders GROUP BY status")
+    by_status = {r["st"]: r["c"] for r in cur.fetchall()}
+
+    # Выручка по точкам (выданные, период)
+    if cutoff:
+        cur.execute(_q("SELECT city AS ct, COALESCE(SUM(total),0) AS s FROM orders WHERE status='issued' AND created_at >= %s GROUP BY city ORDER BY s DESC"), (cutoff,))
+    else:
+        cur.execute("SELECT city AS ct, COALESCE(SUM(total),0) AS s FROM orders WHERE status='issued' GROUP BY city ORDER BY s DESC")
+    revenue_by_city = [{"city": r["ct"], "total": round(float(r["s"] or 0), 2)} for r in cur.fetchall()]
+
+    # По дням (для графика): последние N дней, пробелы = 0
+    n_days = days if days else 30
+    start = now - datetime.timedelta(days=n_days - 1)
+    start_str = start.strftime("%Y-%m-%d 00:00")
+    cur.execute(_q("SELECT substr(created_at,1,10) AS d, COUNT(*) AS c, COALESCE(SUM(total),0) AS s "
+                   "FROM orders WHERE status='issued' AND created_at >= %s GROUP BY substr(created_at,1,10)"), (start_str,))
+    day_map = {r["d"]: (r["c"], float(r["s"] or 0)) for r in cur.fetchall()}
+    daily = []
+    for i in range(n_days):
+        d = (start + datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+        c, s = day_map.get(d, (0, 0.0))
+        daily.append({"date": d, "orders": c, "revenue": round(s, 2)})
+
+    # Топ товаров (парсим JSON только выданных за период)
+    if cutoff:
+        cur.execute(_q("SELECT items FROM orders WHERE status='issued' AND created_at >= %s"), (cutoff,))
+    else:
+        cur.execute("SELECT items FROM orders WHERE status='issued'")
+    qty_by_name, rev_by_name = {}, {}
+    for r in cur.fetchall():
+        try:
+            for it in json.loads(r["items"]):
+                nm = it.get("name", "?")
+                q = int(it.get("qty", 0))
+                qty_by_name[nm] = qty_by_name.get(nm, 0) + q
+                rev_by_name[nm] = rev_by_name.get(nm, 0) + q * float(it.get("price", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+    top = [{"name": n, "qty": q, "revenue": round(rev_by_name.get(n, 0), 2)}
+           for n, q in sorted(qty_by_name.items(), key=lambda x: -x[1])[:8]]
+
+    # Пользователи
+    cur.execute("SELECT COUNT(*) AS c FROM users")
+    users_total = cur.fetchone()["c"]
+    if cutoff:
+        cur.execute(_q("SELECT COUNT(*) AS c FROM users WHERE created_at >= %s"), (cutoff,))
+        new_users = cur.fetchone()["c"]
+        cur.execute(_q("SELECT COUNT(DISTINCT user_id) AS c FROM orders WHERE status='issued' AND created_at >= %s"), (cutoff,))
+        buyers_period = cur.fetchone()["c"]
+    else:
+        cur.execute("SELECT COUNT(*) AS c FROM users WHERE created_at IS NOT NULL")
+        new_users = cur.fetchone()["c"]
+        cur.execute("SELECT COUNT(DISTINCT user_id) AS c FROM orders WHERE status='issued'")
+        buyers_period = cur.fetchone()["c"]
+    cur.execute("SELECT COUNT(*) AS c FROM (SELECT user_id FROM orders WHERE status='issued' GROUP BY user_id HAVING COUNT(*) >= 2) t")
+    repeat_buyers = cur.fetchone()["c"]
+    cur.execute("SELECT COUNT(DISTINCT user_id) AS c FROM orders WHERE status='issued'")
+    total_buyers = cur.fetchone()["c"]
+
+    # Монеты в обороте
+    cur.execute("SELECT COALESCE(SUM(coins),0) AS s FROM users")
+    coins_circulation = int(cur.fetchone()["s"] or 0)
+
+    conn.close()
+    return {
+        "period_days": days,
+        "revenue": round(revenue, 2), "orders": issued_count, "avg_check": round(avg_check, 2),
+        "inwork_total": round(inwork_total, 2), "inwork_count": inwork_count,
+        "by_status": by_status, "revenue_by_city": revenue_by_city, "daily": daily, "top": top,
+        "users_total": users_total, "new_users": new_users, "buyers_period": buyers_period,
+        "repeat_buyers": repeat_buyers, "total_buyers": total_buyers,
+        "coins_circulation": coins_circulation,
+    }
 
 
 def set_setting(key, value):

@@ -1180,53 +1180,28 @@ def api_admin_order_status():
 
 # ------------------- Статистика -------------------
 
+PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "all": None}
+
+
 @app.route("/api/admin/stats", methods=["POST"])
 def api_admin_stats():
-    """Сводка для админа: выручка, статусы, топ товаров, склад."""
+    """Бизнес-аналитика для админа за период: KPI, графики, товары, юзеры, монеты, склад, игры."""
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
-    orders = db.get_orders(limit=100000)
-    products = db.get_all_products()
+    period = data.get("period", "30d")
+    days = PERIOD_DAYS.get(period, 30)
+    stats = db.get_business_stats(days)          # всё считается в SQL
 
-    by_status = {}
-    issued_total = inwork_total = 0.0
-    qty_by_name = {}
-    revenue_by_city = {}
-    for o in orders:
-        st = o["status"]
-        by_status[st] = by_status.get(st, 0) + 1
-        if st == "issued":
-            issued_total += o["total"]
-            revenue_by_city[o["city"]] = revenue_by_city.get(o["city"], 0.0) + o["total"]
-        elif st in ("paid", "confirmed"):
-            inwork_total += o["total"]
-        if st != "canceled":
-            try:
-                for it in json.loads(o["items"]):
-                    qty_by_name[it["name"]] = qty_by_name.get(it["name"], 0) + int(it.get("qty", 0))
-            except (TypeError, ValueError):
-                pass
-
-    top = sorted(qty_by_name.items(), key=lambda x: -x[1])[:5]
-    low = [{"name": p["name"], "city": p["city"], "stock": p["stock"]}
-           for p in products if 0 < p["stock"] <= 3]
-    out_of_stock = sum(1 for p in products if p["stock"] <= 0)
-
-    return jsonify({"ok": True, "stats": {
-        "issued_total": round(issued_total, 2),
-        "inwork_total": round(inwork_total, 2),
-        "orders_total": len(orders),
-        "by_status": by_status,
-        "top": [{"name": n, "qty": q} for n, q in top],
-        "revenue_by_city": [{"city": c, "total": round(t, 2)} for c, t in
-                            sorted(revenue_by_city.items(), key=lambda x: -x[1])],
-        "low_stock": low,
-        "out_of_stock": out_of_stock,
-        "products_total": len(products),
-        "games": db.get_game_stats(),
-    }})
+    products = db.get_all_products()             # склад — не зависит от периода
+    stats["low_stock"] = [{"name": p["name"], "city": p["city"], "stock": p["stock"]}
+                          for p in products if 0 < p["stock"] <= 3][:12]
+    stats["out_of_stock"] = sum(1 for p in products if p["stock"] <= 0)
+    stats["products_total"] = len(products)
+    stats["games"] = db.get_game_stats()
+    stats["period"] = period
+    return jsonify({"ok": True, "stats": stats})
 
 
 # ------------------- Розыгрыш (админ) -------------------
