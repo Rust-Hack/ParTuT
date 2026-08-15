@@ -982,6 +982,8 @@
       <label>Категория</label><select id="afCat"></select>
       <div id="nameField"><label>Название</label><input id="afName" placeholder="Например: Vaporesso XROS"></div>
       <label>Цена (Br)</label><input id="afPrice" inputmode="decimal" placeholder="18.5">
+      <label>Закупочная цена (Br)</label><input id="afCost" inputmode="decimal" placeholder="12">
+      <div class="dnote" style="margin:6px 0 0">Видите только вы. Без неё статистика покажет выручку, но не прибыль.</div>
 
       <!-- Одноразки/жидкости: бренд из базы, свои поля, вкусы с остатком -->
       <div id="dispFields" style="display:none">
@@ -2992,7 +2994,10 @@
       const statusRows = Object.entries(s.by_status || {})
         .map(([k, v]) => `<div class="statrow"><span>${STATUS_RU[k] || k}</span><b>${v}</b></div>`).join("") || `<div class="statrow"><span>Заказов нет</span></div>`;
       const topRows = (s.top || []).length
-        ? hbars(s.top.map(t => ({ label: t.name, value: t.qty, sub: `${t.qty} шт · ${moneyShort(t.revenue)}` })))
+        ? hbars(s.top.map(t => ({ label: t.name, value: t.qty,
+            // Прибыль по товару показываем, только если закупка заполнена:
+            // прочерк честнее нуля, который выглядит как «не заработали».
+            sub: `${t.qty} шт · ${moneyShort(t.revenue)}${t.profit === null ? "" : ` · +${moneyShort(t.profit)}`}` })))
         : `<div class="statrow"><span style="color:var(--hint)">Пока нет продаж</span></div>`;
       const cityRows = (s.revenue_by_city || []).length
         ? hbars(s.revenue_by_city.map(c => ({ label: c.city, value: c.total, sub: money(c.total) })))
@@ -3005,10 +3010,12 @@
       $("statsBody").innerHTML = periodSelHtml() + `
         <div class="statgrid">
           <div class="statcard"><div class="statnum">${money(s.revenue)}</div><div class="statlab">Выручка · ${pl}</div>${delta(s.revenue, "revenue")}</div>
+          <div class="statcard"><div class="statnum" style="color:#1f8a5f">${money(s.profit)}</div><div class="statlab">Прибыль${s.margin ? ` · наценка ${s.margin}%` : ""}</div></div>
           <div class="statcard"><div class="statnum">${s.orders}</div><div class="statlab">Заказов · ${pl}</div>${delta(s.orders, "orders")}</div>
           <div class="statcard"><div class="statnum">${money(s.avg_check)}</div><div class="statlab">Средний чек</div>${delta(s.avg_check, "avg_check")}</div>
           <div class="statcard"><div class="statnum">${s.buyers_period}</div><div class="statlab">Покупателей · ${pl}</div>${delta(s.buyers_period, "buyers")}</div>
         </div>
+        ${s.revenue_unknown_cost ? `<div class="dnote" style="margin:-6px 0 14px">⚠️ У части товаров не заполнена закупочная цена — выручка на ${money(s.revenue_unknown_cost)} в прибыль не попала. Проставьте закупку в карточках товаров, чтобы цифра стала полной.</div>` : ""}
         ${dayChart(s.daily || [], "revenue", "Выручка по дням", moneyShort)}
         ${dayChart(s.daily || [], "orders", "Заказы по дням", (v) => `${v} шт`)}
         <div class="stathead">🏆 Топ товаров <span class="stathint">${pl}</span></div><div class="statlist">${topRows}</div>
@@ -3925,7 +3932,7 @@
     };
 
     function clearAddForm() {
-      $("afName").value = ""; $("afPrice").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
+      $("afName").value = ""; $("afPrice").value = ""; $("afCost").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
       $("afBrand").value = ""; $("afFlavor").value = ""; $("afStrength").value = ""; $("afVolume").value = "";
       $("dispPuffs").value = 0; $("dispPuffsNum").value = 0;
       $("liqStrength").value = ""; $("liqVolume").value = "";
@@ -3950,7 +3957,7 @@
           name = [b.name, $("dispPuffsNum").value].filter(v => v && v !== "0").join(" ");
         else
           name = b.name;   // жидкость: название = бренд; объём/крепость — бейджами на карточке
-        body = { initData, city: $("afCity").value, category, name, price,
+        body = { initData, city: $("afCity").value, category, name, price, cost: $("afCost").value,
           description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
           brand: b.name, variants };
         if (category === "disposable") body.puffs = $("dispPuffsNum").value;
@@ -3959,7 +3966,7 @@
         name = $("afName").value.trim();
         if (!name) { alertMsg("Заполните название."); return; }
         if ($("afStock").value === "") { alertMsg("Укажите остаток."); return; }
-        body = { initData, city: $("afCity").value, category, name, price,
+        body = { initData, city: $("afCity").value, category, name, price, cost: $("afCost").value,
           stock: $("afStock").value, description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
           brand: $("afBrand").value.trim(), flavor: $("afFlavor").value.trim(),
           strength: $("afStrength").value.trim(), volume: $("afVolume").value.trim() };
@@ -4063,6 +4070,7 @@
             <label>Название</label><input id="edName" value="${esc(p.name)}">
             <div class="rowf">
               <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
+              <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
               <div><label>Остаток (шт.)</label><input id="edStock" inputmode="numeric" value="${p.stock}"></div>
             </div>
             <div class="rowf">
@@ -4105,6 +4113,7 @@
           <div class="csub" style="margin-top:4px">${esc(p.brand || '')} · ${catName(p.category)} · ${esc(p.city)}</div>
           <label>Точка (город)</label><select id="edCity">${cityOptions}</select>
           <label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}">
+          <label>Закупочная цена (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}">
           ${specs}
           <label>Вкусы и остаток</label>
           <div id="edVarList"></div>
@@ -4153,6 +4162,7 @@
           if (p.category === "disposable") { volume = $("edPuffsNum").value; name = [p.brand, volume].filter(x => x && x !== "0").join(" "); }
           else if (p.category === "liquid") { strength = $("edStrength").value.trim(); volume = $("edVolume").value.trim(); name = p.brand; }
           await upd("price", $("edPrice").value);
+          await upd("cost", $("edCost").value || 0);
           await upd("volume", volume);
           if (p.category === "liquid") await upd("strength", strength);
           if (name) await upd("name", name);
@@ -4163,6 +4173,7 @@
           await upd("category", $("edCat").value);
           await upd("name", nm);
           await upd("price", $("edPrice").value);
+          await upd("cost", $("edCost").value || 0);
           await upd("stock", $("edStock").value);
           await upd("brand", $("edBrand").value.trim());
           await upd("flavor", $("edFlavor").value.trim());

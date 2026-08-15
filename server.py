@@ -541,6 +541,7 @@ def _all_products_payload():
             "stock": p["stock"], "is_hit": p["is_hit"],
             "category": p["category"], "city": p["city"],
             "description": p["description"] or "",
+            "cost": round(float(p["cost"] or 0), 2),   # видит только админка
             "brand": p["brand"] or "", "flavor": p["flavor"] or "",
             "strength": p["strength"] or "", "volume": p["volume"] or "",
             "variants": variants_by.get(p["id"], []),
@@ -740,7 +741,10 @@ def api_order():
                 continue
             real_qty = min(qty, p["stock"])
             name = p["name"]
-        items.append({"id": pid, "flavor": flavor, "name": name, "price": p["price"], "qty": real_qty})
+        # Закупочную цену ЗАПОМИНАЕМ в заказе, а не смотрим потом в товаре:
+        # завтра поставщик поднимет цену, и прибыль по прошлым продажам поедет.
+        items.append({"id": pid, "flavor": flavor, "name": name, "price": p["price"],
+                      "cost": round(float(p["cost"] or 0), 2), "qty": real_qty})
         total += p["price"] * real_qty
         cities.add(p["city"])
 
@@ -1393,6 +1397,12 @@ def api_admin_add():
         price = float(str(data.get("price")).replace(",", "."))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_number"}), 400
+    try:
+        # Закупочная цена необязательна: пустое поле = «не знаю», и прибыль по
+        # такому товару честно считается неизвестной, а не нулевой.
+        cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
+    except (TypeError, ValueError):
+        cost = 0.0
 
     is_hit = 1 if data.get("is_hit") else 0
     desc = (data.get("description") or "").strip()
@@ -1405,7 +1415,7 @@ def api_admin_add():
     if isinstance(variants, list) and variants:
         vol = str(data.get("puffs") or data.get("volume") or "").strip()
         pid = db.add_product(city, category, name, max(0.0, price), 0, is_hit, desc,
-                             brand=brand, flavor="", strength=strength, volume=vol)
+                             brand=brand, flavor="", strength=strength, volume=vol, cost=cost)
         for v in variants:
             fl = str(v.get("flavor", "")).strip()
             try:
@@ -1425,7 +1435,7 @@ def api_admin_add():
     flavor = (data.get("flavor") or "").strip()
     volume = (data.get("volume") or "").strip()
     pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc,
-                         brand=brand, flavor=flavor, strength=strength, volume=volume)
+                         brand=brand, flavor=flavor, strength=strength, volume=volume, cost=cost)
     return jsonify({"ok": True, "id": pid})
 
 
@@ -1444,8 +1454,8 @@ def api_admin_update():
     field = data.get("field")
     raw = data.get("value")
     try:
-        if field == "price":
-            value = max(0.0, float(str(raw).replace(",", ".")))
+        if field in ("price", "cost"):
+            value = max(0.0, float(str(raw or 0).replace(",", ".")))
         elif field == "stock":
             value = max(0, int(raw))
         elif field in ("name", "description", "brand", "flavor", "strength", "volume"):

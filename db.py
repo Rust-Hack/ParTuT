@@ -332,6 +332,10 @@ def _ensure_product_columns():
     for c in ("brand", "flavor", "strength", "volume", "photo_thumb"):
         if c not in cols:
             cur.execute(f"ALTER TABLE products ADD COLUMN {c} TEXT")
+    # Закупочная цена. Без неё статистика показывает выручку, но никогда —
+    # прибыль, и решения о закупке принимаются вслепую.
+    if "cost" not in cols:
+        cur.execute("ALTER TABLE products ADD COLUMN cost REAL DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -1261,18 +1265,34 @@ def get_business_stats(days=None):
         cur.execute(_q("SELECT items FROM orders WHERE status='issued' AND created_at >= %s"), (cutoff,))
     else:
         cur.execute("SELECT items FROM orders WHERE status='issued'")
-    qty_by_name, rev_by_name = {}, {}
+    qty_by_name, rev_by_name, profit_by_name = {}, {}, {}
+    profit = 0.0            # прибыль ТОЛЬКО по позициям с известной закупочной ценой
+    revenue_known = 0.0     # выручка этих же позиций — чтобы посчитать наценку
+    revenue_unknown = 0.0   # выручка там, где закупочная цена не заполнена
     for r in cur.fetchall():
         try:
             for it in json.loads(r["items"]):
                 nm = it.get("name", "?")
                 q = int(it.get("qty", 0))
+                price = float(it.get("price", 0) or 0)
+                cost = float(it.get("cost", 0) or 0)
                 qty_by_name[nm] = qty_by_name.get(nm, 0) + q
-                rev_by_name[nm] = rev_by_name.get(nm, 0) + q * float(it.get("price", 0) or 0)
+                rev_by_name[nm] = rev_by_name.get(nm, 0) + q * price
+                # Нулевая закупочная цена — это «не заполнено», а не «досталось
+                # даром». Считать её прибылью значит рисовать себе доход,
+                # которого нет, поэтому такие позиции идут отдельной строкой.
+                if cost > 0:
+                    profit += q * (price - cost)
+                    revenue_known += q * price
+                    profit_by_name[nm] = profit_by_name.get(nm, 0) + q * (price - cost)
+                else:
+                    revenue_unknown += q * price
         except (TypeError, ValueError):
             pass
-    top = [{"name": n, "qty": q, "revenue": round(rev_by_name.get(n, 0), 2)}
+    top = [{"name": n, "qty": q, "revenue": round(rev_by_name.get(n, 0), 2),
+            "profit": (round(profit_by_name[n], 2) if n in profit_by_name else None)}
            for n, q in sorted(qty_by_name.items(), key=lambda x: -x[1])[:8]]
+    margin = (profit / revenue_known * 100) if revenue_known else 0
 
     # Пользователи
     cur.execute("SELECT COUNT(*) AS c FROM users")
@@ -1318,6 +1338,8 @@ def get_business_stats(days=None):
     return {
         "period_days": days, "prev": prev,
         "revenue": round(revenue, 2), "orders": issued_count, "avg_check": round(avg_check, 2),
+        "profit": round(profit, 2), "margin": round(margin, 1),
+        "revenue_unknown_cost": round(revenue_unknown, 2),   # выручка без закупочной цены
         "inwork_total": round(inwork_total, 2), "inwork_count": inwork_count,
         "by_status": by_status, "revenue_by_city": revenue_by_city, "daily": daily, "top": top,
         "users_total": users_total, "new_users": new_users, "buyers_period": buyers_period,
@@ -1756,16 +1778,16 @@ def get_all_products():
 # ---------- Админка: добавить / изменить / удалить ----------
 
 def add_product(city, category, name, price, stock, is_hit=0, description="",
-                brand="", flavor="", strength="", volume=""):
+                brand="", flavor="", strength="", volume="", cost=0):
     conn = connect()
     cur = conn.cursor()
     new_id = _insert_id(
         cur,
         """INSERT INTO products (city, category, name, price, stock, is_hit, description,
-                                 brand, flavor, strength, volume)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                 brand, flavor, strength, volume, cost)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
         (city, category, name, price, stock, is_hit, description,
-         brand, flavor, strength, volume),
+         brand, flavor, strength, volume, float(cost or 0)),
     )
     conn.commit()
     conn.close()
@@ -1773,7 +1795,7 @@ def add_product(city, category, name, price, stock, is_hit=0, description="",
 
 
 # Какие колонки разрешено менять (защита: имя колонки нельзя подставить параметром).
-_EDITABLE = {"name", "price", "stock", "is_hit", "description", "photo", "photo_thumb",
+_EDITABLE = {"name", "price", "cost", "stock", "is_hit", "description", "photo", "photo_thumb",
              "brand", "flavor", "strength", "volume", "category", "city"}
 
 
