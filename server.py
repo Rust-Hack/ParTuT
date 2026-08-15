@@ -257,6 +257,7 @@ _WRITE_PATHS = {
     "/api/admin/photo": (),
     "/api/admin/location": (), "/api/admin/location/delete": (),
     "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),
+    "/api/admin/point": (), "/api/admin/point/update": (), "/api/admin/point/delete": (),
     "/api/admin/brand": (), "/api/admin/brand/delete": (),
     "/api/admin/settings/update": (), "/api/admin/stats/reset": (),
     "/api/order": _STOCK_KEYS,                  # меняют остаток на складе
@@ -490,6 +491,7 @@ def _delivery_json(m):
         "needs_address": bool(m["needs_address"]),
         "address_label": m["address_label"] or "Адрес",
         "pickup_address": m["pickup_address"] or "",
+        "needs_point": bool(m["needs_point"]),     # покупатель выбирает точку из списка
         "fee": round(m["fee"] or 0, 2),
         "needs_payment": bool(m["needs_payment"]),
     }
@@ -497,12 +499,20 @@ def _delivery_json(m):
 
 @app.route("/api/delivery")
 def api_delivery():
-    """Способы получения для точки (для оформления заказа)."""
+    """Способы получения для точки (для оформления заказа).
+
+    Отдаём вместе с точками самовывоза этого города: покупатель выбирает нужную
+    прямо в заказе, а не роется в настройках. Один запрос вместо двух — шторка
+    оформления должна открываться мгновенно."""
     city = request.args.get("city", "")
     key = f"delivery:{city}"
     cached = _cache_get(key)
     if cached is None:
-        cached = _cache_set(key, [_delivery_json(m) for m in db.get_delivery_methods(city)], 300)
+        cached = _cache_set(key, {
+            "methods": [_delivery_json(m) for m in db.get_delivery_methods(city)],
+            "points": [{"id": p["id"], "address": p["address"], "note": p["note"] or ""}
+                       for p in db.get_pickup_points(city)],
+        }, 300)
     return jsonify(cached)
 
 
@@ -749,6 +759,17 @@ def api_order():
     address = (data.get("delivery_address") or "").strip()
     if method["needs_address"] and not address:
         return jsonify({"ok": False, "error": "no_address"}), 400
+    # Точку самовывоза сверяем со списком города, а не берём на слово: иначе в
+    # заказ попадёт любой текст, и продавец поедет по несуществующему адресу.
+    if method["needs_point"]:
+        try:
+            point_id = int(data.get("pickup_point_id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "no_point"}), 400
+        point = next((p for p in db.get_pickup_points(city) if p["id"] == point_id), None)
+        if not point:
+            return jsonify({"ok": False, "error": "bad_point"}), 400
+        address = point["address"]
     fee = round(method["fee"] or 0, 2)
 
     # 2. Способ оплаты. Если способу оплата не нужна (такси) — payment = none.
@@ -1723,6 +1744,54 @@ def api_admin_stats_reset():
     return jsonify({"ok": True, **res})
 
 
+# ------------------- Точки самовывоза -------------------
+
+@app.route("/api/admin/point", methods=["POST"])
+def api_admin_point_add():
+    """Добавить точку самовывоза городу."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    city = (data.get("city") or "").strip()
+    address = (data.get("address") or "").strip()
+    if not city or not address:
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+    db.add_pickup_point(city, address, (data.get("note") or "").strip()[:80],
+                        int(data.get("sort") or 0))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/point/update", methods=["POST"])
+def api_admin_point_update():
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        pid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    address = (data.get("address") or "").strip()
+    if not address:
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+    db.update_pickup_point(pid, address, (data.get("note") or "").strip()[:80])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/point/delete", methods=["POST"])
+def api_admin_point_delete():
+    """Удаление точки не трогает прежние заказы: адрес в них сохранён строкой,
+    поэтому продавец по-прежнему видит, куда человек приедет."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        pid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    db.delete_pickup_point(pid)
+    return jsonify({"ok": True})
+
+
 # ------------------- Админы и продавцы (только супер-админ) -------------------
 
 def _super(data):
@@ -1937,6 +2006,7 @@ def api_admin_delivery_add():
         max(0.0, fee),
         bool(data.get("needs_payment", True)),
         int(data.get("sort") or 0),
+        bool(data.get("needs_point")),
     )
     return jsonify({"ok": True})
 
@@ -1965,6 +2035,7 @@ def api_admin_delivery_update():
         (data.get("pickup_address") or "").strip(),
         max(0.0, fee),
         bool(data.get("needs_payment", True)),
+        bool(data.get("needs_point")),
     )
     return jsonify({"ok": True})
 

@@ -261,7 +261,7 @@
     .sheet h2 { margin: 0 0 14px; font-size: 18px; }
     /* Рамка прозрачная, но есть всегда: у выбранного варианта она станет цветной,
        и строка не должна от этого менять высоту. */
-    .opt { width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: 2px solid transparent; padding: 13px 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
+    .opt { position: relative; width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: 2px solid transparent; padding: 13px 34px 13px 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
     .dlabel { font-weight: 700; color: var(--hint); font-size: 13px; margin: 14px 0 8px; }
     .paypick { display: flex; gap: 8px; }
     .paypick .opt { flex: 1; text-align: center; margin-bottom: 0; }
@@ -273,7 +273,9 @@
     /* Выбор — это решение о деньгах, он должен читаться мгновенно: рамка,
        подложка и галочка вместе, а не один оттенок текста. */
     .opt.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-    .opt.active::after { content: "✓"; float: right; font-weight: 800; }
+    /* Галочку ставим по центру строки, а не потоком: у точки самовывоза две
+       строки (адрес и часы), и плавающая галочка съезжала под них. */
+    .opt.active::after { content: "✓"; position: absolute; right: 15px; top: 50%; transform: translateY(-50%); font-weight: 800; }
     .closebtn { background: none; border: none; color: var(--hint); width: 100%; padding: 12px; font-size: 15px; }
 
     .swipe-dim { position: fixed; inset: 0; background: #000; opacity: 0; z-index: 49; pointer-events: none; display: none; }
@@ -316,6 +318,9 @@
     .sect { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); margin-bottom: 16px; }
     /* Необязательное в оформлении: свёрнуто, но видно, что уже заполнено.
        Своей карточки не имеет — шторка заказа сама по себе поверхность. */
+    /* Точка самовывоза: адрес крупно, режим работы подписью под ним */
+    .ppnote { display: block; color: var(--hint); font-weight: 600; font-size: 12.5px; margin-top: 2px; }
+    .opt.active .ppnote { color: var(--accent); }
     .dopt { background: none; box-shadow: none; margin: 14px 0 0; border-top: 1px solid var(--line); }
     .dopt > summary { list-style: none; cursor: pointer; padding: 13px 2px 0; font-size: 14px;
       color: var(--hint); display: flex; align-items: center; justify-content: space-between; gap: 10px; user-select: none; }
@@ -2477,6 +2482,8 @@
     // ----- Оформление: способ получения + оплата -----
     let deliveryMethods = [], selMethod = null, selPayment = null, selAddress = "", selComment = "", selPhone = "";
     const deliveryCache = {};        // city -> способы получения (чтобы оформление открывалось мгновенно)
+    const pointsCache = {};          // city -> точки самовывоза этого города
+    let pickupPoints = [], selPoint = null;
     const deliveryPending = {};      // city -> запрос «в полёте» (чтобы не слать второй такой же)
     function fetchDeliveryFor(c) {
       if (!c) return Promise.resolve([]);
@@ -2485,7 +2492,11 @@
       deliveryPending[c] = (async () => {
         try {
           const r = await fetch(`/api/delivery?city=${encodeURIComponent(c)}`);
-          deliveryCache[c] = await r.json();
+          const d = await r.json();
+          // Сервер отдаёт способы и точки самовывоза одним ответом. Старый
+          // формат (просто список) поддерживаем на случай ответа из кэша.
+          deliveryCache[c] = Array.isArray(d) ? d : (d.methods || []);
+          pointsCache[c] = Array.isArray(d) ? [] : (d.points || []);
         } catch (e) { deliveryCache[c] = deliveryCache[c] || []; }
         finally { delete deliveryPending[c]; }
         return deliveryCache[c];
@@ -2499,11 +2510,12 @@
       // Телефон помним из прошлых заказов: заставлять постоянного покупателя
       // набирать один и тот же номер при каждой покупке — лишнее трение ровно
       // там, где мы его и возвращаем напоминанием.
-      selMethod = null; selPayment = null; selAddress = ""; selComment = "";
+      selMethod = null; selPayment = null; selAddress = ""; selComment = ""; selPoint = null;
       selPhone = (me && me.prefill && me.prefill.phone) || "";
       $("deliveryOverlay").classList.add("show");
       if (deliveryCache[city]) {
         deliveryMethods = deliveryCache[city];   // мгновенно из кэша
+        pickupPoints = pointsCache[city] || [];
         renderDelivery();
         if (!deliveryPending[city]) fetchDeliveryFor(city);   // тихо обновим на случай изменений
       } else {
@@ -2511,6 +2523,7 @@
         const openedFor = city;
         deliveryMethods = await fetchDeliveryFor(city);
         if (openedFor !== city) return;          // пока грузилось, точку сменили — не рисуем чужое
+        pickupPoints = pointsCache[city] || [];
         renderDelivery();
       }
     }
@@ -2528,6 +2541,8 @@
       // Кавычки снимают вопрос падежа.
       if (m.needs_address && !selAddress.trim())
         return m.address_label ? `Заполните поле «${m.address_label}»` : "Укажите адрес";
+      if (m.needs_point && !selPoint)
+        return pickupPoints.length ? "Выберите точку самовывоза" : "Точки самовывоза не заведены";
       if (m.needs_payment && !selPayment) return "Выберите способ оплаты";
       return null;
     }
@@ -2549,10 +2564,20 @@
       let extra = "";
       if (selMethod !== null) {
         const m = deliveryMethods[selMethod];
-        if (m.needs_address)
+        if (m.needs_address) {
           extra += `<div class="dlabel">${esc(m.address_label)}</div><input id="delAddr" class="admsearch" placeholder="${esc(m.address_label)}" value="${esc(selAddress)}">`;
-        else if (m.pickup_address)
+        } else if (m.needs_point) {
+          // Точку выбирают ЗДЕСЬ, а не в настройках: у города их несколько, и
+          // сегодня человеку удобна одна, завтра другая. Прошлый выбор
+          // подставлен заранее, но поменять его можно прямо в заказе.
+          extra += `<div class="dlabel">Куда приедете</div>`;
+          extra += pickupPoints.length
+            ? pickupPoints.map(p => `<button class="opt ${selPoint === p.id ? 'active' : ''}" data-pp="${p.id}">
+                 ${esc(p.address)}${p.note ? `<small class="ppnote">${esc(p.note)}</small>` : ""}</button>`).join("")
+            : `<div class="dnote">Точки самовывоза для «${esc(city)}» пока не заведены — выберите другой способ.</div>`;
+        } else if (m.pickup_address) {
           extra += `<div class="dpickup">📍 ${esc(m.pickup_address)}</div>`;
+        }
         if (m.needs_payment) {
           extra += `<div class="dlabel">Оплата</div><div class="paypick">
             <button class="opt ${selPayment === 'card' ? 'active' : ''}" data-pm="card">💳 Картой</button>
@@ -2593,9 +2618,20 @@
         selMethod = +b.dataset.dm; selPayment = null;
         // Адрес помним ОТДЕЛЬНО по способу: у метро это станция, у курьера —
         // улица, и подставлять одно вместо другого нельзя.
-        const имя = (deliveryMethods[selMethod] || {}).name || "";
-        selAddress = ((me && me.prefill && me.prefill.addresses) || {})[имя] || "";
+        const м = deliveryMethods[selMethod] || {};
+        const прошлый = ((me && me.prefill && me.prefill.addresses) || {})[м.name || ""] || "";
+        selAddress = м.needs_address ? прошлый : "";
+        // Для самовывоза подставляем ТУ ЖЕ точку, куда человек ездил в прошлый
+        // раз — если она ещё существует.
+        selPoint = null;
+        if (м.needs_point && прошлый) {
+          const была = pickupPoints.find(p => p.address === прошлый);
+          if (была) selPoint = была.id;
+        }
         renderDelivery();
+      });
+      $("deliveryBody").querySelectorAll("[data-pp]").forEach(b => b.onclick = () => {
+        selPoint = +b.dataset.pp; renderDelivery();
       });
       $("deliveryBody").querySelectorAll("[data-pm]").forEach(b => b.onclick = () => { selPayment = b.dataset.pm; renderDelivery(); });
       // Кнопку обновляем прямо во время ввода, но БЕЗ перерисовки: перерисовка
@@ -2610,6 +2646,7 @@
       if (submitting) return;
       const m = deliveryMethods[selMethod]; if (!m) return;
       if (m.needs_address && !selAddress.trim()) { alertMsg("Введите " + (m.address_label || "адрес").toLowerCase()); return; }
+      if (m.needs_point && !selPoint) { alertMsg("Выберите точку самовывоза."); return; }
       if (m.needs_payment && !selPayment) { alertMsg("Выберите способ оплаты."); return; }
       const items = Object.values(cart).map(it => ({ id: it.product_id, qty: it.qty, flavor: it.flavor || undefined }));
       if (!items.length) return;
@@ -2623,11 +2660,13 @@
         const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
           initData, city, items, use_coins: useCoins,
           delivery_method_id: m.id, delivery_address: selAddress.trim(),
+          pickup_point_id: selPoint || undefined,
           comment: selComment.trim(), phone: selPhone.trim(),
           payment_method: m.needs_payment ? selPayment : "none" }) });
         const d = await r.json();
         if (!d.ok) {
-          const errs = { auth: "Откройте магазин из бота.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек.", bad_delivery: "Выберите способ получения.", no_address: "Введите адрес.", bad_payment: "Выберите оплату." };
+          const errs = { auth: "Откройте магазин из бота.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек.", bad_delivery: "Выберите способ получения.", no_address: "Введите адрес.", bad_payment: "Выберите оплату.",
+                        no_point: "Выберите точку самовывоза.", bad_point: "Эта точка больше не работает — выберите другую." };
           alertMsg(errs[d.error] || "Ошибка оформления."); return;   // окно оставляем — можно поправить
         }
         closeOverlay($("deliveryOverlay"));
@@ -3669,12 +3708,16 @@
     }
 
     // Управление локациями
-    let deliveryByCity = {};
+    let deliveryByCity = {}, pointsByCity = {};
     async function loadDelivery() {
-      deliveryByCity = {};
+      deliveryByCity = {}; pointsByCity = {};
       await Promise.all(locations.map(async l => {
-        try { const r = await fetch(`/api/delivery?city=${encodeURIComponent(l.name)}`); deliveryByCity[l.name] = await r.json(); }
-        catch (e) { deliveryByCity[l.name] = []; }
+        try {
+          const r = await fetch(`/api/delivery?city=${encodeURIComponent(l.name)}`);
+          const d = await r.json();
+          deliveryByCity[l.name] = Array.isArray(d) ? d : (d.methods || []);
+          pointsByCity[l.name] = Array.isArray(d) ? [] : (d.points || []);
+        } catch (e) { deliveryByCity[l.name] = []; pointsByCity[l.name] = []; }
       }));
     }
     function renderLocList() {
@@ -3683,6 +3726,7 @@
         const methods = deliveryByCity[l.name] || [];
         const mrows = methods.map(m => {
           const info = m.needs_address ? `вводит «${esc(m.address_label)}»`
+                     : m.needs_point ? `выбирает из ${(pointsByCity[l.name] || []).length} точек`
                      : (m.pickup_address ? esc(m.pickup_address) : "самовывоз");
           const tail = `${m.fee ? " · +" + m.fee.toFixed(2) + " Br" : ""} · ${m.needs_payment ? "оплата" : "без оплаты"}`;
           return `<div class="admrow" style="background:var(--surface-2);box-shadow:none">
@@ -3696,7 +3740,8 @@
                 <label>Название</label><input class="dme-name" value="${esc(m.name)}">
                 <div class="chk"><input type="checkbox" class="dme-addr" ${m.needs_address ? "checked" : ""}><label style="margin:0">Спрашивать адрес у клиента</label></div>
                 <label>Метка поля адреса</label><input class="dme-alabel" value="${esc(m.address_label || "")}">
-                <label>Адрес самовывоза (показать клиенту)</label><input class="dme-pickup" value="${esc(m.pickup_address || "")}">
+                <label>Адрес самовывоза (один, показать клиенту)</label><input class="dme-pickup" value="${esc(m.pickup_address || "")}">
+                <div class="chk"><input type="checkbox" class="dme-point" ${m.needs_point ? "checked" : ""}><label style="margin:0">Покупатель выбирает точку из списка</label></div>
                 <label>Доплата за доставку (Br)</label><input class="dme-fee" inputmode="decimal" value="${m.fee || 0}">
                 <div class="chk"><input type="checkbox" class="dme-pay" ${m.needs_payment ? "checked" : ""}><label style="margin:0">Нужна оплата (карта/наличные)</label></div>
                 <button class="bigbtn dm-save" data-mid="${m.id}" style="margin-top:12px">Сохранить</button>
@@ -3709,13 +3754,29 @@
             <button class="iconbtn danger" data-locdel="${l.id}">🗑</button></div>
           <div class="dlabel" style="margin:10px 0 6px">Способы получения</div>
           ${mrows}
+          <div class="dlabel" style="margin:14px 0 6px">Точки самовывоза</div>
+          ${(pointsByCity[l.name] || []).map(p => `
+            <div class="admrow" style="background:var(--surface-2);box-shadow:none">
+              <div class="an">${esc(p.address)}${p.note ? `<small>${esc(p.note)}</small>` : ""}</div>
+              <button class="iconbtn danger" data-ppdel="${p.id}">🗑</button></div>`).join("")
+            || `<p style="color:var(--hint);font-size:13px;margin:4px 0">Точек ещё нет. Пока их нет, способ «выбирает из списка» работать не будет.</p>`}
+          <details class="sect" style="margin:8px 0 0;background:var(--surface-2);box-shadow:none">
+            <summary class="secthead" style="font-size:14px">➕ Добавить точку самовывоза</summary>
+            <div class="sectbody form" data-ptcity="${esc(l.name)}">
+              <label>Адрес</label><input class="pp-addr" placeholder="ул. Немига 5, вход со двора">
+              <label>Примечание (когда работает, ориентир)</label><input class="pp-note" placeholder="10:00–21:00">
+              <button class="bigbtn pp-add" style="margin-top:12px">Добавить точку</button>
+            </div>
+          </details>
+
           <details class="sect" style="margin:8px 0 0;background:var(--surface-2);box-shadow:none">
             <summary class="secthead" style="font-size:14px">➕ Добавить способ</summary>
             <div class="sectbody form" data-city="${esc(l.name)}">
               <label>Название</label><input class="dm-name" placeholder="Самовывоз / Доставка">
               <div class="chk"><input type="checkbox" class="dm-addr"><label style="margin:0">Спрашивать адрес у клиента</label></div>
               <label>Метка поля адреса</label><input class="dm-alabel" placeholder="Адрес / Станция метро">
-              <label>Адрес самовывоза (показать клиенту)</label><input class="dm-pickup" placeholder="ул. …, где отдаёте товар">
+              <label>Адрес самовывоза (один, показать клиенту)</label><input class="dm-pickup" placeholder="ул. …, где отдаёте товар">
+              <div class="chk"><input type="checkbox" class="dm-point"><label style="margin:0">Покупатель выбирает точку из списка</label></div>
               <label>Доплата за доставку (Br)</label><input class="dm-fee" inputmode="decimal" placeholder="0">
               <div class="chk"><input type="checkbox" class="dm-pay" checked><label style="margin:0">Нужна оплата (карта/наличные)</label></div>
               <button class="bigbtn dm-add" style="margin-top:12px">Добавить способ</button>
@@ -3731,6 +3792,31 @@
         if (box) { box.open = !box.open; if (box.open) box.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
       });
       $("locList").querySelectorAll(".dm-save").forEach(b => b.onclick = () => saveDeliveryMethod(b));
+      $("locList").querySelectorAll(".pp-add").forEach(b => b.onclick = () => addPickupPoint(b));
+      $("locList").querySelectorAll("[data-ppdel]").forEach(b => b.onclick = () => delPickupPoint(+b.dataset.ppdel));
+    }
+
+    async function addPickupPoint(btn) {
+      const body = btn.closest(".sectbody");
+      const address = body.querySelector(".pp-addr").value.trim();
+      if (!address) { alertMsg("Введите адрес точки."); return; }
+      const payload = { initData, city: body.dataset.ptcity, address,
+                        note: body.querySelector(".pp-note").value.trim() };
+      btn.disabled = true;
+      try {
+        const r = await fetch("/api/admin/point", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        if ((await r.json()).ok) { await loadDelivery(); renderLocList(); }
+        else alertMsg("Не удалось добавить точку.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { btn.disabled = false; }
+    }
+
+    function delPickupPoint(id) { confirmMsg("Удалить точку самовывоза?", () => doDelPickupPoint(id)); }
+    async function doDelPickupPoint(id) {
+      try {
+        await fetch("/api/admin/point/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
+        await loadDelivery(); renderLocList();
+      } catch (e) { alertMsg("Сеть недоступна."); }
     }
     async function saveDeliveryMethod(btn) {
       const body = btn.closest(".sectbody");
@@ -3740,6 +3826,7 @@
         needs_address: body.querySelector(".dme-addr").checked,
         address_label: body.querySelector(".dme-alabel").value.trim(),
         pickup_address: body.querySelector(".dme-pickup").value.trim(),
+        needs_point: body.querySelector(".dme-point").checked,
         fee: body.querySelector(".dme-fee").value || 0,
         needs_payment: body.querySelector(".dme-pay").checked };
       try {
@@ -3757,6 +3844,7 @@
         needs_address: body.querySelector(".dm-addr").checked,
         address_label: body.querySelector(".dm-alabel").value.trim(),
         pickup_address: body.querySelector(".dm-pickup").value.trim(),
+        needs_point: body.querySelector(".dm-point").checked,
         fee: body.querySelector(".dm-fee").value || 0,
         needs_payment: body.querySelector(".dm-pay").checked };
       try {

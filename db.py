@@ -252,6 +252,19 @@ def init_db():
         )
     """)
 
+    # Точки самовывоза. Их несколько на город, и покупатель выбирает нужную при
+    # заказе. Раньше у способа получения был ОДИН адрес текстом — на город с
+    # несколькими точками это не годилось.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS pickup_points (
+            id      {ID_COL},
+            city    TEXT    NOT NULL,
+            address TEXT    NOT NULL,
+            note    TEXT,
+            sort    INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     # Кто просил сообщить, когда товар снова появится.
     # Пара (товар, покупатель) уникальна: повторное нажатие ничего не портит.
     cur.execute(f"""
@@ -371,6 +384,18 @@ def _ensure_order_columns():
         cur.execute("ALTER TABLE orders ADD COLUMN phone TEXT")
     if "reminded_at" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN reminded_at TEXT")   # для повторного напоминания продавцу
+    conn.commit()
+    conn.close()
+    _ensure_delivery_columns()
+
+
+def _ensure_delivery_columns():
+    """needs_point — покупатель сам выбирает точку самовывоза из списка админа."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "delivery_methods")
+    if "needs_point" not in cols:
+        cur.execute("ALTER TABLE delivery_methods ADD COLUMN needs_point INTEGER DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -519,28 +544,30 @@ def get_delivery_methods(city):
     return rows
 
 
-def add_delivery_method(city, name, needs_address, address_label, pickup_address, fee, needs_payment, sort=0):
+def add_delivery_method(city, name, needs_address, address_label, pickup_address, fee, needs_payment,
+                        sort=0, needs_point=False):
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("""INSERT INTO delivery_methods
-        (city, name, needs_address, address_label, pickup_address, fee, needs_payment, sort)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""),
+        (city, name, needs_address, address_label, pickup_address, fee, needs_payment, sort, needs_point)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""),
         (city, name, 1 if needs_address else 0, address_label or "", pickup_address or "",
-         float(fee or 0), 1 if needs_payment else 0, int(sort)))
+         float(fee or 0), 1 if needs_payment else 0, int(sort), 1 if needs_point else 0))
     conn.commit()
     conn.close()
 
 
-def update_delivery_method(method_id, name, needs_address, address_label, pickup_address, fee, needs_payment):
+def update_delivery_method(method_id, name, needs_address, address_label, pickup_address, fee, needs_payment,
+                           needs_point=False):
     """Обновляет существующий способ получения (правка на месте)."""
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("""UPDATE delivery_methods
         SET name = %s, needs_address = %s, address_label = %s,
-            pickup_address = %s, fee = %s, needs_payment = %s
+            pickup_address = %s, fee = %s, needs_payment = %s, needs_point = %s
         WHERE id = %s"""),
         (name, 1 if needs_address else 0, address_label or "", pickup_address or "",
-         float(fee or 0), 1 if needs_payment else 0, method_id))
+         float(fee or 0), 1 if needs_payment else 0, 1 if needs_point else 0, method_id))
     conn.commit()
     conn.close()
 
@@ -1310,6 +1337,44 @@ def set_setting(key, value):
         )
     else:
         cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+    conn.commit()
+    conn.close()
+
+
+# ---------- Точки самовывоза ----------
+
+def get_pickup_points(city):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM pickup_points WHERE city = %s ORDER BY sort, id"), (city,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def add_pickup_point(city, address, note="", sort=0):
+    conn = connect()
+    cur = conn.cursor()
+    pid = _insert_id(cur, """INSERT INTO pickup_points (city, address, note, sort)
+                             VALUES (%s, %s, %s, %s)""", (city, address, note or "", sort))
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def update_pickup_point(point_id, address, note=""):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE pickup_points SET address = %s, note = %s WHERE id = %s"),
+                (address, note or "", point_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_pickup_point(point_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM pickup_points WHERE id = %s"), (point_id,))
     conn.commit()
     conn.close()
 

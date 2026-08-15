@@ -77,6 +77,13 @@ def as_admin(uid=100, username="seller"):
     server.get_admin = lambda init: {"id": uid, "username": username}
 
 
+def deny_admin():
+    """Снять права админа. Нужен всегда, когда проверяем «постороннего»:
+    as_admin() подменяет проверку НАВСЕГДА, и без этого тест на запрет проходит
+    от имени админа — то есть проверяет не то, что написано."""
+    server.get_admin = lambda init: None
+
+
 class Checker:
     """Копит результаты проверок и печатает их по ходу."""
     def __init__(self, title=""):

@@ -26,14 +26,16 @@ def run():
     n2 = len(client.get("/api/products").get_json())
     c("после записи кэш сброшен: товар виден", n2 == 1)
 
-    # доставка тоже кэшируется и обновляется
-    d0 = len(client.get("/api/delivery?city=minsk").get_json())
+    # доставка тоже кэшируется и обновляется.
+    # Ответ — словарь {methods, points}: точки самовывоза отдаются тем же запросом,
+    # чтобы шторка оформления открывалась за один поход на сервер.
+    d0 = len(client.get("/api/delivery?city=minsk").get_json()["methods"])
     c("доставка: 1 способ", d0 == 1)
     db.add_delivery_method("minsk", "Курьер", True, "Адрес", "", 5, True)   # в обход → кэш держит старое
-    d1 = len(client.get("/api/delivery?city=minsk").get_json())
+    d1 = len(client.get("/api/delivery?city=minsk").get_json()["methods"])
     c("доставка из кэша: всё ещё 1", d1 == 1)
     client.post("/api/admin/delivery", json={"initData": "x", "city": "minsk", "name": "Ещё"})  # сброс
-    d2 = len(client.get("/api/delivery?city=minsk").get_json())
+    d2 = len(client.get("/api/delivery?city=minsk").get_json()["methods"])
     c("после сброса: 3 способа", d2 == 3)
 
     # --- Заказ сбрасывает кэш ТОЧЕЧНО ---
@@ -53,7 +55,7 @@ def run():
 
     prods = {p["name"]: p for p in client.get("/api/products").get_json()}
     c2("каталог обновился: остаток 4 → 3", prods.get("CacheOrderPod", {}).get("stock") == 3)
-    d3 = len(client.get("/api/delivery?city=minsk").get_json())
+    d3 = len(client.get("/api/delivery?city=minsk").get_json()["methods"])
     c2("кэш доставки НЕ сброшен заказом (всё ещё 3)", d3 == 3)
 
     return c.fails + c2.fails
