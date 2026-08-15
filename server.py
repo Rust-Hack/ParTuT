@@ -456,6 +456,24 @@ def api_age():
     return jsonify({"ok": True})
 
 
+@app.route("/api/promo/check", methods=["POST"])
+def api_promo_check():
+    """Проверить код до оформления, чтобы покупатель сразу видел скидку.
+    Заказ всё равно пересчитает всё заново — это только показ."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    try:
+        subtotal = max(0.0, float(data.get("subtotal") or 0))
+    except (TypeError, ValueError):
+        subtotal = 0.0
+    discount, err = db.check_promo(data.get("code"), int(user["id"]), subtotal)
+    if err:
+        return jsonify({"ok": False, "error": err})
+    return jsonify({"ok": True, "discount": discount})
+
+
 @app.route("/api/reminders", methods=["POST"])
 def api_reminders():
     """Включить/выключить напоминания о повторной покупке.
@@ -808,9 +826,20 @@ def api_order():
     # 3. Сколько монет пробуем списать: 1 монета = COIN_VALUE Br, но не больше суммы товаров.
     #    round() убирает float-погрешность (25/0.01 = 2499.999…). Само списание — внутри
     #    транзакции place_order (атомарно, защищает от гонки и двойного клика).
+    # 3а. Промокод. Скидку считает сервер — присланную сумму принимать нельзя.
+    promo_code = (data.get("promo_code") or "").strip().upper()
+    promo_discount = 0.0
+    if promo_code:
+        promo_discount, promo_err = db.check_promo(promo_code, user_id, subtotal)
+        if promo_err:
+            return jsonify({"ok": False, "error": promo_err}), 400
+
     spend = 0
     if data.get("use_coins") and subtotal > 0:
-        spend = min(ctx["coins"], int(round(subtotal / COIN_VALUE)))
+        # Монетами добираем ТО, ЧТО ОСТАЛОСЬ после промокода: иначе две скидки
+        # вместе перекрывают стоимость товаров, и монеты сгорают впустую.
+        left = max(0.0, subtotal - promo_discount)
+        spend = min(ctx["coins"], int(round(left / COIN_VALUE)))
 
     # Карта → клиент грузит чек (статус 'new'). Наличные/такси → сразу продавцу,
     # но статус 'paid' = ЖДЁТ подтверждения продавца, а НЕ авто-подтверждается.
@@ -821,8 +850,11 @@ def api_order():
         user_id, username, city, items, subtotal, fee, COIN_VALUE, spend,
         method["name"], address, payment,
         (data.get("comment") or "").strip(), (data.get("phone") or "").strip(),
-        "new" if needs_receipt else "paid")
+        "new" if needs_receipt else "paid",
+        promo_code, promo_discount)
     discount = round(coins_used * COIN_VALUE, 2)
+    if promo_code and promo_discount:
+        db.consume_promo(promo_code)      # одно использование потрачено
 
     if not needs_receipt:
         # уведомления (продавцам + клиенту) — в фоне, чтобы «Оформить» отвечал сразу
@@ -1773,6 +1805,66 @@ def api_admin_stats_reset():
         return jsonify({"ok": False, "error": "forbidden"}), 403
     res = db.reset_statistics()
     return jsonify({"ok": True, **res})
+
+
+# ------------------- Промокоды (админ) -------------------
+
+@app.route("/api/admin/promos", methods=["POST"])
+def api_admin_promos():
+    """Коды со статистикой: сколько заказов и выручки принёс каждый."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    return jsonify({"ok": True, "promos": db.list_promos()})
+
+
+@app.route("/api/admin/promo", methods=["POST"])
+def api_admin_promo_add():
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    code = (data.get("code") or "").strip().upper()
+    if not code or len(code) > 24 or " " in code:
+        return jsonify({"ok": False, "error": "bad_code"}), 400
+    kind = "fixed" if data.get("kind") == "fixed" else "percent"
+    try:
+        value = float(str(data.get("value") or 0).replace(",", "."))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_value"}), 400
+    if value <= 0 or (kind == "percent" and value > 100):
+        return jsonify({"ok": False, "error": "bad_value"}), 400
+    try:
+        min_total = max(0.0, float(str(data.get("min_total") or 0).replace(",", ".")))
+    except (TypeError, ValueError):
+        min_total = 0.0
+    uses = data.get("uses_left")
+    try:
+        uses_left = int(uses) if str(uses or "").strip() else None   # пусто = без ограничения
+    except (TypeError, ValueError):
+        uses_left = None
+    if db._promo_row(code):
+        return jsonify({"ok": False, "error": "exists"}), 400
+    db.add_promo(code, kind, value, min_total, uses_left, bool(data.get("once_per_user", True)))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/promo/toggle", methods=["POST"])
+def api_admin_promo_toggle():
+    """Выключить код, не удаляя: статистика по нему должна остаться."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    db.set_promo_active((data.get("code") or ""), bool(data.get("active")))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/promo/delete", methods=["POST"])
+def api_admin_promo_delete():
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    db.delete_promo((data.get("code") or ""))
+    return jsonify({"ok": True})
 
 
 # ------------------- Точки самовывоза -------------------

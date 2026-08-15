@@ -252,6 +252,23 @@ def init_db():
         )
     """)
 
+    # Промокоды. Владелец постит в свою группу вручную, и без кодов нельзя
+    # понять, что из этого сработало: код превращает пост в измеримую кампанию.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS promos (
+            id         {ID_COL},
+            code       TEXT    NOT NULL,
+            kind       TEXT    NOT NULL DEFAULT 'percent',   -- percent | fixed
+            value      REAL    NOT NULL DEFAULT 0,
+            min_total  REAL    NOT NULL DEFAULT 0,
+            uses_left  INTEGER,                              -- NULL = без ограничения
+            once_per_user INTEGER NOT NULL DEFAULT 1,
+            active     INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT
+        )
+    """)
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_promos_code ON promos (code)")
+
     # Точки самовывоза. Их несколько на город, и покупатель выбирает нужную при
     # заказе. Раньше у способа получения был ОДИН адрес текстом — на город с
     # несколькими точками это не годилось.
@@ -388,6 +405,10 @@ def _ensure_order_columns():
         cur.execute("ALTER TABLE orders ADD COLUMN phone TEXT")
     if "reminded_at" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN reminded_at TEXT")   # для повторного напоминания продавцу
+    if "promo_code" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN promo_code TEXT")    # каким кодом воспользовались
+    if "promo_discount" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN promo_discount REAL DEFAULT 0")
     conn.commit()
     conn.close()
     _ensure_delivery_columns()
@@ -1363,6 +1384,113 @@ def set_setting(key, value):
     conn.close()
 
 
+# ---------- Промокоды ----------
+
+def _promo_row(code):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM promos WHERE code = %s"), (code.strip().upper(),))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def check_promo(code, user_id, subtotal):
+    """Можно ли применить код. Возвращает (скидка, ошибка).
+
+    Считаем ЗДЕСЬ, а не на клиенте: скидка — это деньги, и присланную сумму
+    принимать на веру нельзя."""
+    code = (code or "").strip().upper()
+    if not code:
+        return 0.0, None
+    p = _promo_row(code)
+    if not p or not p["active"]:
+        return 0.0, "promo_unknown"
+    if p["uses_left"] is not None and p["uses_left"] <= 0:
+        return 0.0, "promo_used_up"
+    if subtotal < (p["min_total"] or 0):
+        return 0.0, "promo_min"
+    if p["once_per_user"]:
+        conn = connect()
+        cur = conn.cursor()
+        cur.execute(_q("SELECT COUNT(*) AS c FROM orders WHERE user_id = %s AND promo_code = %s "
+                       "AND status != 'canceled'"), (user_id, code))
+        used = cur.fetchone()["c"]
+        conn.close()
+        if used:
+            return 0.0, "promo_once"
+
+    if p["kind"] == "fixed":
+        discount = float(p["value"] or 0)
+    else:
+        discount = subtotal * float(p["value"] or 0) / 100.0
+    # Скидка не может превышать стоимость товаров: иначе магазин доплачивает.
+    return round(min(discount, subtotal), 2), None
+
+
+def consume_promo(code):
+    """Списывает одно использование. Без ограничения по числу — ничего не делает."""
+    code = (code or "").strip().upper()
+    if not code:
+        return
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE promos SET uses_left = uses_left - 1 "
+                   "WHERE code = %s AND uses_left IS NOT NULL AND uses_left > 0"), (code,))
+    conn.commit()
+    conn.close()
+
+
+def list_promos():
+    """Коды со статистикой: сколько раз применили и сколько это принесло.
+    Ради этой таблицы промокоды и заводятся — она отвечает, сработал ли пост."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM promos ORDER BY id DESC")
+    promos = [dict(r) for r in cur.fetchall()]
+    cur.execute("""SELECT promo_code AS code, COUNT(*) AS n,
+                          COALESCE(SUM(total), 0) AS revenue,
+                          COALESCE(SUM(promo_discount), 0) AS given
+                   FROM orders WHERE promo_code IS NOT NULL AND status = 'issued'
+                   GROUP BY promo_code""")
+    stats = {r["code"]: dict(r) for r in cur.fetchall()}
+    conn.close()
+    for p in promos:
+        st = stats.get(p["code"], {})
+        p["orders"] = int(st.get("n", 0))
+        p["revenue"] = round(float(st.get("revenue", 0) or 0), 2)
+        p["given"] = round(float(st.get("given", 0) or 0), 2)
+    return promos
+
+
+def add_promo(code, kind, value, min_total=0, uses_left=None, once_per_user=True):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("""INSERT INTO promos (code, kind, value, min_total, uses_left, once_per_user, active, created_at)
+                      VALUES (%s, %s, %s, %s, %s, %s, 1, %s)"""),
+                (code.strip().upper(), kind, float(value or 0), float(min_total or 0),
+                 uses_left, 1 if once_per_user else 0, _now_str()))
+    conn.commit()
+    conn.close()
+
+
+def set_promo_active(code, active):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE promos SET active = %s WHERE code = %s"),
+                (1 if active else 0, code.strip().upper()))
+    conn.commit()
+    conn.close()
+
+
+def delete_promo(code):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM promos WHERE code = %s"), (code.strip().upper(),))
+    conn.commit()
+    conn.close()
+
+
 # ---------- Точки самовывоза ----------
 
 def get_pickup_points(city):
@@ -1896,7 +2024,8 @@ def get_checkout_data(user_id, product_ids, method_id):
 
 
 def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins_to_spend,
-                method_name, address, payment, comment, phone, status):
+                method_name, address, payment, comment, phone, status,
+                promo_code="", promo_discount=0.0):
     """Создаёт заказ целиком за ОДНУ транзакцию: списывает монеты, вставляет заказ
     со всеми полями доставки, снимает остатки со склада (и по вкусам).
 
@@ -1921,18 +2050,23 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
                 coins_used = spend
 
         discount = round(coins_used * coin_value, 2)
-        total = round(subtotal - discount + fee, 2)
+        promo_off = round(float(promo_discount or 0), 2)
+        # Итог не может уйти в минус: скидка монетами плюс промокод могут
+        # перекрыть стоимость товаров, но доставку покупатель платит всё равно.
+        total = round(max(0.0, subtotal - discount - promo_off) + fee, 2)
 
         # 2. Сам заказ — сразу со всеми полями (без последующих UPDATE).
         order_id = _insert_id(
             cur,
             """INSERT INTO orders (user_id, username, city, items, total, pickup_time, status,
                                    created_at, coins_used, delivery_method, delivery_address,
-                                   delivery_fee, payment_method, comment, phone)
-               VALUES (%s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                   delivery_fee, payment_method, comment, phone,
+                                   promo_code, promo_discount)
+               VALUES (%s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (user_id, username, city, json.dumps(items, ensure_ascii=False), total, status,
              created_at, coins_used, method_name, address, float(fee or 0), payment,
-             (comment or "").strip()[:500], (phone or "").strip()[:40]),
+             (comment or "").strip()[:500], (phone or "").strip()[:40],
+             (promo_code or "").strip().upper() or None, promo_off),
         )
 
         # 3. Склад: у товаров со вкусами списываем вариант, у обычных — сам товар.

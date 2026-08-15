@@ -845,7 +845,30 @@
     <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
     <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
+    <div class="prow" id="mPromos"><span>🎟 Промокоды</span><span>›</span></div>
     <div class="prow" id="mStaff" style="display:none"><span>🔑 Доступ продавцов</span><span>›</span></div>
+  </div>
+
+  <!-- Раздел: промокоды -->
+  <div class="view" id="promosView">
+    <div class="viewhead"><h2>🎟 Промокоды</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="promosClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <label>Код</label>
+      <input id="pmCode" placeholder="AVGUST10" style="text-transform:uppercase">
+      <label>Скидка</label>
+      <div class="rowf">
+        <select id="pmKind"><option value="percent">Процент, %</option><option value="fixed">Сумма, Br</option></select>
+        <input id="pmValue" inputmode="decimal" placeholder="10">
+      </div>
+      <label>Действует от суммы заказа (Br)</label>
+      <input id="pmMin" inputmode="decimal" placeholder="0">
+      <label>Сколько раз можно применить</label>
+      <input id="pmUses" inputmode="numeric" placeholder="пусто — без ограничения">
+      <div class="chk"><input type="checkbox" id="pmOnce" checked><label style="margin:0">Один раз на покупателя</label></div>
+      <button class="bigbtn" id="pmAdd" style="margin-top:14px">Создать код</button>
+    </div>
+    <div id="promoList"></div>
   </div>
 
   <!-- Раздел: кому открыт доступ (супер-админ) -->
@@ -2500,6 +2523,7 @@
 
     // ----- Оформление: способ получения + оплата -----
     let deliveryMethods = [], selMethod = null, selPayment = null, selAddress = "", selComment = "", selPhone = "";
+    let selPromo = "", promoOff = 0, promoErr = "";   // введённый код, скидка по нему, текст ошибки
     const deliveryCache = {};        // city -> способы получения (чтобы оформление открывалось мгновенно)
     const pointsCache = {};          // city -> точки самовывоза этого города
     const freeFromCache = {};        // city -> с какой суммы доставка бесплатна (0 = порога нет)
@@ -2532,6 +2556,7 @@
       // набирать один и тот же номер при каждой покупке — лишнее трение ровно
       // там, где мы его и возвращаем напоминанием.
       selMethod = null; selPayment = null; selAddress = ""; selComment = ""; selPoint = null;
+      selPromo = ""; promoOff = 0; promoErr = "";
       selPhone = (me && me.prefill && me.prefill.phone) || "";
       $("deliveryOverlay").classList.add("show");
       if (deliveryCache[city]) {
@@ -2575,6 +2600,29 @@
       b.textContent = blocker || `Оформить · ${delTotal.toFixed(2)} Br`;
     }
 
+    const PROMO_ERRORS = {
+      promo_unknown: "Такого кода нет — проверьте написание.",
+      promo_used_up: "Код уже разобрали.",
+      promo_min: "Код действует от большей суммы заказа.",
+      promo_once: "Этим кодом вы уже пользовались.",
+    };
+
+    async function applyPromo() {
+      const код = ($("delPromo") ? $("delPromo").value : selPromo).trim().toUpperCase();
+      selPromo = код; promoErr = ""; promoOff = 0;
+      if (!код) { renderDelivery(); return; }
+      const btn = $("promoApply");
+      if (btn) { btn.disabled = true; btn.textContent = "…"; }
+      try {
+        const r = await fetch("/api/promo/check", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData, code: код, subtotal: cartTotal() }) });
+        const d = await r.json();
+        if (d.ok) promoOff = d.discount || 0;
+        else promoErr = PROMO_ERRORS[d.error] || "Код не подошёл.";
+      } catch (e) { promoErr = "Сеть недоступна."; }
+      renderDelivery();
+    }
+
     function renderDelivery() {
       if (!deliveryMethods.length) {
         $("deliveryBody").innerHTML = `<p style="color:var(--hint)">Для «${esc(city)}» способы получения ещё не настроены.</p>`;
@@ -2609,19 +2657,30 @@
         // Телефон и комментарий заполнять необязательно, поэтому они не должны
         // удлинять шторку: прячем под раскрытие, а в заголовке показываем, что
         // уже заполнено — иначе непонятно, есть там что-то или пусто.
-        const сводка = [selPhone && esc(selPhone), selComment && "комментарий"].filter(Boolean).join(" · ");
-        extra += `<details class="sect dopt"${selComment ? " open" : ""}>
+        const сводка = [selPhone && esc(selPhone), selComment && "комментарий",
+                        promoOff > 0 && `−${promoOff.toFixed(2)} Br`].filter(Boolean).join(" · ");
+        extra += `<details class="sect dopt"${(selComment || promoErr || promoOff) ? " open" : ""}>
             <summary>Телефон и комментарий <b>${сводка || "по желанию"}</b></summary>
             <div class="dlabel">Телефон для связи</div>
             <input id="delPhone" class="admsearch" inputmode="tel" placeholder="+375 ..." value="${esc(selPhone)}">
             <div class="dlabel">Комментарий</div>
             <input id="delComment" class="admsearch" placeholder="этаж, подъезд, пожелания…" value="${esc(selComment)}">
+            <div class="dlabel">Промокод</div>
+            <div style="display:flex;gap:8px">
+              <input id="delPromo" class="admsearch" style="margin:0;text-transform:uppercase" placeholder="код из группы" value="${esc(selPromo)}">
+              <button class="pickbtn" id="promoApply" style="flex:0 0 auto">Применить</button>
+            </div>
+            ${promoErr ? `<div class="dnote" style="color:var(--danger);margin-top:6px">${esc(promoErr)}</div>` : ""}
+            ${promoOff > 0 ? `<div class="dnote" style="color:#1f8a5f;margin-top:6px">Код принят — скидка ${promoOff.toFixed(2)} Br</div>` : ""}
           </details>`;
       }
       // Итог с разбивкой (live)
       const subtotal = cartTotal();
       const coinVal = bonus.coin_value || 0.01;
-      const maxCoins = Math.min(bonus.coins || 0, Math.floor(subtotal / coinVal));
+      // Монетами добираем то, что осталось после промокода — так же, как считает
+      // сервер: иначе показанная скидка не совпадёт с фактической.
+      const afterPromo = Math.max(0, subtotal - promoOff);
+      const maxCoins = Math.min(bonus.coins || 0, Math.floor(afterPromo / coinVal));
       const discount = useCoins ? +(maxCoins * coinVal).toFixed(2) : 0;
       let fee = selMethod !== null ? (deliveryMethods[selMethod].fee || 0) : 0;
       // Порог считаем от стоимости ТОВАРОВ, до скидки монетами: иначе покупатель
@@ -2630,9 +2689,10 @@
       const freeFrom = freeFromCache[city] || 0;
       const freeNow = fee > 0 && freeFrom > 0 && subtotal >= freeFrom;
       if (freeNow) fee = 0;
-      const finalTotal = +(subtotal - discount + fee).toFixed(2);
+      const finalTotal = +(Math.max(0, subtotal - promoOff - discount) + fee).toFixed(2);
       const sum = `<div class="osum">
         <div class="osum-r"><span>Товары</span><span>${subtotal.toFixed(2)} Br</span></div>
+        ${promoOff > 0 ? `<div class="osum-r"><span>Промокод ${esc(selPromo)}</span><span style="color:#2e9e4f">−${promoOff.toFixed(2)} Br</span></div>` : ""}
         ${discount > 0 ? `<div class="osum-r"><span>Скидка монетами</span><span style="color:#2e9e4f">−${discount.toFixed(2)} Br</span></div>` : ""}
         ${fee > 0 ? `<div class="osum-r"><span>Доставка</span><span>+${fee.toFixed(2)} Br</span></div>` : ""}
         ${freeNow ? `<div class="osum-r"><span>Доставка</span><span style="color:#1f8a5f">бесплатно</span></div>` : ""}
@@ -2665,6 +2725,8 @@
       // Кнопку обновляем прямо во время ввода, но БЕЗ перерисовки: перерисовка
       // забрала бы фокус из поля на первом же символе.
       if ($("delAddr")) $("delAddr").oninput = () => { selAddress = $("delAddr").value; refreshDelSubmit(); };
+      if ($("delPromo")) $("delPromo").oninput = () => { selPromo = $("delPromo").value.trim().toUpperCase(); };
+      if ($("promoApply")) $("promoApply").onclick = applyPromo;
       if ($("delPhone")) $("delPhone").oninput = () => { selPhone = $("delPhone").value; };
       if ($("delComment")) $("delComment").oninput = () => { selComment = $("delComment").value; };
       if ($("delSubmit")) $("delSubmit").onclick = doSubmitOrder;
@@ -2689,12 +2751,15 @@
           initData, city, items, use_coins: useCoins,
           delivery_method_id: m.id, delivery_address: selAddress.trim(),
           pickup_point_id: selPoint || undefined,
+          promo_code: promoOff > 0 ? selPromo : undefined,
           comment: selComment.trim(), phone: selPhone.trim(),
           payment_method: m.needs_payment ? selPayment : "none" }) });
         const d = await r.json();
         if (!d.ok) {
           const errs = { auth: "Откройте магазин из бота.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек.", bad_delivery: "Выберите способ получения.", no_address: "Введите адрес.", bad_payment: "Выберите оплату.",
-                        no_point: "Выберите точку самовывоза.", bad_point: "Эта точка больше не работает — выберите другую." };
+                        no_point: "Выберите точку самовывоза.", bad_point: "Эта точка больше не работает — выберите другую.",
+                        promo_unknown: "Такого промокода нет.", promo_used_up: "Промокод уже разобрали.",
+                        promo_min: "Промокод действует от большей суммы.", promo_once: "Этим промокодом вы уже пользовались." };
           alertMsg(errs[d.error] || "Ошибка оформления."); return;   // окно оставляем — можно поправить
         }
         closeOverlay($("deliveryOverlay"));
@@ -3372,6 +3437,89 @@
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("setSave").disabled = false; $("setSave").textContent = "Сохранить"; }
     };
+
+    // ----- Промокоды -----
+    // Владелец постит в группу вручную, и без кодов нельзя понять, что сработало.
+    // Поэтому в списке главное не сам код, а сколько заказов и выручки он принёс.
+    $("mPromos").onclick = openPromos;
+    $("promosClose").onclick = () => $("promosView").classList.remove("show");
+
+    async function openPromos() {
+      $("promosView").classList.add("show");
+      $("pmCode").value = ""; $("pmValue").value = ""; $("pmMin").value = ""; $("pmUses").value = "";
+      await loadPromos();
+    }
+
+    async function loadPromos() {
+      $("promoList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      try {
+        const r = await fetch("/api/admin/promos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        renderPromos(d.promos || []);
+      } catch (e) { $("promoList").innerHTML = `<p style="color:var(--hint)">Сеть недоступна.</p>`; }
+    }
+
+    function renderPromos(list) {
+      if (!list.length) { $("promoList").innerHTML = `<div class="card-block"><p style="color:var(--hint);margin:0">Кодов пока нет.</p></div>`; return; }
+      const rows = list.map(p => {
+        const скидка = p.kind === "fixed" ? `−${p.value} Br` : `−${p.value}%`;
+        const условия = [p.min_total ? `от ${p.min_total} Br` : "",
+                         p.uses_left === null ? "без ограничения" : `осталось ${p.uses_left}`,
+                         p.once_per_user ? "1 на человека" : ""].filter(Boolean).join(" · ");
+        const итог = p.orders
+          ? `<b style="color:#1f8a5f">${p.orders} зак. · ${p.revenue} Br</b>`
+          : `<span style="color:var(--hint)">не применяли</span>`;
+        return `<div class="urow"><div style="flex:1">
+            <div><b>${esc(p.code)}</b> <span class="tagbadge">${скидка}</span>${p.active ? "" : ` <span class="tagbadge alt">выключен</span>`}</div>
+            <small style="color:var(--hint)">${условия}</small>
+            <div style="margin-top:4px;font-size:13px">${итог}${p.given ? ` <span style="color:var(--hint)">· скидок на ${p.given} Br</span>` : ""}</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-direction:column">
+            <button class="unrefx" data-pmtog="${esc(p.code)}" data-act="${p.active ? 0 : 1}">${p.active ? "Выключить" : "Включить"}</button>
+            <button class="delx" data-pmdel="${esc(p.code)}">Удалить</button>
+          </div></div>`;
+      }).join("");
+      $("promoList").innerHTML = `<div class="card-block"><label>Коды и что они принесли</label>${rows}</div>`;
+      $("promoList").querySelectorAll("[data-pmtog]").forEach(b => b.onclick = () => togglePromo(b.dataset.pmtog, b.dataset.act === "1"));
+      $("promoList").querySelectorAll("[data-pmdel]").forEach(b => b.onclick = () => delPromo(b.dataset.pmdel));
+    }
+
+    $("pmAdd").onclick = async () => {
+      const code = $("pmCode").value.trim().toUpperCase();
+      if (!code || code.includes(" ")) { alertMsg("Код без пробелов, например AVGUST10."); return; }
+      if (!$("pmValue").value.trim()) { alertMsg("Укажите размер скидки."); return; }
+      const body = { initData, code, kind: $("pmKind").value, value: $("pmValue").value,
+                     min_total: $("pmMin").value, uses_left: $("pmUses").value,
+                     once_per_user: $("pmOnce").checked };
+      $("pmAdd").disabled = true; $("pmAdd").textContent = "Создаю…";
+      try {
+        const r = await fetch("/api/admin/promo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (d.ok) { $("pmCode").value = ""; $("pmValue").value = ""; await loadPromos(); }
+        else alertMsg({ exists: "Такой код уже есть.", bad_code: "Код без пробелов, до 24 символов.",
+                        bad_value: "Скидка должна быть больше нуля (процент — не больше 100)." }[d.error] || "Не удалось создать код.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("pmAdd").disabled = false; $("pmAdd").textContent = "Создать код"; }
+    };
+
+    async function togglePromo(code, active) {
+      try {
+        await fetch("/api/admin/promo/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, code, active }) });
+        await loadPromos();
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+
+    // Удаление уносит и статистику, поэтому предупреждаем: обычно нужен «выключить».
+    function delPromo(code) {
+      confirmMsg(`Удалить код ${code}? Статистика по нему тоже пропадёт — чтобы просто перестать его принимать, достаточно выключить.`,
+                 () => doDelPromo(code));
+    }
+    async function doDelPromo(code) {
+      try {
+        await fetch("/api/admin/promo/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, code }) });
+        await loadPromos();
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
 
     // ----- Доступ продавцов (только супер-админ) -----
     // Раньше админов задавали переменными окружения на хостинге: чтобы добавить
