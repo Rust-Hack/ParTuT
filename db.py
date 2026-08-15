@@ -252,6 +252,24 @@ def init_db():
         )
     """)
 
+    # Движение склада: приход и списание с причиной и автором.
+    # Раньше остаток менялся только продажей и ручной правкой числа — разбитое,
+    # украденное и просроченное учесть было негде, и склад тихо расходился с
+    # реальностью. Автор важен отдельно: доступ теперь есть у продавцов.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS stock_moves (
+            id         {ID_COL},
+            product_id INTEGER NOT NULL,
+            flavor     TEXT,
+            delta      INTEGER NOT NULL,
+            reason     TEXT    NOT NULL,
+            cost       REAL    NOT NULL DEFAULT 0,
+            note       TEXT,
+            admin_id   BIGINT,
+            created_at TEXT
+        )
+    """)
+
     # Промокоды. Владелец постит в свою группу вручную, и без кодов нельзя
     # понять, что из этого сработало: код превращает пост в измеримую кампанию.
     cur.execute(f"""
@@ -1388,6 +1406,96 @@ def set_setting(key, value):
         cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
     conn.close()
+
+
+# ---------- Движение склада ----------
+
+# Причины движения. Приход прибавляет, остальное списывает.
+STOCK_REASONS = {
+    "in":      "Приход",
+    "broken":  "Брак или бой",
+    "expired": "Просрочка",
+    "lost":    "Недостача",
+    "gift":    "Подарок или образец",
+    "fix":     "Пересчёт",
+}
+
+
+def move_stock(product_id, delta, reason, flavor=None, cost=0, note="", admin_id=None):
+    """Меняет остаток и ЗАПИСЫВАЕТ движение. Возвращает новый остаток.
+
+    Всё одной транзакцией: остаток и запись о нём не должны разъезжаться —
+    иначе появится изменение, которого «никто не делал».
+    """
+    # При списании цену никто не вводит — берём закупочную товара на этот момент,
+    # иначе потеря посчитается нулём и убыток окажется невидимым.
+    if delta < 0 and not cost:
+        p0 = get_product(product_id)
+        cost = float(p0["cost"] or 0) if p0 else 0
+
+    conn = connect()
+    cur = conn.cursor()
+    try:
+        if flavor:
+            cur.execute(_q(f"UPDATE product_variants SET stock = {GREATEST}(0, stock + %s) "
+                           "WHERE product_id = %s AND flavor = %s"), (delta, product_id, flavor))
+        else:
+            cur.execute(_q(f"UPDATE products SET stock = {GREATEST}(0, stock + %s) WHERE id = %s"),
+                        (delta, product_id))
+        # Приход по новой цене обновляет закупочную: считать прибыль по старой
+        # цене после подорожания — значит обманывать себя.
+        if reason == "in" and cost and cost > 0:
+            cur.execute(_q("UPDATE products SET cost = %s WHERE id = %s"), (float(cost), product_id))
+        cur.execute(_q("""INSERT INTO stock_moves (product_id, flavor, delta, reason, cost, note, admin_id, created_at)
+                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""),
+                    (product_id, flavor or None, int(delta), reason, float(cost or 0),
+                     (note or "").strip()[:120], admin_id, _now_str()))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    if flavor:
+        recalc_product_stock(product_id)
+    p = get_product(product_id)
+    return int(p["stock"]) if p else 0
+
+
+def get_stock_moves(product_id=None, limit=100):
+    conn = connect()
+    cur = conn.cursor()
+    if product_id:
+        cur.execute(_q("""SELECT m.*, p.name AS product FROM stock_moves m
+                          LEFT JOIN products p ON p.id = m.product_id
+                          WHERE m.product_id = %s ORDER BY m.id DESC LIMIT %s"""), (product_id, limit))
+    else:
+        cur.execute(_q("""SELECT m.*, p.name AS product FROM stock_moves m
+                          LEFT JOIN products p ON p.id = m.product_id
+                          ORDER BY m.id DESC LIMIT %s"""), (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def stock_losses(days=None):
+    """Во сколько обошлись списания за период — по закупочной цене на момент
+    движения. Это настоящие деньги, и владелец должен их видеть."""
+    conn = connect()
+    cur = conn.cursor()
+    cutoff = ((datetime.datetime.now() - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00")
+              if days else None)
+    sql = """SELECT reason, SUM(-delta) AS qty,
+                    SUM(-delta * COALESCE(NULLIF(cost, 0), 0)) AS money
+             FROM stock_moves WHERE delta < 0"""
+    if cutoff:
+        cur.execute(_q(sql + " AND created_at >= %s GROUP BY reason"), (cutoff,))
+    else:
+        cur.execute(sql + " GROUP BY reason")
+    rows = [{"reason": r["reason"], "qty": int(r["qty"] or 0), "money": round(float(r["money"] or 0), 2)}
+            for r in cur.fetchall()]
+    conn.close()
+    return sorted(rows, key=lambda r: -r["money"])
 
 
 # ---------- Промокоды ----------

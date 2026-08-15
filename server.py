@@ -258,6 +258,7 @@ _WRITE_PATHS = {
     "/api/admin/location": (), "/api/admin/location/delete": (),
     "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),
     "/api/admin/point": (), "/api/admin/point/update": (), "/api/admin/point/delete": (),
+    "/api/admin/stock/move": _STOCK_KEYS,
     "/api/admin/brand": (), "/api/admin/brand/delete": (),
     "/api/admin/settings/update": (), "/api/admin/stats/reset": (),
     "/api/order": _STOCK_KEYS,                  # меняют остаток на складе
@@ -1867,6 +1868,11 @@ def api_admin_stats():
     stats["products_total"] = len(products)
     stats["games"] = db.get_game_stats()
     stats["period"] = period
+    try:
+        stats["losses"] = db.stock_losses(days)      # во сколько обошлись списания
+    except Exception as e:
+        stats["losses"] = []
+        print(f"Не удалось посчитать списания: {e}")
     _cache_set(f"stats:{period}", stats, 60)
     return jsonify({"ok": True, "stats": stats})
 
@@ -1880,6 +1886,55 @@ def api_admin_stats_reset():
         return jsonify({"ok": False, "error": "forbidden"}), 403
     res = db.reset_statistics()
     return jsonify({"ok": True, **res})
+
+
+# ------------------- Движение склада -------------------
+
+@app.route("/api/admin/stock/move", methods=["POST"])
+def api_admin_stock_move():
+    """Приход или списание с причиной. Остаток меняется только так — тогда на
+    любой вопрос «куда делось» есть ответ с именем и датой."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        pid = int(data.get("id"))
+        qty = int(data.get("qty"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_number"}), 400
+    if qty <= 0:
+        return jsonify({"ok": False, "error": "bad_number"}), 400
+    reason = data.get("reason")
+    if reason not in db.STOCK_REASONS:
+        return jsonify({"ok": False, "error": "bad_reason"}), 400
+    if not db.get_product(pid):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+
+    # Приход прибавляет, всё остальное списывает. Знак задаёт причина, а не
+    # клиент: иначе «списание» могло бы прийти с плюсом.
+    delta = qty if reason == "in" else -qty
+    try:
+        cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
+    except (TypeError, ValueError):
+        cost = 0.0
+    flavor = (data.get("flavor") or "").strip() or None
+    stock = db.move_stock(pid, delta, reason, flavor=flavor, cost=cost,
+                          note=data.get("note"), admin_id=int(admin["id"]))
+    return jsonify({"ok": True, "stock": stock})
+
+
+@app.route("/api/admin/stock/moves", methods=["POST"])
+def api_admin_stock_moves():
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        pid = int(data.get("id")) if data.get("id") else None
+    except (TypeError, ValueError):
+        pid = None
+    moves = db.get_stock_moves(pid, 60)
+    return jsonify({"ok": True, "moves": moves, "reasons": db.STOCK_REASONS})
 
 
 # ------------------- Промокоды (админ) -------------------

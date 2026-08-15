@@ -291,6 +291,10 @@
       background-image: var(--wall-img); background-size: 118px 58px; background-attachment: fixed;
       z-index: 50; display: none; flex-direction: column; padding: calc(26px + var(--safe-top)) 20px calc(24px + env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
     .view.show { display: flex; }
+    /* Экран, который открывается ПОВЕРХ другого экрана. Порядок в разметке для
+       этого ненадёжен: достаточно вставить новый блок выше — и он молча уедет
+       под соседа, оставшись невидимым. */
+    .view.ontop { z-index: 55; }
     .view .icon { font-size: 54px; text-align: center; margin: 10px 0; }
     .view h2 { font-size: 21px; margin: 0 0 8px; text-align: center; }
     .view p { color: var(--hint); font-size: 14px; line-height: 1.5; text-align: center; margin: 4px 0; }
@@ -870,6 +874,39 @@
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
     <div class="prow" id="mPromos"><span>🎟 Промокоды</span><span>›</span></div>
     <div class="prow" id="mStaff" style="display:none"><span>🔑 Доступ продавцов</span><span>›</span></div>
+  </div>
+
+  <!-- Склад: приход и списание -->
+  <div class="view ontop" id="stockView">
+    <div class="viewhead"><h2>📦 Склад</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="stockClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <div id="stockName" style="font-weight:800;font-size:16px;margin-bottom:2px"></div>
+      <div id="stockNow" style="color:var(--hint);font-size:13px"></div>
+
+      <label style="margin-top:16px">Что произошло</label>
+      <div id="stockReasons"></div>
+
+      <div id="stockFlavorWrap" style="display:none">
+        <label>Вкус</label>
+        <select id="stockFlavor"></select>
+      </div>
+
+      <label>Сколько штук</label>
+      <input id="stockQty" inputmode="numeric" placeholder="1">
+
+      <div id="stockCostWrap">
+        <label>Закупочная цена за штуку (Br)</label>
+        <input id="stockCost" inputmode="decimal" placeholder="оставьте пустым, если не изменилась">
+        <div class="dnote" style="margin:6px 0 0">Если поставщик поднял цену — впишите новую, она обновит закупку товара.</div>
+      </div>
+
+      <label>Примечание</label>
+      <input id="stockNote" placeholder="номер накладной, кто пересчитывал…">
+
+      <button class="bigbtn" id="stockSave" style="margin-top:16px">Записать</button>
+    </div>
+    <div id="stockLog"></div>
   </div>
 
   <!-- Настройки покупателя -->
@@ -3212,6 +3249,9 @@
           <div class="statcard"><div class="statnum">${money(s.avg_check)}</div><div class="statlab">Средний чек</div>${delta(s.avg_check, "avg_check")}</div>
           <div class="statcard"><div class="statnum">${s.buyers_period}</div><div class="statlab">Покупателей · ${pl}</div>${delta(s.buyers_period, "buyers")}</div>
         </div>
+        ${(s.losses || []).length ? `<div class="stathead">📉 Списано <span class="stathint">${pl}</span></div><div class="statlist">${
+            s.losses.map(l => `<div class="statrow"><span>${esc({broken:"Брак или бой",expired:"Просрочка",lost:"Недостача",gift:"Подарок или образец",fix:"Пересчёт"}[l.reason] || l.reason)}</span><b style="color:var(--danger)">${l.qty} шт${l.money ? ` · ${money(l.money)}` : ""}</b></div>`).join("")
+          }</div>` : ""}
         ${s.revenue_unknown_cost ? `<div class="dnote" style="margin:-6px 0 14px">⚠️ У части товаров не заполнена закупочная цена — выручка на ${money(s.revenue_unknown_cost)} в прибыль не попала. Проставьте закупку в карточках товаров, чтобы цифра стала полной.</div>` : ""}
         ${dayChart(s.daily || [], "revenue", "Выручка по дням", moneyShort)}
         ${dayChart(s.daily || [], "orders", "Заказы по дням", (v) => `${v} шт`)}
@@ -3542,6 +3582,85 @@
         alertMsg(d.ok ? "Сохранено ✅" : "Не удалось сохранить.");
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("setSave").disabled = false; $("setSave").textContent = "Сохранить"; }
+    };
+
+    // ----- Склад: приход и списание -----
+    // Раньше остаток правили числом в редакторе, и на вопрос «куда делось» ответа
+    // не было. Теперь каждое изменение — с причиной, автором и датой.
+    const STOCK_REASONS = { in: "Приход", broken: "Брак или бой", expired: "Просрочка",
+                            lost: "Недостача", gift: "Подарок или образец", fix: "Пересчёт" };
+    let stockProduct = null, stockReason = "in";
+    $("stockClose").onclick = () => $("stockView").classList.remove("show");
+
+    function openStockMove(id) {
+      stockProduct = allProducts.find(p => p.id === id);
+      if (!stockProduct) return;
+      stockReason = "in";
+      $("stockView").classList.add("show");
+      $("stockName").textContent = stockProduct.name;
+      $("stockNow").textContent = `${stockProduct.city} · сейчас ${stockProduct.stock} шт`;
+      $("stockQty").value = ""; $("stockCost").value = ""; $("stockNote").value = "";
+
+      // У товара со вкусами склад ведётся по каждому вкусу отдельно.
+      const вкусы = stockProduct.variants || [];
+      $("stockFlavorWrap").style.display = вкусы.length ? "" : "none";
+      $("stockFlavor").innerHTML = вкусы.map(v => `<option value="${esc(v.flavor)}">${esc(v.flavor)} · ${v.stock} шт</option>`).join("");
+
+      renderStockReasons();
+      loadStockLog(id);
+    }
+
+    function renderStockReasons() {
+      $("stockReasons").innerHTML = Object.entries(STOCK_REASONS).map(([k, n]) =>
+        `<button class="opt ${stockReason === k ? 'active' : ''}" data-sr="${k}">${n}</button>`).join("");
+      $("stockReasons").querySelectorAll("[data-sr]").forEach(b => b.onclick = () => {
+        stockReason = b.dataset.sr; renderStockReasons();
+        // Закупочная цена нужна только при приходе — в остальных случаях
+        // спрашивать её незачем.
+        $("stockCostWrap").style.display = stockReason === "in" ? "" : "none";
+      });
+      $("stockCostWrap").style.display = stockReason === "in" ? "" : "none";
+    }
+
+    async function loadStockLog(id) {
+      $("stockLog").innerHTML = "";
+      try {
+        const r = await fetch("/api/admin/stock/moves", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
+        const d = await r.json();
+        const moves = d.moves || [];
+        if (!moves.length) { $("stockLog").innerHTML = `<div class="card-block"><p style="color:var(--hint);margin:0">Движений пока не было.</p></div>`; return; }
+        const rows = moves.map(m => {
+          const знак = m.delta > 0 ? `+${m.delta}` : `${m.delta}`;
+          const цвет = m.delta > 0 ? "#1f8a5f" : "var(--danger)";
+          return `<div class="statrow"><span>${esc(STOCK_REASONS[m.reason] || m.reason)}${m.flavor ? ` · ${esc(m.flavor)}` : ""}
+              <small style="display:block;color:var(--hint)">${esc(m.created_at || "")}${m.note ? ` · ${esc(m.note)}` : ""}</small></span>
+            <b style="color:${цвет}">${знак} шт</b></div>`;
+        }).join("");
+        $("stockLog").innerHTML = `<div class="stathead">История движений</div><div class="statlist">${rows}</div>`;
+      } catch (e) { /* журнал не критичен — молчим */ }
+    }
+
+    $("stockSave").onclick = async () => {
+      const qty = parseInt($("stockQty").value, 10);
+      if (!qty || qty <= 0) { alertMsg("Укажите количество."); return; }
+      const body = { initData, id: stockProduct.id, qty, reason: stockReason,
+                     cost: stockReason === "in" ? $("stockCost").value : "",
+                     note: $("stockNote").value,
+                     flavor: (stockProduct.variants || []).length ? $("stockFlavor").value : "" };
+      const btn = $("stockSave");
+      btn.disabled = true; btn.textContent = "Записываю…";
+      try {
+        const r = await fetch("/api/admin/stock/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось записать движение."); return; }
+        await refreshProducts();
+        stockProduct = allProducts.find(p => p.id === stockProduct.id) || stockProduct;
+        $("stockNow").textContent = `${stockProduct.city} · сейчас ${d.stock} шт`;
+        $("stockQty").value = ""; $("stockNote").value = "";
+        await loadStockLog(stockProduct.id);
+        toast(`${STOCK_REASONS[stockReason]}: остаток ${d.stock} шт`);
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { btn.disabled = false; btn.textContent = "Записать"; }
     };
 
     // ----- Промокоды -----
@@ -4282,7 +4401,8 @@
         const out = p.stock <= 0 ? `<span class="tagbadge out">нет</span>` : "";
         const wait = p.waiting ? `<span class="tagbadge warn">ждут ${p.waiting}</span>` : "";
         const marks = (out || wait) ? `<div class="admmarks">${out}${wait}</div>` : "";
-        const tail = `<button class="iconbtn" data-edit="${p.id}">✏️</button>
+        const tail = `<button class="iconbtn" data-move="${p.id}" title="Приход или списание">📦</button>
+            <button class="iconbtn" data-edit="${p.id}">✏️</button>
             <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
         if (hasVariants(p)) {
           // товар-модель: цену/вкусы/остаток правим в редакторе (✏️)
@@ -4294,6 +4414,7 @@
           <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small>${marks}</div>
           ${tail}`;
       }).join("");
+      $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
       $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
       $("adminList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => delAdminRow(+b.dataset.del));
     }
