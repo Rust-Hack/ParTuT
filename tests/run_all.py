@@ -17,9 +17,10 @@ import test_stock_alerts
 import test_backup
 import test_errors
 import test_repeat_reminder
+import test_prefill
 
 MODULES = [test_order_lifecycle, test_messaging, test_stats, test_delivery,
-           test_gzip, test_cache, test_order_submit, test_photos, test_staff, test_stock_alerts, test_backup, test_errors, test_repeat_reminder]
+           test_gzip, test_cache, test_order_submit, test_photos, test_staff, test_stock_alerts, test_backup, test_errors, test_repeat_reminder, test_prefill]
 
 
 def main():

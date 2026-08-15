@@ -314,6 +314,16 @@
     .admsearch { width: 100%; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 15px; margin-bottom: 10px; }
     /* Сворачиваемые секции (аккордеон) */
     .sect { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); margin-bottom: 16px; }
+    /* Необязательное в оформлении: свёрнуто, но видно, что уже заполнено.
+       Своей карточки не имеет — шторка заказа сама по себе поверхность. */
+    .dopt { background: none; box-shadow: none; margin: 14px 0 0; border-top: 1px solid var(--line); }
+    .dopt > summary { list-style: none; cursor: pointer; padding: 13px 2px 0; font-size: 14px;
+      color: var(--hint); display: flex; align-items: center; justify-content: space-between; gap: 10px; user-select: none; }
+    .dopt > summary::-webkit-details-marker { display: none; }
+    .dopt > summary b { color: var(--text); font-weight: 600; text-align: right;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dopt > summary::after { content: "▼"; color: var(--hint); font-size: 11px; flex: 0 0 auto; transition: transform .2s; }
+    .dopt[open] > summary::after { transform: rotate(180deg); }
     .secthead { list-style: none; cursor: pointer; padding: 15px 16px; font-weight: 800; font-size: 15px;
       display: flex; align-items: center; justify-content: space-between; user-select: none; }
     .secthead::-webkit-details-marker { display: none; }
@@ -2486,7 +2496,11 @@
     $("deliveryClose").onclick = () => closeOverlay($("deliveryOverlay"));
     async function openDelivery() {
       if (!Object.keys(cart).length) return;
-      selMethod = null; selPayment = null; selAddress = ""; selComment = ""; selPhone = "";
+      // Телефон помним из прошлых заказов: заставлять постоянного покупателя
+      // набирать один и тот же номер при каждой покупке — лишнее трение ровно
+      // там, где мы его и возвращаем напоминанием.
+      selMethod = null; selPayment = null; selAddress = ""; selComment = "";
+      selPhone = (me && me.prefill && me.prefill.phone) || "";
       $("deliveryOverlay").classList.add("show");
       if (deliveryCache[city]) {
         deliveryMethods = deliveryCache[city];   // мгновенно из кэша
@@ -2546,9 +2560,17 @@
         } else {
           extra += `<div class="dnote">Оплата не нужна — продавец свяжется с вами.</div>`;
         }
-        // Телефон + комментарий (по желанию)
-        extra += `<div class="dlabel">Телефон для связи (по желанию)</div><input id="delPhone" class="admsearch" inputmode="tel" placeholder="+375 ..." value="${esc(selPhone)}">`;
-        extra += `<div class="dlabel">Комментарий (по желанию)</div><input id="delComment" class="admsearch" placeholder="этаж, подъезд, пожелания…" value="${esc(selComment)}">`;
+        // Телефон и комментарий заполнять необязательно, поэтому они не должны
+        // удлинять шторку: прячем под раскрытие, а в заголовке показываем, что
+        // уже заполнено — иначе непонятно, есть там что-то или пусто.
+        const сводка = [selPhone && esc(selPhone), selComment && "комментарий"].filter(Boolean).join(" · ");
+        extra += `<details class="sect dopt"${selComment ? " open" : ""}>
+            <summary>Телефон и комментарий <b>${сводка || "по желанию"}</b></summary>
+            <div class="dlabel">Телефон для связи</div>
+            <input id="delPhone" class="admsearch" inputmode="tel" placeholder="+375 ..." value="${esc(selPhone)}">
+            <div class="dlabel">Комментарий</div>
+            <input id="delComment" class="admsearch" placeholder="этаж, подъезд, пожелания…" value="${esc(selComment)}">
+          </details>`;
       }
       // Итог с разбивкой (live)
       const subtotal = cartTotal();
@@ -2567,7 +2589,14 @@
       const btn = `<button class="bigbtn" id="delSubmit" style="margin-top:14px"></button>`;
       $("deliveryBody").innerHTML = `<div class="dlabel">Способ получения</div>${methodBtns}${extra}${sum}${btn}`;
       refreshDelSubmit();
-      $("deliveryBody").querySelectorAll("[data-dm]").forEach(b => b.onclick = () => { selMethod = +b.dataset.dm; selPayment = null; selAddress = ""; renderDelivery(); });
+      $("deliveryBody").querySelectorAll("[data-dm]").forEach(b => b.onclick = () => {
+        selMethod = +b.dataset.dm; selPayment = null;
+        // Адрес помним ОТДЕЛЬНО по способу: у метро это станция, у курьера —
+        // улица, и подставлять одно вместо другого нельзя.
+        const имя = (deliveryMethods[selMethod] || {}).name || "";
+        selAddress = ((me && me.prefill && me.prefill.addresses) || {})[имя] || "";
+        renderDelivery();
+      });
       $("deliveryBody").querySelectorAll("[data-pm]").forEach(b => b.onclick = () => { selPayment = b.dataset.pm; renderDelivery(); });
       // Кнопку обновляем прямо во время ввода, но БЕЗ перерисовки: перерисовка
       // забрала бы фокус из поля на первом же символе.

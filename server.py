@@ -435,9 +435,14 @@ def api_me():
     except Exception as e:
         reminders_on = True
         print(f"Не удалось прочитать настройку напоминаний {uid}: {e}")
+    try:
+        prefill = db.delivery_prefill(uid)   # адрес и телефон из прошлых заказов
+    except Exception as e:
+        prefill = {"phone": "", "addresses": {}}
+        print(f"Не удалось собрать данные для подстановки {uid}: {e}")
     return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid),
                     "is_super": is_super_admin(uid), "alerts": alerts,
-                    "reminders_on": reminders_on})
+                    "reminders_on": reminders_on, "prefill": prefill})
 
 
 @app.route("/api/age", methods=["POST"])

@@ -1314,6 +1314,35 @@ def set_setting(key, value):
     conn.close()
 
 
+# ---------- Что подставить в оформление ----------
+
+def delivery_prefill(user_id, limit=20):
+    """Телефон и адреса из прошлых заказов этого покупателя.
+
+    Новой таблицы не заводим — всё уже лежит в orders. Адрес помним ОТДЕЛЬНО
+    для каждого способа получения: у «Доставки по метро» это станция, у курьера
+    — улица с домом, и подставлять одно вместо другого нельзя.
+    """
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("""SELECT delivery_method, delivery_address, phone
+                      FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT %s"""),
+                (user_id, limit))
+    rows = cur.fetchall()
+    conn.close()
+
+    phone = ""
+    addresses = {}
+    for r in rows:                       # строки идут от новых к старым
+        if not phone and (r["phone"] or "").strip():
+            phone = r["phone"].strip()
+        method = (r["delivery_method"] or "").strip()
+        addr = (r["delivery_address"] or "").strip()
+        if method and addr and method not in addresses:
+            addresses[method] = addr
+    return {"phone": phone, "addresses": addresses}
+
+
 # ---------- Напоминание о повторной покупке ----------
 
 def customers_to_remind(days, limit, cooldown_days=None):
