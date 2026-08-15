@@ -380,6 +380,12 @@ def _ensure_user_columns():
         cur.execute("ALTER TABLE users ADD COLUMN no_reminders INTEGER DEFAULT 0")  # отписался от напоминаний
     if "reminded_at" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN reminded_at TEXT")  # когда напоминали в последний раз
+    if "phone" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN phone TEXT")        # телефон из настроек покупателя
+    if "pickup_point_id" not in cols:
+        # Своя точка самовывоза «по умолчанию»: покупатель выбирает её один раз
+        # в профиле, а в заказе может поменять.
+        cur.execute("ALTER TABLE users ADD COLUMN pickup_point_id INTEGER")
     conn.commit()
     conn.close()
 
@@ -1502,6 +1508,45 @@ def get_pickup_points(city):
     return rows
 
 
+def get_user_phone(user_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT phone FROM users WHERE user_id = %s"), (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return (row["phone"] or "") if row else ""
+
+
+def set_user_phone(user_id, phone):
+    ensure_user(user_id)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET phone = %s WHERE user_id = %s"),
+                ((phone or "").strip()[:40], user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_user_point(user_id):
+    """Своя точка самовывоза покупателя (или None)."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT pickup_point_id FROM users WHERE user_id = %s"), (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return int(row["pickup_point_id"]) if row and row["pickup_point_id"] else None
+
+
+def set_user_point(user_id, point_id):
+    ensure_user(user_id)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET pickup_point_id = %s WHERE user_id = %s"),
+                (int(point_id) if point_id else None, user_id))
+    conn.commit()
+    conn.close()
+
+
 def add_pickup_point(city, address, note="", sort=0):
     conn = connect()
     cur = conn.cursor()
@@ -1546,7 +1591,9 @@ def delivery_prefill(user_id, limit=20):
     rows = cur.fetchall()
     conn.close()
 
-    phone = ""
+    # Телефон из настроек важнее: покупатель сам его туда вписал, а в старом
+    # заказе мог быть чужой или устаревший номер.
+    phone = get_user_phone(user_id)
     addresses = {}
     for r in rows:                       # строки идут от новых к старым
         if not phone and (r["phone"] or "").strip():
@@ -2024,14 +2071,21 @@ def get_checkout_data(user_id, product_ids, method_id):
             variants.setdefault(int(v["product_id"]), {})[v["flavor"]] = v["stock"]
 
     method = None
+    points = []
     if method_id is not None:
         cur.execute(_q("SELECT * FROM delivery_methods WHERE id = %s"), (method_id,))
         row = cur.fetchone()
         method = dict(row) if row else None
+        # Точки самовывоза берём ТУТ ЖЕ: отдельный запрос на оформлении — это
+        # ещё одно подключение к базе на самом горячем пути.
+        if method and not method["needs_address"]:
+            cur.execute(_q("SELECT * FROM pickup_points WHERE city = %s ORDER BY sort, id"),
+                        (method["city"],))
+            points = [dict(r) for r in cur.fetchall()]
 
     conn.close()
     return {"age_ok": age_ok, "coins": coins, "products": products,
-            "variants": variants, "method": method}
+            "variants": variants, "method": method, "points": points}
 
 
 def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins_to_spend,

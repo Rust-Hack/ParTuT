@@ -98,3 +98,61 @@ def run():
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)
+
+
+def run_settings():
+    """Настройки покупателя: своя точка, телефон, напоминания."""
+    from _common import as_user as _as_user
+    c = Checker("Настройки покупателя")
+    _clean()
+    as_admin()
+    client.post("/api/admin/point", json={"initData": "x", "city": "Минск", "address": "ул. Немига 5"})
+    client.post("/api/admin/point", json={"initData": "x", "city": "Минск", "address": "пр. Победителей 9"})
+    точки = db.get_pickup_points("Минск")
+
+    _as_user(BUYER); db.ensure_user(BUYER)
+    r = client.post("/api/my-settings", json={"initData": "x", "point_id": точки[1]["id"],
+                                              "phone": "+375 29 555-11-22", "reminders_on": False})
+    d = r.get_json()
+    c("настройки сохранены", d.get("ok"))
+    c("точка запомнена", d["point_id"] == точки[1]["id"])
+    c("телефон запомнен", d["phone"] == "+375 29 555-11-22")
+    c("напоминания выключены", d["reminders_on"] is False)
+
+    me = client.post("/api/me", json={"initData": "x"}).get_json()
+    c("приложение видит свою точку", me["my_point"] == точки[1]["id"])
+    c("телефон из настроек идёт в подстановку", me["prefill"]["phone"] == "+375 29 555-11-22")
+
+    # Телефон из настроек важнее старого номера в заказе.
+    oid = db.create_order(BUYER, "b", "Минск", [{"id": 1, "name": "X", "price": 1.0, "qty": 1}], 1.0, "")
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("UPDATE orders SET phone = %s WHERE id = %s"), ("+375 00 000-00-00", oid))
+    conn.commit(); conn.close()
+    c("настройки важнее старого заказа", db.delivery_prefill(BUYER)["phone"] == "+375 29 555-11-22")
+
+    # Несуществующая точка в настройки не попадёт.
+    r = client.post("/api/my-settings", json={"initData": "x", "point_id": 999999})
+    c("выдуманная точка отвергнута", r.status_code == 400)
+    c("прежняя настройка цела", db.get_user_point(BUYER) == точки[1]["id"])
+
+    # «Спрашивать при заказе» — законный вариант.
+    r = client.post("/api/my-settings", json={"initData": "x", "point_id": 0})
+    c("выбор можно снять", (r.get_json() or {}).get("point_id") is None)
+
+    # Точки работают БЕЗ скрытой галочки: раз заведены — их и выбирают.
+    db.add_delivery_method("Минск", "Самовывоз", False, "", "", 0, True, 0)
+    method = db.get_delivery_methods("Минск")[0]
+    c("у способа галочка не включена", not method["needs_point"])
+    pid = db.add_product("Минск", "pods", "БезГалочкиПод", 10.0, 5)
+    db.set_age_ok(BUYER)
+    server._cache_bust()
+    r = client.post("/api/order", json={"initData": "x", "city": "Минск", "delivery_method_id": method["id"],
+                                        "payment_method": "cash", "items": [{"id": pid, "qty": 1}]})
+    c("без выбора точки заказ не проходит", r.status_code == 400 and r.get_json()["error"] == "no_point")
+    r = client.post("/api/order", json={"initData": "x", "city": "Минск", "delivery_method_id": method["id"],
+                                        "payment_method": "cash", "pickup_point_id": точки[0]["id"],
+                                        "items": [{"id": pid, "qty": 1}]})
+    c("с точкой проходит", (r.get_json() or {}).get("ok"))
+
+    _clean()
+    return c.fails

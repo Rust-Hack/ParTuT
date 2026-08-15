@@ -441,9 +441,14 @@ def api_me():
     except Exception as e:
         prefill = {"phone": "", "addresses": {}}
         print(f"Не удалось собрать данные для подстановки {uid}: {e}")
+    try:
+        my_point = db.get_user_point(uid)
+    except Exception:
+        my_point = None
     return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid),
                     "is_super": is_super_admin(uid), "alerts": alerts,
-                    "reminders_on": reminders_on, "prefill": prefill})
+                    "reminders_on": reminders_on, "prefill": prefill,
+                    "my_point": my_point})
 
 
 @app.route("/api/age", methods=["POST"])
@@ -454,6 +459,55 @@ def api_age():
         return jsonify({"ok": False, "error": "auth"}), 401
     db.set_age_ok(int(user["id"]))
     return jsonify({"ok": True})
+
+
+@app.route("/api/my-settings", methods=["POST"])
+def api_my_settings():
+    """Настройки покупателя: своя точка самовывоза, телефон, напоминания.
+
+    Всё это выбирается ОДИН раз и потом подставляется в заказ — но в самом
+    заказе остаётся сменяемым: сегодня человеку удобна одна точка, завтра
+    другая, и лезть ради этого в настройки он не станет."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+
+    if "point_id" in data:
+        raw = data.get("point_id")
+        if raw in (None, "", 0, "0"):
+            db.set_user_point(uid, None)             # «не выбрано» — законный вариант
+        else:
+            try:
+                pid = int(raw)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "bad_id"}), 400
+            # Точка должна существовать: иначе в профиле осядет ссылка в никуда.
+            exists = any(p["id"] == pid for loc in db.get_locations()
+                         for p in db.get_pickup_points(loc["name"]))
+            if not exists:
+                return jsonify({"ok": False, "error": "bad_point"}), 400
+            db.set_user_point(uid, pid)
+
+    if "phone" in data:
+        db.set_user_phone(uid, data.get("phone"))
+    if "reminders_on" in data:
+        db.set_no_reminders(uid, not data.get("reminders_on"))
+
+    return jsonify({"ok": True, "point_id": db.get_user_point(uid),
+                    "phone": db.get_user_phone(uid),
+                    "reminders_on": not db.get_no_reminders(uid)})
+
+
+@app.route("/api/my-points")
+def api_my_points():
+    """Точки самовывоза всех городов — чтобы покупатель выбрал свою в настройках."""
+    out = []
+    for loc in db.get_locations():
+        for p in db.get_pickup_points(loc["name"]):
+            out.append({"id": p["id"], "city": loc["name"], "address": p["address"], "note": p["note"] or ""})
+    return jsonify({"ok": True, "points": out})
 
 
 @app.route("/api/promo/check", methods=["POST"])
@@ -814,12 +868,16 @@ def api_order():
         return jsonify({"ok": False, "error": "no_address"}), 400
     # Точку самовывоза сверяем со списком города, а не берём на слово: иначе в
     # заказ попадёт любой текст, и продавец поедет по несуществующему адресу.
-    if method["needs_point"]:
+    # Условие простое: у способа не спрашивают адрес, а у города есть точки —
+    # значит покупатель обязан выбрать одну из них. Отдельного переключателя
+    # нет намеренно: он бы означал «функция есть, но её надо найти».
+    points = ctx["points"] if not method["needs_address"] else []
+    if points:
         try:
             point_id = int(data.get("pickup_point_id"))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "no_point"}), 400
-        point = next((p for p in db.get_pickup_points(city) if p["id"] == point_id), None)
+        point = next((p for p in points if p["id"] == point_id), None)
         if not point:
             return jsonify({"ok": False, "error": "bad_point"}), 400
         address = point["address"]

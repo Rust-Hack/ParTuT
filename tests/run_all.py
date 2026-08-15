@@ -31,8 +31,9 @@ def main():
     all_fails = []
     for m in MODULES:
         all_fails += m.run()
-        if hasattr(m, 'run_trust'):
-            all_fails += m.run_trust()
+        for extra in ('run_trust', 'run_settings'):
+            if hasattr(m, extra):
+                all_fails += getattr(m, extra)()
     print("\n" + "=" * 40)
     if all_fails:
         print(f"❌ ПАДЕНИЙ: {len(all_fails)}")
