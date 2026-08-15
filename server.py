@@ -512,6 +512,7 @@ def api_delivery():
             "methods": [_delivery_json(m) for m in db.get_delivery_methods(city)],
             "points": [{"id": p["id"], "address": p["address"], "note": p["note"] or ""}
                        for p in db.get_pickup_points(city)],
+            "free_from": _free_delivery_from(),   # с какой суммы доставка бесплатна
         }, 300)
     return jsonify(cached)
 
@@ -682,6 +683,19 @@ def _payment_info():
     return cached
 
 
+def _free_delivery_from():
+    """С какой суммы доставка бесплатна. 0 = порога нет.
+    Кэшируем: читается на каждом оформлении, а меняется раз в год."""
+    cached = _cache_get("settings:free_delivery_from")
+    if cached is None:
+        try:
+            val = float(db.get_setting("free_delivery_from", 0) or 0)
+        except (TypeError, ValueError):
+            val = 0.0
+        cached = _cache_set("settings:free_delivery_from", max(0.0, val), 300)
+    return cached
+
+
 def _confirm_minutes():
     """Через сколько минут продавец подтверждает: из настроек, иначе — из config."""
     cached = _cache_get("settings:confirm_minutes")
@@ -775,6 +789,13 @@ def api_order():
             return jsonify({"ok": False, "error": "bad_point"}), 400
         address = point["address"]
     fee = round(method["fee"] or 0, 2)
+    # Порог бесплатной доставки считаем ЗДЕСЬ, а не верим клиенту: иначе сумму
+    # доставки можно обнулить подделанным запросом. Смотрим на стоимость
+    # товаров ДО скидки монетами — иначе покупатель дотягивается до порога
+    # своими же монетами, а платим за доставку мы.
+    free_from = _free_delivery_from()
+    if fee and free_from and subtotal >= free_from:
+        fee = 0.0
 
     # 2. Способ оплаты. Если способу оплата не нужна (такси) — payment = none.
     if method["needs_payment"]:
@@ -1949,6 +1970,7 @@ def api_admin_settings():
     return jsonify({"ok": True, "settings": {
         "payment_info": _payment_info(),
         "confirm_minutes": _confirm_minutes(),
+        "free_delivery_from": db.get_setting("free_delivery_from", 0),
         "remind_after_days": db.get_setting("remind_after_days", 21),
         "remind_daily_cap": db.get_setting("remind_daily_cap", 20),
     }})
@@ -1965,6 +1987,12 @@ def api_admin_settings_update():
     if "confirm_minutes" in data:
         try:
             db.set_setting("confirm_minutes", max(1, int(data.get("confirm_minutes"))))
+        except (TypeError, ValueError):
+            pass
+    if "free_delivery_from" in data:
+        try:
+            # 0 — законное значение: порог выключен, доставка платная всегда.
+            db.set_setting("free_delivery_from", max(0.0, float(str(data.get("free_delivery_from") or 0).replace(",", "."))))
         except (TypeError, ValueError):
             pass
     if "remind_after_days" in data:
