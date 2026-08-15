@@ -935,6 +935,15 @@
       <textarea id="setPay" rows="4" placeholder="Карта: 0000 0000 0000 0000 (Имя)&#10;или по номеру: +375 ..."></textarea>
       <label>Через сколько минут продавец подтверждает</label>
       <input id="setConfirm" inputmode="numeric" placeholder="15">
+
+      <label>Напоминать о повторной покупке через, дней</label>
+      <input id="setRemindDays" inputmode="numeric" placeholder="21">
+      <div class="dnote" style="margin:6px 0 0">Считается от последнего <b>выданного</b> заказа. У одноразок и жидкостей срок разный — подберите по своим покупателям.</div>
+
+      <label>Не больше напоминаний в сутки</label>
+      <input id="setRemindCap" inputmode="numeric" placeholder="20">
+      <div class="dnote" style="margin:6px 0 0">Потолок бережёт от веерной рассылки: в первый день просроченными окажутся сразу все давние покупатели. <b>0 — выключить напоминания совсем.</b></div>
+
       <button class="bigbtn" id="setSave" style="margin-top:16px">Сохранить</button>
     </div>
   </div>
@@ -1330,6 +1339,7 @@
         me = await r.json();
         if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
         stockAlerts = new Set(me.alerts || []);   // о чём уже просили сообщить
+        remindersOn = me.reminders_on !== false;
         renderNav();
         // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
         if (me.age_ok) loadCatalog().then(prefetchBonuses); else $("ageView").classList.add("show");
@@ -1514,6 +1524,8 @@
     // старых товаров — тогда откатываемся на обычную.
     function thumbOf(p) { return p.thumb_url || p.photo_url; }
 
+    let remindersOn = true;     // напоминания о повторной покупке (приходит в /api/me)
+
     // Подписки «сообщить о поступлении»: приходят в /api/me, пополняются по нажатию.
     let stockAlerts = new Set();
     const waitingFor = (id) => stockAlerts.has(id);
@@ -1686,10 +1698,25 @@
                свете рядом со словом «Тёмная» горело солнышко — значок и подпись
                противоречили друг другу, и было неясно, что показано, а что будет. -->
           <div class="prow"><span>${dark ? "🌙 Тёмная тема" : "☀️ Светлая тема"}</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
+          <!-- Отписка на виду, рядом с остальными настройками: рассылка, от
+               которой нельзя уйти, кончается блокировкой бота. -->
+          <div class="prow"><span>🔔 Напоминать о заказе</span><span class="switch ${remindersOn?'on':''}" id="remindSwitch"></span></div>
           <div class="prow" id="openMyOrders"><span>📦 Мои заказы</span><span>›</span></div>
           <div class="prow" id="openSupport"><span>💬 Написать в поддержку</span><span>›</span></div>
         </div></div>`;
       $("themeSwitch").onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark");
+      $("remindSwitch").onclick = async () => {
+        const next = !remindersOn;
+        remindersOn = next;              // переключаем сразу, ответа не ждём
+        $("remindSwitch").classList.toggle("on", next);
+        try {
+          await fetch("/api/reminders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, on: next }) });
+        } catch (e) {
+          remindersOn = !next;           // не сохранилось — возвращаем как было
+          $("remindSwitch").classList.toggle("on", remindersOn);
+          alertMsg("Сеть недоступна, настройка не сохранилась.");
+        }
+      };
       if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
       $("openMyOrders").onclick = openMyOrders;
       $("openSupport").onclick = () => openSupport();
@@ -3223,11 +3250,17 @@
       try {
         const r = await fetch("/api/admin/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         const d = await r.json();
-        if (d.ok) { $("setPay").value = d.settings.payment_info || ""; $("setConfirm").value = d.settings.confirm_minutes || ""; }
+        if (d.ok) {
+          $("setPay").value = d.settings.payment_info || "";
+          $("setConfirm").value = d.settings.confirm_minutes || "";
+          $("setRemindDays").value = d.settings.remind_after_days ?? "";
+          $("setRemindCap").value = d.settings.remind_daily_cap ?? "";
+        }
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
     $("setSave").onclick = async () => {
-      const body = { initData, payment_info: $("setPay").value, confirm_minutes: $("setConfirm").value };
+      const body = { initData, payment_info: $("setPay").value, confirm_minutes: $("setConfirm").value,
+                     remind_after_days: $("setRemindDays").value, remind_daily_cap: $("setRemindCap").value };
       $("setSave").disabled = true; $("setSave").textContent = "Сохраняю…";
       try {
         const r = await fetch("/api/admin/settings/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

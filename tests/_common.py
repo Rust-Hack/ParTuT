@@ -43,6 +43,21 @@ def _send_photo(cid, *a, **kw):
 
 server.tg.send_message = _send_message
 server.tg.send_photo = _send_photo
+
+
+def _send_document(cid, *a, **kw):
+    SENT.append((cid, kw.get("caption", ""), kw.get("parse_mode")))
+
+
+# У бота СВОЙ экземпляр telebot, и заглушки server.tg его не покрывают: без
+# этого тест, дёрнувший функцию бота, уходит в настоящий Telegram с боевым
+# токеном. Глушим здесь, чтобы об этом нельзя было забыть в отдельном модуле.
+os.environ["WEBAPP_URL"] = ""          # иначе bot при импорте лезет в сеть за меню
+import bot as _bot                     # noqa: E402
+_bot.bot.send_message = _send_message
+_bot.bot.send_photo = _send_photo
+_bot.bot.send_document = _send_document
+_bot.bot.reply_to = lambda msg, text, **kw: SENT.append((getattr(msg, "chat", None), text, None))
 notifications.notify_sellers = lambda *a, **k: None   # не шумим при создании заказа
 
 client = server.app.test_client()

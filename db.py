@@ -342,6 +342,10 @@ def _ensure_user_columns():
         cur.execute("ALTER TABLE users ADD COLUMN ref_earned INTEGER DEFAULT 0")
     if "created_at" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN created_at TEXT")   # дата первого захода (для «новые юзеры»)
+    if "no_reminders" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN no_reminders INTEGER DEFAULT 0")  # отписался от напоминаний
+    if "reminded_at" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN reminded_at TEXT")  # когда напоминали в последний раз
     conn.commit()
     conn.close()
 
@@ -1308,6 +1312,81 @@ def set_setting(key, value):
         cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
     conn.close()
+
+
+# ---------- Напоминание о повторной покупке ----------
+
+def customers_to_remind(days, limit, cooldown_days=None):
+    """Кому пора напомнить: последний ВЫДАННЫЙ заказ старше `days` дней.
+
+    Считаем только выданные: по неоплаченному или отклонённому заказу человек
+    ничего не получил, и напоминать ему «пора пополнить» странно.
+
+    limit — потолок за один прогон. Он важнее, чем кажется: в день запуска
+    просроченными окажутся сразу ВСЕ давние покупатели, и без потолка это
+    превратится в веерную рассылку, за которую Telegram наказывает.
+    """
+    cooldown_days = days if cooldown_days is None else cooldown_days
+    now = datetime.datetime.now()
+    due_before = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+    quiet_before = (now - datetime.timedelta(days=cooldown_days)).strftime("%Y-%m-%d %H:%M")
+
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("""
+        SELECT o.user_id AS user_id, MAX(o.created_at) AS last_order
+        FROM orders o
+        WHERE o.status = 'issued'
+        GROUP BY o.user_id
+        HAVING MAX(o.created_at) < %s
+        ORDER BY MAX(o.created_at) DESC
+        LIMIT %s
+    """), (due_before, limit * 5))          # берём с запасом: часть отсеется ниже
+    rows = [dict(r) for r in cur.fetchall()]
+
+    out = []
+    for r in rows:
+        cur.execute(_q("SELECT no_reminders, reminded_at FROM users WHERE user_id = %s"), (r["user_id"],))
+        u = cur.fetchone()
+        if u and u["no_reminders"]:
+            continue                        # человек попросил не писать
+        if u and u["reminded_at"] and u["reminded_at"] > quiet_before:
+            continue                        # недавно уже напоминали
+        out.append(r)
+        if len(out) >= limit:
+            break
+    conn.close()
+    return out
+
+
+def mark_reminded(user_id):
+    # ensure_user обязателен: покупатель мог оформить заказ, но строки в users
+    # не иметь. Тогда UPDATE не задел бы ничего, отметка не сохранилась бы — и
+    # человек получал бы напоминание КАЖДЫЙ день, пока не заблокирует бота.
+    ensure_user(user_id)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET reminded_at = %s WHERE user_id = %s"), (_now_str(), user_id))
+    conn.commit()
+    conn.close()
+
+
+def set_no_reminders(user_id, value):
+    ensure_user(user_id)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET no_reminders = %s WHERE user_id = %s"), (1 if value else 0, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_no_reminders(user_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT no_reminders FROM users WHERE user_id = %s"), (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row["no_reminders"])
 
 
 # ---------- Резервная копия ----------

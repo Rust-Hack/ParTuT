@@ -430,8 +430,14 @@ def api_me():
     except Exception as e:
         alerts = []
         print(f"Не удалось прочитать подписки покупателя {uid}: {e}")
+    try:
+        reminders_on = not db.get_no_reminders(uid)
+    except Exception as e:
+        reminders_on = True
+        print(f"Не удалось прочитать настройку напоминаний {uid}: {e}")
     return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid),
-                    "is_super": is_super_admin(uid), "alerts": alerts})
+                    "is_super": is_super_admin(uid), "alerts": alerts,
+                    "reminders_on": reminders_on})
 
 
 @app.route("/api/age", methods=["POST"])
@@ -442,6 +448,22 @@ def api_age():
         return jsonify({"ok": False, "error": "auth"}), 401
     db.set_age_ok(int(user["id"]))
     return jsonify({"ok": True})
+
+
+@app.route("/api/reminders", methods=["POST"])
+def api_reminders():
+    """Включить/выключить напоминания о повторной покупке.
+
+    Отписка обязана быть на виду и работать сразу: рассылка, от которой нельзя
+    уйти, кончается не жалобой, а блокировкой бота — и тогда покупатель потерян
+    вместе со всеми будущими заказами."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    on = bool(data.get("on"))
+    db.set_no_reminders(int(user["id"]), not on)
+    return jsonify({"ok": True, "on": on})
 
 
 # ============================================================
@@ -1843,6 +1865,8 @@ def api_admin_settings():
     return jsonify({"ok": True, "settings": {
         "payment_info": _payment_info(),
         "confirm_minutes": _confirm_minutes(),
+        "remind_after_days": db.get_setting("remind_after_days", 21),
+        "remind_daily_cap": db.get_setting("remind_daily_cap", 20),
     }})
 
 
@@ -1857,6 +1881,17 @@ def api_admin_settings_update():
     if "confirm_minutes" in data:
         try:
             db.set_setting("confirm_minutes", max(1, int(data.get("confirm_minutes"))))
+        except (TypeError, ValueError):
+            pass
+    if "remind_after_days" in data:
+        try:
+            db.set_setting("remind_after_days", max(1, int(data.get("remind_after_days"))))
+        except (TypeError, ValueError):
+            pass
+    if "remind_daily_cap" in data:
+        try:
+            # 0 — законное значение: так напоминания выключаются целиком.
+            db.set_setting("remind_daily_cap", max(0, int(data.get("remind_daily_cap"))))
         except (TypeError, ValueError):
             pass
     return jsonify({"ok": True})

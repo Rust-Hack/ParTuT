@@ -272,11 +272,14 @@ def handle_approval(call, user_id, data):
 
 
 def _safe_send(user_id, text, parse_mode=None):
-    """Отправка клиенту с защитой: если он заблокировал бота — не роняем работу."""
+    """Отправка клиенту с защитой: если он заблокировал бота — не роняем работу.
+    Возвращает True, если сообщение ушло."""
     try:
         bot.send_message(user_id, text, parse_mode=parse_mode)
+        return True
     except Exception as e:
         print(f"Не смог написать клиенту {user_id}: {e}")
+        return False
 
 
 # ============================================================
@@ -691,6 +694,61 @@ def cmd_backup(message):
         _safe_send(message.chat.id, f"Не получилось: {err}")
 
 
+# --- Напоминание покупателю: «пора пополнить» ---
+# Расходники заканчиваются предсказуемо, и человек, купивший месяц назад, скорее
+# всего уже докупил у кого-то другого. Напоминание — самый сильный денежный
+# рычаг, но и самый опасный: назойливость Телеграм наказывает блокировками,
+# а заблокировавшего покупателя вернуть нельзя ничем. Отсюда три ограничения:
+# срок, суточный потолок и возможность отписаться.
+_last_repeat_date = None
+
+
+def _repeat_settings():
+    """Срок и потолок берём из настроек магазина — владелец меняет их сам,
+    без правки кода: у одноразок и жидкостей разный срок жизни."""
+    try:
+        days = int(db.get_setting("remind_after_days", 21))
+    except (TypeError, ValueError):
+        days = 21
+    try:
+        cap = int(db.get_setting("remind_daily_cap", 20))
+    except (TypeError, ValueError):
+        cap = 20
+    return max(1, days), max(0, cap)
+
+
+REPEAT_TEXT = (
+    "Давно не виделись 👋\n"
+    "Если запасы подходят к концу — повторить прошлый заказ можно в два нажатия: "
+    "откройте магазин, «Профиль» → «Мои заказы» → «Повторить заказ».\n\n"
+    "Не хотите таких напоминаний — «Профиль» → выключите «Напоминать о заказе»."
+)
+
+
+def _maybe_send_repeat_reminders():
+    """Раз в сутки, в тот же тихий час, что и резервная копия."""
+    global _last_repeat_date
+    local = datetime.datetime.utcnow() + datetime.timedelta(hours=SUMMARY_TZ_OFFSET)
+    if local.hour < BACKUP_HOUR or _last_repeat_date == local.date():
+        return
+    _last_repeat_date = local.date()
+
+    days, cap = _repeat_settings()
+    if cap == 0:                       # 0 в настройках = напоминания выключены
+        return
+    sent = 0
+    for row in db.customers_to_remind(days, cap):
+        uid = int(row["user_id"])
+        # Помечаем ДО отправки: если Telegram ответит ошибкой (человек заблокировал
+        # бота), повторная попытка завтра ему всё равно не дойдёт — а пометка
+        # убережёт от бесконечных попыток каждый день.
+        db.mark_reminded(uid)
+        if _safe_send(uid, REPEAT_TEXT):
+            sent += 1
+    if sent:
+        print(f"Напоминаний о повторной покупке отправлено: {sent}")
+
+
 def _reminder_loop():
     """Раз в минуту: напоминает продавцам о заказах, ждущих одобрения (раз в 10 мин на заказ),
     и авто-отменяет брошенные карточные заказы без чека (спустя CANCEL_UNPAID_HOURS)."""
@@ -705,6 +763,7 @@ def _reminder_loop():
                                              "Товар вернулся в наличие, монеты возвращены. Оформите заново, если нужно.")
             _maybe_send_daily_summary()
             _maybe_send_backup()
+            _maybe_send_repeat_reminders()
         except Exception as e:
             # Этот цикл шлёт напоминания, отменяет брошенные заказы и делает
             # резервную копию. Если он сломается тихо, не работать будет всё
