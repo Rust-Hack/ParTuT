@@ -1560,6 +1560,17 @@ def delivery_prefill(user_id, limit=20):
 
 # ---------- Напоминание о повторной покупке ----------
 
+def issued_orders_count():
+    """Сколько заказов магазин довёл до выдачи — единственное доказательство,
+    которое видит новый покупатель, прежде чем перевести деньги незнакомцу."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM orders WHERE status = 'issued'")
+    n = int(cur.fetchone()["c"])
+    conn.close()
+    return n
+
+
 def customers_to_remind(days, limit, cooldown_days=None):
     """Кому пора напомнить: последний ВЫДАННЫЙ заказ старше `days` дней.
 

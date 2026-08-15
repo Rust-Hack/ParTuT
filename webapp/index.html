@@ -201,6 +201,7 @@
     .freehint { margin: 4px 12px 0; padding: 10px 14px; border-radius: 12px; background: var(--accent-soft);
       color: var(--accent); font-size: 13.5px; font-weight: 700; text-align: center; }
     .freehint.on { background: var(--surface); color: #1f8a5f; border: 1px solid var(--line); }
+    .trustline { text-align: center; color: var(--hint); font-size: 12.5px; margin-top: 10px; }
     .mini { display: flex; align-items: center; gap: 8px; }
     .mini button { width: 30px; height: 30px; border-radius: 9px; border: none; background: var(--accent); color: var(--on-accent); font-size: 17px; line-height: 1; }
     .mini span { font-weight: 800; min-width: 14px; text-align: center; }
@@ -2527,6 +2528,7 @@
     const deliveryCache = {};        // city -> способы получения (чтобы оформление открывалось мгновенно)
     const pointsCache = {};          // city -> точки самовывоза этого города
     const freeFromCache = {};        // city -> с какой суммы доставка бесплатна (0 = порога нет)
+    let ordersDone = 0;              // сколько заказов магазин уже выдал (0 = показывать рано)
     let pickupPoints = [], selPoint = null;
     const deliveryPending = {};      // city -> запрос «в полёте» (чтобы не слать второй такой же)
     function fetchDeliveryFor(c) {
@@ -2542,6 +2544,7 @@
           deliveryCache[c] = Array.isArray(d) ? d : (d.methods || []);
           pointsCache[c] = Array.isArray(d) ? [] : (d.points || []);
           freeFromCache[c] = Array.isArray(d) ? 0 : (d.free_from || 0);
+          if (!Array.isArray(d)) ordersDone = d.orders_done || 0;
         } catch (e) { deliveryCache[c] = deliveryCache[c] || []; }
         finally { delete deliveryPending[c]; }
         return deliveryCache[c];
@@ -2699,7 +2702,10 @@
         <div class="osum-r osum-total"><span>Итого</span><span>${finalTotal.toFixed(2)} Br</span></div>
       </div>`;
       delTotal = finalTotal;
-      const btn = `<button class="bigbtn" id="delSubmit" style="margin-top:14px"></button>`;
+      // Доказательство ставим у самой кнопки оплаты: сомнение возникает именно
+      // в момент перевода денег незнакомому человеку.
+      const trust = ordersDone ? `<div class="trustline">🤝 Магазин выполнил ${ordersDone} заказов</div>` : "";
+      const btn = `<button class="bigbtn" id="delSubmit" style="margin-top:14px"></button>${trust}`;
       $("deliveryBody").innerHTML = `<div class="dlabel">Способ получения</div>${methodBtns}${extra}${sum}${btn}`;
       refreshDelSubmit();
       $("deliveryBody").querySelectorAll("[data-dm]").forEach(b => b.onclick = () => {

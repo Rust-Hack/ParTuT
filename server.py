@@ -531,6 +531,7 @@ def api_delivery():
             "points": [{"id": p["id"], "address": p["address"], "note": p["note"] or ""}
                        for p in db.get_pickup_points(city)],
             "free_from": _free_delivery_from(),   # с какой суммы доставка бесплатна
+            "orders_done": _orders_done(),         # доверие: сколько заказов уже выдано
         }, 300)
     return jsonify(cached)
 
@@ -698,6 +699,22 @@ def _payment_info():
     cached = _cache_get("settings:payment_info")
     if cached is None:
         cached = _cache_set("settings:payment_info", db.get_setting("payment_info", PAYMENT_INFO), 300)
+    return cached
+
+
+# Ниже этого числа хвастаться нечем: «выполнено 3 заказа» отпугивает сильнее,
+# чем молчание. Показываем счётчик, только когда он работает на доверие.
+ORDERS_DONE_MIN = 15
+
+
+def _orders_done():
+    cached = _cache_get("orders_done")
+    if cached is None:
+        try:
+            n = db.issued_orders_count()
+        except Exception:
+            n = 0
+        cached = _cache_set("orders_done", n if n >= ORDERS_DONE_MIN else 0, 300)
     return cached
 
 

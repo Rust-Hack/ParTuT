@@ -101,3 +101,34 @@ def run():
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)
+
+
+def run_trust():
+    """Счётчик выполненных заказов: доверие новичку, но без вранья."""
+    c = Checker("Сколько заказов магазин выполнил")
+    _clean()
+    server._cache_bust()
+
+    pid = db.add_product("Минск", "pods", "ДовериеПод", 10.0, 200)
+    db.add_delivery_method("Минск", "Самовывоз", False, "", "", 0, True, 0)
+
+    def выдать(n):
+        for _ in range(n):
+            oid = db.create_order(9800, "b", "Минск",
+                                  [{"id": pid, "name": "ДовериеПод", "price": 10.0, "qty": 1}], 10.0, "")
+            conn = db.connect(); cur = conn.cursor()
+            cur.execute(db._q("UPDATE orders SET status='issued' WHERE id = %s"), (oid,))
+            conn.commit(); conn.close()
+
+    выдать(3)
+    server._cache_bust()
+    d = client.get("/api/delivery?city=Минск").get_json()
+    c("при трёх заказах счётчик молчит", d["orders_done"] == 0)
+
+    выдать(20)
+    server._cache_bust()
+    d = client.get("/api/delivery?city=Минск").get_json()
+    c("при двадцати трёх — показывает", d["orders_done"] == 23)
+
+    _clean()
+    return c.fails
