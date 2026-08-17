@@ -853,6 +853,8 @@
       <div id="sortList"></div>
       <div class="fltlabel">Бренд</div>
       <div id="brandFilterList"></div>
+      <div class="fltlabel" id="flavorFilterLabel">Вкус</div>
+      <div id="flavorFilterList"></div>
       <button class="bigbtn" id="filterApply" style="margin-top:8px">Применить</button>
       <button class="closebtn" id="filterReset" style="color:var(--danger)">Сбросить фильтры</button>
     </div>
@@ -1180,13 +1182,11 @@
         <div id="dispFlavors"></div>
       </div>
 
-      <!-- Обычный товар: одно количество и поля вручную -->
+      <!-- Обычный товар: одно количество; бренд и вкус — из справочника -->
       <div id="genFields">
         <label>Остаток (шт.)</label><input id="afStock" inputmode="numeric" placeholder="10">
-        <div class="rowf">
-          <div><label>Бренд</label><input id="afBrand" placeholder="Elf Bar"></div>
-          <div><label>Вкус</label><input id="afFlavor" placeholder="Манго"></div>
-        </div>
+        <label>Бренд</label><div id="afBrandBox"></div>
+        <label>Вкус (если есть)</label><div id="afFlavorBox"></div>
       </div>
 
       <!-- Характеристики этой категории: у картриджа сопротивление, у пода мощность -->
@@ -1281,11 +1281,14 @@
       <div class="sectbody form">
       <label>Название бренда</label><input id="brName" placeholder="Elf Bar">
       <label>Категория</label><select id="brCat"></select>
+      <div class="dnote" style="margin:6px 0 0">«Во всех категориях» — если бренд делает и поды, и картриджи, и жидкости. Категория нужна только чтобы короче был список при заведении товара.</div>
       <label>Вкусы (по одному или через запятую)</label>
       <div style="display:flex;gap:8px">
-        <input id="brFlavorInput" placeholder="Например: Манго" style="flex:1">
+        <input id="brFlavorInput" placeholder="Например: Манго" style="flex:1" list="brFlavorKnown">
+        <datalist id="brFlavorKnown"></datalist>
         <button class="iconbtn ok" id="brFlavorAdd" style="width:auto;padding:0 16px">＋</button>
       </div>
+      <div id="brKnownFlavors" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
       <div id="brFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
       <button class="bigbtn" id="brSave" style="margin-top:14px">Сохранить бренд</button>
       <button class="closebtn" id="brCancel" style="display:none">Отменить редактирование</button>
@@ -1408,7 +1411,7 @@
       return /[a-zа-я%]/i.test(val) ? val : val + " " + unit;   // единицу мог вписать и сам админ
     };
 
-    let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilters = [], sortMode = "default";
+    let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilters = [], flavorFilters = [], sortMode = "default";
     const cart = {};
     let useCoins = false;   // списывать ли монеты при оформлении
     let favs = JSON.parse(localStorage.getItem("favs") || "[]");
@@ -1637,10 +1640,10 @@
     async function loadCatalog() {
       await Promise.all([fetchLocations(), fetchProducts(), fetchCategories()]);
       recomputeCities(); renderChips(); updateFilterBtn(); renderGrid();
-      fetchAlsoBought();      // подсказки корзины — в фоне, каталог их не ждёт
+      fetchAlsoBought(); fetchFlavors();   // подсказки корзины и справочник вкусов — в фоне
     }
     async function refreshProducts() {
-      await Promise.all([fetchLocations(), fetchProducts(), fetchCategories()]);
+      await Promise.all([fetchLocations(), fetchProducts(), fetchCategories(), fetchFlavors()]);
       recomputeCities(); renderChips(); updateFilterBtn(); renderGrid(); renderNav();
       if ($("productsView").classList.contains("show")) renderAdminList();
       if ($("locationsView").classList.contains("show")) renderLocList();
@@ -1650,7 +1653,7 @@
       $("chips").innerHTML = Object.entries(CATS).map(([code, t]) =>
         `<button class="chip ${code===cat?'active':''}" data-c="${code}">${t}</button>`).join("");
       $("chips").querySelectorAll("[data-c]").forEach(b => b.onclick = () => {
-        cat = b.dataset.c; brandFilters = [];   // сменили категорию — сбрасываем бренды
+        cat = b.dataset.c; brandFilters = []; flavorFilters = [];   // сменили категорию — сбрасываем фильтры
         renderChips(); updateFilterBtn(); renderGrid();
       });
     }
@@ -1662,6 +1665,21 @@
     ];
     const strengthVal = (p) => parseFloat(String(p.strength || "").replace(",", ".")) || 0;
 
+    // Вкусы товара: у модели со вкусами это варианты, у обычного — своё поле.
+    function flavorsOf(p) {
+      const list = (p.variants || []).map(v => v.flavor).filter(Boolean);
+      if (!list.length && p.flavor) list.push(p.flavor);
+      return list;
+    }
+    function flavorsInScope() {
+      const set = new Set();
+      allProducts.forEach(p => {
+        if (p.city !== city) return;
+        if (cat && p.category !== cat) return;
+        flavorsOf(p).forEach(f => set.add(f));
+      });
+      return [...set].sort((a, b) => a.localeCompare(b, "ru"));
+    }
     function brandsInScope() {
       const set = new Set();
       allProducts.forEach(p => {
@@ -1671,10 +1689,12 @@
       });
       return [...set].sort((a, b) => a.localeCompare(b, "ru"));
     }
-    function filtersActive() { return brandFilters.length > 0 || sortMode !== "default"; }
+    function filtersActive() { return brandFilters.length > 0 || flavorFilters.length > 0 || sortMode !== "default"; }
     function updateFilterBtn() {
       const scope = brandsInScope();
       brandFilters = brandFilters.filter(b => scope.includes(b));   // убрать бренды не из выборки
+      const fscope = flavorsInScope();
+      flavorFilters = flavorFilters.filter(f => fscope.includes(f));
       $("filterBtn").classList.toggle("on", filtersActive());
     }
     function openFilter() {
@@ -1699,11 +1719,31 @@
         if (i >= 0) brandFilters.splice(i, 1); else brandFilters.push(b);   // добавить/убрать
         openFilter(); updateFilterBtn(); renderGrid();
       });
+
+      // Вкус — то, по чему жидкость и одноразку выбирают в первую очередь.
+      // Показываем блок только там, где вкусы вообще есть: у зарядки его быть не должно.
+      const fls = flavorsInScope();
+      $("flavorFilterLabel").style.display = fls.length ? "" : "none";
+      $("flavorFilterList").style.display = fls.length ? "" : "none";
+      if (fls.length) {
+        const allF = `<button class="opt ${flavorFilters.length ? '' : 'active'}" data-fall="1">Все вкусы</button>`;
+        $("flavorFilterList").innerHTML = allF + fls.map(f =>
+          `<button class="opt ${flavorFilters.includes(f) ? 'active' : ''}" data-f="${esc(f)}">${esc(f)}</button>`).join("");
+        $("flavorFilterList").querySelector("[data-fall]").onclick = () => {
+          flavorFilters = []; openFilter(); updateFilterBtn(); renderGrid();
+        };
+        $("flavorFilterList").querySelectorAll("[data-f]").forEach(btn => btn.onclick = () => {
+          const f = btn.dataset.f;
+          const i = flavorFilters.indexOf(f);
+          if (i >= 0) flavorFilters.splice(i, 1); else flavorFilters.push(f);
+          openFilter(); updateFilterBtn(); renderGrid();
+        });
+      }
       $("filterOverlay").classList.add("show");
     }
     $("filterBtn").onclick = openFilter;
     $("filterApply").onclick = () => closeOverlay($("filterOverlay"));
-    $("filterReset").onclick = () => { brandFilters = []; sortMode = "default"; openFilter(); updateFilterBtn(); renderGrid(); };
+    $("filterReset").onclick = () => { brandFilters = []; flavorFilters = []; sortMode = "default"; openFilter(); updateFilterBtn(); renderGrid(); };
 
     // ---------- Нижние шторки: анимированное закрытие + свайп вниз ----------
     function closeOverlay(ov) {
@@ -1759,6 +1799,7 @@
       return allProducts.filter(p => p.city === city
         && (!cat || p.category === cat)
         && (!brandFilters.length || brandFilters.includes(p.brand))
+        && (!flavorFilters.length || flavorsOf(p).some(f => flavorFilters.includes(f)))
         && (!s || p.name.toLowerCase().includes(s)));
     }
     // withSpecs=false на карточке товара: там крепость и объём уже перечислены
@@ -3541,10 +3582,31 @@
       });
     }
 
-    function openBrands() {
-      $("brCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+    async function openBrands() {
+      // «Во всех категориях» — первым: бренд обычно делает не одно, а всё сразу.
+      $("brCat").innerHTML = `<option value="">Во всех категориях</option>`
+        + CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+      await fetchFlavors();
+      renderKnownFlavors();
       renderBrandList();
       $("brandsView").classList.add("show");
+    }
+    // Ранее введённые вкусы под рукой: без них одна и та же «Мята» набирается
+    // каждый раз заново и в фильтре покупателя дробится на несколько.
+    function renderKnownFlavors() {
+      const dl = $("brFlavorKnown");
+      if (dl) dl.innerHTML = knownFlavors.map(f => `<option value="${esc(f)}">`).join("");
+      const box = $("brKnownFlavors");
+      if (!box) return;
+      const free = knownFlavors.filter(f => !brandFlavors.includes(f)).slice(0, 24);
+      box.innerHTML = free.length
+        ? `<span style="color:var(--hint);font-size:12px;width:100%">Уже встречались — нажмите, чтобы добавить:</span>`
+          + free.map(f => `<span class="brchip" data-kf="${esc(f)}" style="cursor:pointer">${esc(f)}</span>`).join("")
+        : "";
+      box.querySelectorAll("[data-kf]").forEach(el => el.onclick = () => {
+        if (!brandFlavors.includes(el.dataset.kf)) brandFlavors.push(el.dataset.kf);
+        renderFlavorChips(); renderKnownFlavors();
+      });
     }
     $("brandsClose").onclick = () => $("brandsView").classList.remove("show");
 
@@ -4610,13 +4672,16 @@
       $("brFlavorChips").innerHTML = brandFlavors.map((f, i) =>
         `<span class="fchip">${esc(f)}<b data-fx="${i}">✕</b></span>`).join("");
       $("brFlavorChips").querySelectorAll("[data-fx]").forEach(b =>
-        b.onclick = () => { brandFlavors.splice(+b.dataset.fx, 1); renderFlavorChips(); });
+        b.onclick = () => { brandFlavors.splice(+b.dataset.fx, 1); renderFlavorChips(); renderKnownFlavors(); });
     }
     $("brFlavorAdd").onclick = () => {
       const v = $("brFlavorInput").value.trim();
       if (!v) return;
-      v.split(",").map(s => s.trim()).filter(Boolean).forEach(f => { if (!brandFlavors.includes(f)) brandFlavors.push(f); });
-      $("brFlavorInput").value = ""; renderFlavorChips();
+      v.split(",").map(s => s.trim()).filter(Boolean).forEach(f => {
+        // Сверяем без учёта регистра: «мята» после «Мята» — это тот же вкус.
+        if (!brandFlavors.some(x => x.toLowerCase() === f.toLowerCase())) brandFlavors.push(f);
+      });
+      $("brFlavorInput").value = ""; renderFlavorChips(); renderKnownFlavors();
     };
     $("brFlavorInput").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("brFlavorAdd").click(); } };
 
@@ -4628,10 +4693,16 @@
       try {
         const r = await fetch("/api/admin/brand", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const d = await r.json();
-        if (!d.ok) { alertMsg("Не удалось сохранить бренд."); return; }
+        if (!d.ok) {
+          alertMsg(d.error === "exists" ? `Бренд «${d.name}» уже есть — правьте его, а не заводите второй.`
+                 : "Не удалось сохранить бренд.");
+          return;
+        }
         resetBrandForm();
-        await fetchBrands(); renderBrandList();
-        alertMsg("Бренд сохранён ✅");
+        await fetchBrands(); await fetchFlavors(); renderKnownFlavors();
+        await refreshProducts();      // переименование бренда переносит и товары
+        renderBrandList();
+        alertMsg(d.moved ? `Бренд сохранён ✅ Товаров перенесено: ${d.moved}` : "Бренд сохранён ✅");
       } catch (e) { alertMsg("Сеть недоступна."); }
     };
     function resetBrandForm() {
@@ -4652,8 +4723,11 @@
       const filtered = brands.filter(b => !q || b.name.toLowerCase().includes(q));
       if (!filtered.length) { $("brList").innerHTML = `<p style="color:var(--hint);margin-top:12px">Ничего не найдено.</p>`; return; }
       let html = "";
-      for (const [cat, cn] of CAT_OPTS) {
-        const group = filtered.filter(b => b.category === cat);
+      // Общие бренды идут первыми: бренд «во всех категориях» — теперь норма,
+      // а не исключение (Vaporesso делает и поды, и картриджи).
+      const groups = [["", "Во всех категориях"], ...CAT_OPTS];
+      for (const [cat, cn] of groups) {
+        const group = filtered.filter(b => (b.category || "") === cat);
         if (!group.length) continue;
         html += `<div class="brgroup">${cn} · ${group.length}</div>`;
         html += group.map(b => {
@@ -4663,8 +4737,9 @@
                 ? b.flavors.map(f => `<span class="brchip">${esc(f)}</span>`).join("")
                 : '<span style="color:var(--hint);font-size:12.5px">вкусов нет</span>'}</div>`
             : "";
+          const used = allProducts.filter(p => p.brand === b.name).length;
           return `<div class="admrow brrow" data-brtoggle="${b.id}">
-              <div class="an">${esc(b.name)}<small>вкусов: ${b.flavors.length} ${open ? '▲' : '▼'}</small></div>
+              <div class="an">${esc(b.name)}<small>вкусов: ${b.flavors.length} · ${used ? `${used} ${plural(used, "товар", "товара", "товаров")}` : "нет товаров"} ${open ? '▲' : '▼'}</small></div>
               <button class="iconbtn" data-bre="${b.id}">✏️</button>
               <button class="iconbtn danger" data-brd="${b.id}">🗑</button>
             </div>${chips}`;
@@ -4682,16 +4757,29 @@
     }
     function editBrand(id) {
       const b = brands.find(x => x.id === id); if (!b) return;
-      editingBrandId = id; $("brName").value = b.name; $("brCat").value = b.category;
-      brandFlavors = [...b.flavors]; renderFlavorChips();
+      editingBrandId = id; $("brName").value = b.name; $("brCat").value = b.category || "";
+      brandFlavors = [...b.flavors]; renderFlavorChips(); renderKnownFlavors();
       $("brCancel").style.display = "block"; $("brSave").textContent = "Обновить бренд";
       $("brFormSect").open = true;   // раскрыть свёрнутую форму
       $("brName").scrollIntoView({ behavior: "smooth", block: "center" });
     }
     function delBrand(id) { confirmMsg("Удалить бренд?", () => doDelBrand(id)); }
-    async function doDelBrand(id) {
+    async function doDelBrand(id, force) {
       try {
-        await fetch("/api/admin/brand/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
+        const r = await fetch("/api/admin/brand/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData, id, force: !!force }) });
+        const d = await r.json();
+        if (!d.ok) {
+          // У товаров бренд записан строкой: удаление справочника их не тронет,
+          // поэтому честно говорим, сколько их, и спрашиваем ещё раз.
+          if (d.error === "has_products") {
+            confirmMsg(`На этом бренде ${d.count} ${plural(d.count, "товар", "товара", "товаров")}. Они останутся с прежним названием бренда, но подсказки вкусов пропадут. Всё равно удалить?`,
+              () => doDelBrand(id, true));
+            return;
+          }
+          alertMsg("Не удалось удалить бренд.");
+          return;
+        }
         if (editingBrandId === id) resetBrandForm();
         await fetchBrands(); renderBrandList();
       } catch (e) { alertMsg("Сеть недоступна."); }
@@ -4875,6 +4963,60 @@
     }
 
     // Переключение формы: одноразки vs обычный товар
+    // ----- Бренд и вкус выбираются из справочника, а не набираются заново -----
+    // Свободный ввод плодил «Vaporesso», «vaporesso» и «Vaporesso » — в фильтре
+    // каталога это три разных бренда, и половина товаров пряталась не там.
+    let knownFlavors = [];
+    async function fetchFlavors() {
+      try {
+        const r = await fetch("/api/flavors");
+        const list = await r.json();
+        if (Array.isArray(list)) knownFlavors = list;
+      } catch (e) {}
+    }
+    function pickerHtml(id, current, options, newLabel) {
+      const cur = (current || "").trim();
+      const known = options.includes(cur);
+      return `<select id="${id}">
+          <option value="">— не указан —</option>
+          ${options.map(n => `<option ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("")}
+          ${cur && !known ? `<option selected>${esc(cur)}</option>` : ""}
+          <option value="__new">${newLabel}</option>
+        </select>
+        <input id="${id}_new" placeholder="Введите название" style="display:none;margin-top:6px">`;
+    }
+    function bindPicker(id) {
+      const sel = $(id), inp = $(id + "_new");
+      if (!sel || !inp) return;
+      sel.onchange = () => {
+        const isNew = sel.value === "__new";
+        inp.style.display = isNew ? "" : "none";
+        if (isNew) inp.focus();
+      };
+    }
+    function pickerValue(id) {
+      const sel = $(id), inp = $(id + "_new");
+      if (!sel) return "";
+      return (sel.value === "__new" ? (inp ? inp.value.trim() : "") : sel.value.trim());
+    }
+    // Для категории показываем её бренды и общие: Elf Bar не нужен в списке
+    // брендов для зарядок, а Vaporesso нужен везде.
+    const brandNames = (category) => brands
+      .filter(b => !category || !b.category || b.category === category)
+      .map(b => b.name)
+      .sort((a, b) => a.localeCompare(b, "ru"));
+    // Новое имя из формы товара сразу попадает в справочник: иначе оно осталось бы
+    // только строкой в товаре, и в следующий раз его пришлось бы набирать заново.
+    async function ensureBrandExists(name) {
+      name = (name || "").trim();
+      if (!name || brands.some(b => b.name.toLowerCase() === name.toLowerCase())) return;
+      try {
+        await fetch("/api/admin/brand", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData, name, category: "", flavors: [] }) });
+        await fetchBrands();
+      } catch (e) {}
+    }
+
     // ----- Поля характеристик строятся по настройкам категории -----
     // Раньше «крепость» и «объём» были прибиты к форме, а у картриджа нужно
     // сопротивление и совместимость. Теперь набор полей приходит из категории.
@@ -4911,6 +5053,12 @@
       $("genFields").style.display = variantMode ? "none" : "block";
       $("nameField").style.display = variantMode ? "none" : "block";   // имя собираем сами
       $("afSpecs").innerHTML = specFieldsHtml(cat, {}, "afs_");
+      if (!variantMode) {
+        // Бренд и вкус — из справочника «Бренды и вкусы», как и у товаров со вкусами.
+        $("afBrandBox").innerHTML = pickerHtml("afBrand", "", brandNames(cat), "+ Новый бренд…");
+        $("afFlavorBox").innerHTML = pickerHtml("afFlavor", "", knownFlavors, "+ Новый вкус…");
+        bindPicker("afBrand"); bindPicker("afFlavor");
+      }
       if (variantMode) {
         const list = brands.filter(b => b.category === cat);
         $("dispBrand").innerHTML = list.length
@@ -4933,8 +5081,7 @@
     $("dispBrand").onchange = renderDispFlavors;
     function clearAddForm() {
       $("afName").value = ""; $("afPrice").value = ""; $("afCost").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
-      $("afBrand").value = ""; $("afFlavor").value = "";
-      updateAddMode();      // заодно чистит поля характеристик
+      updateAddMode();      // заодно пересобирает бренд, вкус и характеристики
     }
 
     $("afAdd").onclick = async () => {
@@ -4963,9 +5110,11 @@
         name = $("afName").value.trim();
         if (!name) { alertMsg("Заполните название."); return; }
         if ($("afStock").value === "") { alertMsg("Укажите остаток."); return; }
+        const brandName = pickerValue("afBrand");
+        await ensureBrandExists(brandName);      // новое имя сразу попадает в справочник
         body = { initData, city: $("afCity").value, category, name, price, cost: $("afCost").value,
           stock: $("afStock").value, description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
-          brand: $("afBrand").value.trim(), flavor: $("afFlavor").value.trim(), specs,
+          brand: brandName, flavor: pickerValue("afFlavor"), specs,
           strength: specs.strength || "", volume: specs.volume || "" };
       }
       $("afAdd").disabled = true; $("afAdd").textContent = "Добавляю…";
@@ -5124,10 +5273,8 @@
               <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
               <div><label>Остаток (шт.)</label><input id="edStock" inputmode="numeric" value="${p.stock}"></div>
             </div>
-            <div class="rowf">
-              <div><label>Бренд</label><input id="edBrand" value="${esc(p.brand || '')}"></div>
-              <div><label>Вкус</label><input id="edFlavor" value="${esc(p.flavor || '')}"></div>
-            </div>
+            <label>Бренд</label>${pickerHtml("edBrand", p.brand || "", brandNames(p.category), "+ Новый бренд…")}
+            <label>Вкус (если есть)</label>${pickerHtml("edFlavor", p.flavor || "", knownFlavors, "+ Новый вкус…")}
             <div id="edSpecs">${specFieldsHtml(p.category, p.specs, "eds_")}</div>
             <label>Описание</label><input id="edDesc" value="${esc(p.description || '')}">
             ${editHitBlock(p)}
@@ -5135,6 +5282,7 @@
             <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
           </div>`;
         bindEditPhoto(); renderEditGallery();
+        bindPicker("edBrand"); bindPicker("edFlavor");
         $("edSave").onclick = () => saveEdit(p);
         return;
       }
@@ -5206,8 +5354,10 @@
           await upd("price", $("edPrice").value);
           await upd("cost", $("edCost").value || 0);
           await upd("stock", $("edStock").value);
-          await upd("brand", $("edBrand").value.trim());
-          await upd("flavor", $("edFlavor").value.trim());
+          const brandName = pickerValue("edBrand");
+          await ensureBrandExists(brandName);
+          await upd("brand", brandName);
+          await upd("flavor", pickerValue("edFlavor"));
           await upd("description", $("edDesc").value.trim());
         }
         // Характеристики сохраняем одним запросом — сервер сам разложит крепость

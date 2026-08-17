@@ -2754,8 +2754,18 @@ def api_brands():
             flavors = json.loads(b["flavors"] or "[]")
         except Exception:
             flavors = []
-        out.append({"id": b["id"], "name": b["name"], "category": b["category"], "flavors": flavors})
+        out.append({"id": b["id"], "name": b["name"], "category": b["category"] or "", "flavors": flavors})
     return jsonify(_cache_set(key, out, 300))
+
+
+@app.route("/api/flavors")
+def api_flavors():
+    """Все вкусы, которые уже встречались — для подсказок при вводе.
+    Без них одна и та же «Мята» набирается по-разному и дробит фильтр."""
+    cached = _cache_get("flavors")
+    if cached is None:
+        cached = _cache_set("flavors", db.known_flavors(), 300)
+    return jsonify(cached)
 
 
 @app.route("/api/admin/brand", methods=["POST"])
@@ -2765,15 +2775,33 @@ def api_admin_brand():
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     name = (data.get("name") or "").strip()
-    category = data.get("category") or "disposable"
-    if not name or category not in db.category_codes():
+    # Пустая категория — бренд общий: Vaporesso делает и поды, и картриджи,
+    # и заводить его в каждой категории заново незачем.
+    category = (data.get("category") or "").strip()
+    if not name or (category and category not in db.category_codes()):
         return jsonify({"ok": False, "error": "bad_data"}), 400
-    flavors = [str(f).strip() for f in (data.get("flavors") or []) if str(f).strip()]
+    # Вкусы храним без повторов и лишних пробелов: «Мята» и «мята » в фильтре
+    # выглядели бы как два разных вкуса.
+    flavors, seen = [], set()
+    for f in (data.get("flavors") or []):
+        f = str(f).strip()
+        if f and f.lower() not in seen:
+            seen.add(f.lower())
+            flavors.append(f)
 
     bid = data.get("id")
+    twin = db.find_brand_by_name(name, except_id=bid)
+    if twin:
+        return jsonify({"ok": False, "error": "exists", "name": twin["name"]}), 400
     if bid:
+        old = db.get_brand(int(bid))
+        if not old:
+            return jsonify({"ok": False, "error": "not_found"}), 404
         db.update_brand(int(bid), name, category, flavors)
-        return jsonify({"ok": True, "id": int(bid)})
+        # Товар хранит бренд строкой: без переноса у него осталось бы старое имя,
+        # и в фильтре каталога появился бы бренд, которого в справочнике нет.
+        moved = db.rename_brand_in_products(old["name"], name)
+        return jsonify({"ok": True, "id": int(bid), "moved": moved})
     new_id = db.add_brand(name, category, flavors)
     return jsonify({"ok": True, "id": new_id})
 
@@ -2787,8 +2815,17 @@ def api_admin_brand_delete():
         bid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
+    b = db.get_brand(bid)
+    if not b:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    # У товаров бренд записан строкой и после удаления справочника никуда не
+    # денется — молча оставлять «ничей» бренд в фильтре нельзя, поэтому
+    # предупреждаем и требуем подтверждения.
+    used = db.count_products_of_brand(b["name"])
+    if used and not data.get("force"):
+        return jsonify({"ok": False, "error": "has_products", "count": used}), 400
     db.delete_brand(bid)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "count": used})
 
 
 if __name__ == "__main__":

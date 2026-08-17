@@ -3232,12 +3232,15 @@ def count_products_in_location(name):
 # ---------- Бренды (со списком вкусов) ----------
 
 def get_brands(category=None):
+    """Бренды. category — фильтр «для этой категории»: бренд с пустой категорией
+    общий (Vaporesso делает и поды, и картриджи) и попадает в любой список."""
     conn = connect()
     cur = conn.cursor()
     if category:
-        cur.execute(_q("SELECT * FROM brands WHERE category = %s ORDER BY name"), (category,))
+        cur.execute(_q("SELECT * FROM brands WHERE category = %s OR category IS NULL OR category = '' ORDER BY name"),
+                    (category,))
     else:
-        cur.execute("SELECT * FROM brands ORDER BY category, name")
+        cur.execute("SELECT * FROM brands ORDER BY name")
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -3250,6 +3253,112 @@ def get_brand(brand_id):
     row = cur.fetchone()
     conn.close()
     return row
+
+
+def find_brand_by_name(name, except_id=None):
+    """Бренд с таким именем (без учёта регистра). Нужен, чтобы не плодить дубли:
+    «Vaporesso» и «vaporesso» в фильтре выглядят как два разных бренда."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM brands WHERE LOWER(name) = %s"), ((name or "").strip().lower(),))
+    rows = cur.fetchall()
+    conn.close()
+    for r in rows:
+        if except_id is None or int(r["id"]) != int(except_id):
+            return r
+    return None
+
+
+def count_products_of_brand(name):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COUNT(*) AS c FROM products WHERE brand = %s"), ((name or "").strip(),))
+    n = int(cur.fetchone()["c"])
+    conn.close()
+    return n
+
+
+def rename_brand_in_products(old_name, new_name):
+    """Переносит товары на новое имя бренда.
+
+    Товар хранит бренд строкой, и без этого переименование в справочнике
+    оставляло у товаров старое имя: в фильтре каталога появлялся «призрак» —
+    бренд, которого в справочнике уже нет."""
+    old_name = (old_name or "").strip()
+    new_name = (new_name or "").strip()
+    if not old_name or not new_name or old_name == new_name:
+        return 0
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE products SET brand = %s WHERE brand = %s"), (new_name, old_name))
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
+def known_flavors(limit=200):
+    """Все вкусы, которые уже встречались: в брендах, в вариантах и у товаров.
+
+    Нужны для подсказок при вводе — иначе «Мята», «мята» и «Мята ❄️» живут
+    в базе как три разных вкуса, и фильтр по вкусу разваливается."""
+    conn = connect()
+    cur = conn.cursor()
+    out = {}
+    cur.execute("SELECT flavors FROM brands")
+    for r in cur.fetchall():
+        try:
+            for f in json.loads(r["flavors"] or "[]"):
+                out.setdefault(str(f).strip().lower(), str(f).strip())
+        except (TypeError, ValueError):
+            pass
+    cur.execute("SELECT DISTINCT flavor AS f FROM product_variants")
+    for r in cur.fetchall():
+        if r["f"]:
+            out.setdefault(r["f"].strip().lower(), r["f"].strip())
+    cur.execute("SELECT DISTINCT flavor AS f FROM products WHERE flavor IS NOT NULL AND flavor != ''")
+    for r in cur.fetchall():
+        if r["f"]:
+            out.setdefault(r["f"].strip().lower(), r["f"].strip())
+    conn.close()
+    return sorted(out.values(), key=lambda s: s.lower())[:limit]
+
+
+def merge_duplicate_brands():
+    """Разовое слияние: один бренд — одна запись.
+
+    Раньше бренд заводился внутри категории, поэтому «Vaporesso» приходилось
+    создавать отдельно для подсистем и отдельно для картриджей. Теперь бренд
+    общий, а дубли, оставшиеся от прежней схемы, сливаем: вкусы объединяем,
+    категорию у слитого бренда очищаем («во всех категориях»)."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM brands ORDER BY id")
+    by_name = {}
+    for r in cur.fetchall():
+        key = (r["name"] or "").strip().lower()
+        by_name.setdefault(key, []).append(r)
+    merged = 0
+    for rows in by_name.values():
+        if len(rows) < 2:
+            continue
+        keep = rows[0]
+        flavors = []
+        for r in rows:
+            try:
+                for f in json.loads(r["flavors"] or "[]"):
+                    if f not in flavors:
+                        flavors.append(f)
+            except (TypeError, ValueError):
+                pass
+        cur.execute(_q("UPDATE brands SET flavors = %s, category = %s WHERE id = %s"),
+                    (json.dumps(flavors, ensure_ascii=False), "", keep["id"]))
+        for r in rows[1:]:
+            cur.execute(_q("DELETE FROM brands WHERE id = %s"), (r["id"],))
+            merged += 1
+    conn.commit()
+    conn.close()
+    return merged
 
 
 def add_brand(name, category, flavors):
