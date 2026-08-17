@@ -648,6 +648,7 @@
     .view p.pd-desc { color: var(--hint); font-size: 15px; line-height: 1.5; margin-top: 12px; text-align: left; }
     /* Оценки и отзывы */
     .stars { letter-spacing: 1px; color: #f5a623; }
+    .speclbl { font-size: 12.5px !important; color: var(--hint); }
     .cstars { font-size: 12px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
     .cstars small { color: var(--hint); font-weight: 400; }
     .rateline { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 14px; }
@@ -1172,25 +1173,9 @@
       <label>Закупочная цена (Br)</label><input id="afCost" inputmode="decimal" placeholder="12">
       <div class="dnote" style="margin:6px 0 0">Видите только вы. Без неё статистика покажет выручку, но не прибыль.</div>
 
-      <!-- Одноразки/жидкости: бренд из базы, свои поля, вкусы с остатком -->
+      <!-- Категории со вкусами: бренд из базы, вкусы с остатком -->
       <div id="dispFields" style="display:none">
         <label>Бренд</label><select id="dispBrand"></select>
-
-        <div id="puffsBlock">
-          <label>Кол-во затяжек</label>
-          <div style="display:flex;align-items:center;gap:12px">
-            <input type="range" id="dispPuffs" min="0" max="40000" step="100" value="0" style="flex:1">
-            <input type="number" id="dispPuffsNum" min="0" step="100" value="0" style="width:96px;text-align:center">
-          </div>
-        </div>
-
-        <div id="liquidBlock" style="display:none">
-          <div class="rowf">
-            <div><label>Крепость (мг)</label><input id="liqStrength" placeholder="20 мг"></div>
-            <div><label>Объём (мл)</label><input id="liqVolume" placeholder="30 мл"></div>
-          </div>
-        </div>
-
         <label>Вкусы и остаток (отметьте нужные)</label>
         <div id="dispFlavors"></div>
       </div>
@@ -1202,11 +1187,10 @@
           <div><label>Бренд</label><input id="afBrand" placeholder="Elf Bar"></div>
           <div><label>Вкус</label><input id="afFlavor" placeholder="Манго"></div>
         </div>
-        <div class="rowf">
-          <div><label>Крепость</label><input id="afStrength" placeholder="20 мг"></div>
-          <div><label>Объём</label><input id="afVolume" placeholder="30 мл"></div>
-        </div>
       </div>
+
+      <!-- Характеристики этой категории: у картриджа сопротивление, у пода мощность -->
+      <div id="afSpecs"></div>
 
       <label>Описание (необязательно)</label><input id="afDesc" placeholder="Коротко">
       <div class="chk"><input type="checkbox" id="afHit"><label for="afHit" style="margin:0">🔥 Отметить как «Хит»</label></div>
@@ -1253,6 +1237,38 @@
         <button class="iconbtn ok" id="catAdd" style="width:auto;padding:0 16px">Добавить</button>
       </div>
       <div id="catList" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- Характеристики одной категории -->
+  <div class="view ontop" id="specsView">
+    <div class="viewhead"><h2>📐 Характеристики</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="specsClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <div id="specsCatName" style="font-weight:800"></div>
+      <p style="color:var(--hint);font-size:13px;margin:4px 0 0;text-align:left">Эти поля вы заполняете у товара, а покупатель видит их в карточке. У картриджа это сопротивление и совместимость, у пода — мощность и аккумулятор.</p>
+
+      <label class="chk" style="margin-top:12px"><input type="checkbox" id="specFlavors" style="width:auto">
+        <span style="margin-left:8px">Товар заводится списком вкусов</span></label>
+
+      <div id="specList" style="margin-top:12px"></div>
+
+      <label style="margin-top:14px">Добавить характеристику</label>
+      <div class="rowf">
+        <div><label class="speclbl">Название</label><input id="specLabel" placeholder="Сопротивление"></div>
+        <div><label class="speclbl">Единица</label><input id="specUnit" placeholder="Ом"></div>
+      </div>
+      <label class="speclbl">Тип поля</label>
+      <select id="specKind">
+        <option value="number">Число</option>
+        <option value="text">Текст</option>
+        <option value="select">Выбор из списка</option>
+      </select>
+      <div id="specOptionsWrap" style="display:none">
+        <label class="speclbl">Варианты через запятую</label>
+        <input id="specOptions" placeholder="Картридж, Испаритель, Вата">
+      </div>
+      <button class="bigbtn" id="specAdd" style="margin-top:12px">Добавить</button>
     </div>
   </div>
 
@@ -1372,6 +1388,9 @@
       });
     }
     applyCategories();
+    // Характеристики категории (сопротивление, мощность, совместимость…).
+    const specsOf = (code) => ((categories.find(c => c.code === code) || {}).specs) || [];
+    const catHasFlavors = (code) => !!(categories.find(c => c.code === code) || {}).has_flavors;
     async function fetchCategories() {
       try {
         const r = await fetch("/api/categories");
@@ -1383,7 +1402,11 @@
     }
     let locations = [];   // [{id, name}] — точки продаж, приходят из базы
     const CUR = `<span class="cur">Br</span>`;
-    const withUnit = (val, unit) => { val = String(val || "").trim(); if (!val) return ""; return /[a-zа-я%]/i.test(val) ? val : val + " " + unit; };
+    const withUnit = (val, unit) => {
+      val = String(val || "").trim();
+      if (!val || !unit) return val;                       // «Затяжек» и «Тип» единиц не имеют
+      return /[a-zа-я%]/i.test(val) ? val : val + " " + unit;   // единицу мог вписать и сам админ
+    };
 
     let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilters = [], sortMode = "default";
     const cart = {};
@@ -1756,9 +1779,18 @@
     // Подпись под названием. Название почти всегда уже содержит и бренд, и вкус
     // («Elf Bar BC10000 Кислое яблоко»), поэтому повторять их целиком — значит
     // писать одно и то же дважды. Показываем только то, чего в названии нет.
+    // Подпись под названием на полке. У одноразки это бренд и вкус, у картриджа —
+    // сопротивление и совместимость: по ним его и выбирают, а бренд обычно уже
+    // в названии. Берём первые две заполненные характеристики категории.
     function subtitleFor(p) {
       const name = (p.name || "").toLowerCase();
       const parts = [p.brand, p.flavor].filter(Boolean).filter(v => !name.includes(v.toLowerCase()));
+      if (parts.length < 2) {
+        specsOf(p.category).forEach(s => {
+          const v = (p.specs || {})[s.key];
+          if (parts.length < 2 && v !== undefined && String(v).trim() !== "") parts.push(withUnit(v, s.unit));
+        });
+      }
       return parts.join(" · ");
     }
 
@@ -3132,12 +3164,15 @@
           ? `<img src="${gal[0].url}" alt="">`
           : `<div class="pgal" id="pgal">${gal.map(g => `<img src="${g.url}" alt="" decoding="async">`).join("")}</div>`
             + `<div class="pdots" id="pdots">${gal.map((_, i) => `<i class="${i ? "" : "on"}"></i>`).join("")}</div>`;
+      // Характеристики берём из настроек категории: у картриджа сопротивление и
+      // совместимость, у пода мощность и аккумулятор — а не «бренд и вкус» на всё.
       const info = [];
       if (p.brand) info.push(["Бренд", p.brand]);
       if (p.flavor) info.push(["Вкус", p.flavor]);
-      if (p.strength) info.push(["Крепость", withUnit(p.strength, "мг")]);
-      if (p.volume) info.push([p.category === "disposable" ? "Затяжек" : "Объём",
-        p.category === "disposable" ? p.volume : withUnit(p.volume, "мл")]);
+      specsOf(p.category).forEach(s => {
+        const v = (p.specs || {})[s.key];
+        if (v !== undefined && String(v).trim() !== "") info.push([s.label, withUnit(v, s.unit)]);
+      });
       const infoHtml = info.length
         ? `<div class="pd-info-wrap">${info.map(([k, v]) => `<div class="pd-info"><span>${k}</span><b>${esc(v)}</b></div>`).join("")}</div>` : "";
 
@@ -3384,13 +3419,15 @@
             <button class="iconbtn" data-ccancel="1">✕</button>
           </div>`;
         }
+        const nspecs = (c.specs || []).length;
         return `<div class="admrow">
-          <div class="an">${c.emoji ? esc(c.emoji) + " " : ""}${esc(c.name)}<small>${used ? `${used} ${plural(used, "товар", "товара", "товаров")}` : "пусто"}</small></div>
+          <div class="an" data-cspecs="${esc(c.code)}" style="cursor:pointer">${c.emoji ? esc(c.emoji) + " " : ""}${esc(c.name)}<small>${used ? `${used} ${plural(used, "товар", "товара", "товаров")}` : "пусто"} · ${nspecs} ${plural(nspecs, "характеристика", "характеристики", "характеристик")} ›</small></div>
           <button class="iconbtn" data-cup="${esc(c.code)}" title="Выше">↑</button>
           <button class="iconbtn" data-crn="${esc(c.code)}" title="Переименовать">✏️</button>
           <button class="iconbtn danger" data-cdel="${esc(c.code)}">✕</button>
         </div>`;
       }).join("");
+      $("catList").querySelectorAll("[data-cspecs]").forEach(el => el.onclick = () => openSpecs(el.dataset.cspecs));
       $("catList").querySelectorAll("[data-cup]").forEach(b => b.onclick = () => moveCat(b.dataset.cup, -1));
       $("catList").querySelectorAll("[data-crn]").forEach(b => b.onclick = () => { catEditing = b.dataset.crn; renderCatList(); });
       $("catList").querySelectorAll("[data-cdel]").forEach(b => b.onclick = () => delCat(b.dataset.cdel));
@@ -3449,6 +3486,59 @@
     async function afterCatsChanged() {
       await refreshProducts();     // фильтры каталога и формы админки строятся по категориям
       renderCatList();
+    }
+
+    // ----- Характеристики категории -----
+    let specsCat = null;
+    $("specsClose").onclick = () => $("specsView").classList.remove("show");
+    $("specKind").onchange = () => {
+      $("specOptionsWrap").style.display = $("specKind").value === "select" ? "" : "none";
+    };
+    function openSpecs(code) {
+      specsCat = code;
+      $("specsView").classList.add("show");
+      renderSpecList();
+    }
+    function renderSpecList() {
+      const c = categories.find(x => x.code === specsCat);
+      if (!c) { $("specsView").classList.remove("show"); return; }
+      $("specsCatName").textContent = `${c.emoji || ""} ${c.name}`.trim();
+      $("specFlavors").checked = !!c.has_flavors;
+      const list = c.specs || [];
+      $("specList").innerHTML = list.length
+        ? list.map(s => `<div class="admrow">
+            <div class="an">${esc(s.label)}${s.unit ? ` <small style="display:inline">${esc(s.unit)}</small>` : ""}
+              <small>${s.kind === "select" ? esc(s.options.join(" · ")) : s.kind === "number" ? "число" : "текст"}</small></div>
+            <button class="iconbtn danger" data-sdel="${s.id}">✕</button></div>`).join("")
+        : `<p style="color:var(--hint);margin:0">Характеристик нет — товар будет только с названием, ценой и фото.</p>`;
+      $("specList").querySelectorAll("[data-sdel]").forEach(b => b.onclick = () => delSpec(+b.dataset.sdel));
+    }
+    $("specFlavors").onchange = async () => {
+      await catApi("/api/admin/category/update", { code: specsCat, has_flavors: $("specFlavors").checked });
+      await afterCatsChanged();
+      renderSpecList();
+    };
+    $("specAdd").onclick = async () => {
+      const label = $("specLabel").value.trim();
+      if (!label) { alertMsg("Введите название характеристики."); return; }
+      const kind = $("specKind").value;
+      if (kind === "select" && !$("specOptions").value.trim()) { alertMsg("Перечислите варианты через запятую."); return; }
+      const d = await catApi("/api/admin/category/spec", { category: specsCat, label,
+        unit: $("specUnit").value.trim(), kind, options: $("specOptions").value.trim() });
+      if (!d.ok) { alertMsg(d.error === "exists" ? "Такая характеристика уже есть." : "Не удалось добавить."); return; }
+      $("specLabel").value = ""; $("specUnit").value = ""; $("specOptions").value = "";
+      await afterCatsChanged();
+      renderSpecList();
+      toast("Характеристика добавлена ✅");
+    };
+    function delSpec(id) {
+      // Значения у товаров остаются в базе: вернули поле — вернулись и они.
+      confirmMsg("Убрать характеристику из категории?", async () => {
+        const d = await catApi("/api/admin/category/spec/delete", { id });
+        if (!d.ok) { alertMsg("Не удалось убрать."); return; }
+        await afterCatsChanged();
+        renderSpecList();
+      });
     }
 
     function openBrands() {
@@ -4785,14 +4875,42 @@
     }
 
     // Переключение формы: одноразки vs обычный товар
+    // ----- Поля характеристик строятся по настройкам категории -----
+    // Раньше «крепость» и «объём» были прибиты к форме, а у картриджа нужно
+    // сопротивление и совместимость. Теперь набор полей приходит из категории.
+    function specFieldsHtml(category, values, prefix) {
+      const specs = specsOf(category);
+      if (!specs.length) return "";
+      return `<label>Характеристики</label>` + specs.map(s => {
+        const id = `${prefix}${s.key}`;
+        const v = (values || {})[s.key];
+        const val = v === undefined ? "" : String(v);
+        const label = s.label + (s.unit ? ` (${s.unit})` : "");
+        if (s.kind === "select" && s.options.length) {
+          return `<label class="speclbl">${esc(label)}</label><select id="${id}" data-spec="${esc(s.key)}">
+            <option value="">—</option>
+            ${s.options.map(o => `<option value="${esc(o)}" ${val === o ? "selected" : ""}>${esc(o)}</option>`).join("")}
+          </select>`;
+        }
+        const mode = s.kind === "number" ? ` inputmode="decimal"` : "";
+        return `<label class="speclbl">${esc(label)}</label><input id="${id}" data-spec="${esc(s.key)}"${mode} value="${esc(val)}">`;
+      }).join("");
+    }
+    function collectSpecs(scopeId) {
+      const out = {};
+      (document.getElementById(scopeId) || document).querySelectorAll("[data-spec]").forEach(el => {
+        out[el.dataset.spec] = el.value.trim();
+      });
+      return out;
+    }
+
     function updateAddMode() {
       const cat = $("afCat").value;
-      const variantMode = (cat === "disposable" || cat === "liquid");
+      const variantMode = catHasFlavors(cat);
       $("dispFields").style.display = variantMode ? "block" : "none";
       $("genFields").style.display = variantMode ? "none" : "block";
       $("nameField").style.display = variantMode ? "none" : "block";   // имя собираем сами
-      $("puffsBlock").style.display = cat === "disposable" ? "block" : "none";
-      $("liquidBlock").style.display = cat === "liquid" ? "block" : "none";
+      $("afSpecs").innerHTML = specFieldsHtml(cat, {}, "afs_");
       if (variantMode) {
         const list = brands.filter(b => b.category === cat);
         $("dispBrand").innerHTML = list.length
@@ -4813,26 +4931,18 @@
     }
     $("afCat").onchange = updateAddMode;
     $("dispBrand").onchange = renderDispFlavors;
-    // Ползунок и ручной ввод затяжек синхронизированы в обе стороны.
-    $("dispPuffs").oninput = () => { $("dispPuffsNum").value = $("dispPuffs").value; };
-    $("dispPuffsNum").oninput = () => {
-      let v = parseInt($("dispPuffsNum").value, 10); if (isNaN(v) || v < 0) v = 0;
-      $("dispPuffs").value = Math.min(v, +$("dispPuffs").max);   // ползунок до своего максимума
-    };
-
     function clearAddForm() {
       $("afName").value = ""; $("afPrice").value = ""; $("afCost").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
-      $("afBrand").value = ""; $("afFlavor").value = ""; $("afStrength").value = ""; $("afVolume").value = "";
-      $("dispPuffs").value = 0; $("dispPuffsNum").value = 0;
-      $("liqStrength").value = ""; $("liqVolume").value = "";
-      updateAddMode();
+      $("afBrand").value = ""; $("afFlavor").value = "";
+      updateAddMode();      // заодно чистит поля характеристик
     }
 
     $("afAdd").onclick = async () => {
       const category = $("afCat").value, price = $("afPrice").value;
       if (price === "") { alertMsg("Укажите цену."); return; }
+      const specs = collectSpecs("afSpecs");
       let body, name;
-      if (category === "disposable" || category === "liquid") {
+      if (catHasFlavors(category)) {
         const b = brands.find(x => x.id === +$("dispBrand").value);
         if (!b) { alertMsg("Выберите бренд (создайте его в разделе «Бренды»)."); return; }
         const variants = [];
@@ -4841,24 +4951,22 @@
           if (chk && chk.checked) variants.push({ flavor: row.dataset.flavor, stock: row.querySelector(".dfst").value || "0" });
         });
         if (!variants.length) { alertMsg("Отметьте хотя бы один вкус."); return; }
-        // Название собираем сами из бренда и характеристик.
-        if (category === "disposable")
-          name = [b.name, $("dispPuffsNum").value].filter(v => v && v !== "0").join(" ");
-        else
-          name = b.name;   // жидкость: название = бренд; объём/крепость — бейджами на карточке
+        // Название собираем сами. У одноразок в него по традиции входит число
+        // затяжек («Elf Bar 6000») — так их и ищут; у остальных хватает бренда.
+        name = (category === "disposable" && specs.volume)
+          ? [b.name, specs.volume].filter(v => v && v !== "0").join(" ") : b.name;
         body = { initData, city: $("afCity").value, category, name, price, cost: $("afCost").value,
           description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
-          brand: b.name, variants };
-        if (category === "disposable") body.puffs = $("dispPuffsNum").value;
-        else { body.strength = $("liqStrength").value.trim(); body.volume = $("liqVolume").value.trim(); }
+          brand: b.name, variants, specs,
+          strength: specs.strength || "", volume: specs.volume || "" };
       } else {
         name = $("afName").value.trim();
         if (!name) { alertMsg("Заполните название."); return; }
         if ($("afStock").value === "") { alertMsg("Укажите остаток."); return; }
         body = { initData, city: $("afCity").value, category, name, price, cost: $("afCost").value,
           stock: $("afStock").value, description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
-          brand: $("afBrand").value.trim(), flavor: $("afFlavor").value.trim(),
-          strength: $("afStrength").value.trim(), volume: $("afVolume").value.trim() };
+          brand: $("afBrand").value.trim(), flavor: $("afFlavor").value.trim(), specs,
+          strength: specs.strength || "", volume: specs.volume || "" };
       }
       $("afAdd").disabled = true; $("afAdd").textContent = "Добавляю…";
       try {
@@ -5020,10 +5128,7 @@
               <div><label>Бренд</label><input id="edBrand" value="${esc(p.brand || '')}"></div>
               <div><label>Вкус</label><input id="edFlavor" value="${esc(p.flavor || '')}"></div>
             </div>
-            <div class="rowf">
-              <div><label>Крепость</label><input id="edStrengthG" value="${esc(p.strength || '')}"></div>
-              <div><label>Объём</label><input id="edVolumeG" value="${esc(p.volume || '')}"></div>
-            </div>
+            <div id="edSpecs">${specFieldsHtml(p.category, p.specs, "eds_")}</div>
             <label>Описание</label><input id="edDesc" value="${esc(p.description || '')}">
             ${editHitBlock(p)}
             ${editPhotoBlock(p)}
@@ -5034,20 +5139,8 @@
         return;
       }
 
-      // ---- Товар-модель со вкусами (одноразки/жидкости) ----
-      let specs = "";
-      if (p.category === "disposable") {
-        const pv = parseInt(p.volume, 10) || 0;
-        specs = `<label>Кол-во затяжек</label>
-          <div style="display:flex;gap:12px;align-items:center">
-            <input type="range" id="edPuffs" min="0" max="40000" step="100" value="${Math.min(pv,40000)}" style="flex:1">
-            <input type="number" id="edPuffsNum" min="0" step="100" value="${pv}" style="width:96px;text-align:center">
-          </div>`;
-      } else if (p.category === "liquid") {
-        specs = `<div class="rowf">
-          <div><label>Крепость (мг)</label><input id="edStrength" value="${esc(p.strength || '')}"></div>
-          <div><label>Объём (мл)</label><input id="edVolume" value="${esc(p.volume || '')}"></div></div>`;
-      }
+      // ---- Товар-модель со вкусами ----
+      const specs = `<div id="edSpecs">${specFieldsHtml(p.category, p.specs, "eds_")}</div>`;
       const brandObj = brands.find(b => b.name === p.brand && b.category === p.category);
       const avail = brandObj ? brandObj.flavors : [];
       $("editBody").innerHTML = `
@@ -5071,10 +5164,6 @@
         </div>`;
       renderEditVariants();
       bindEditPhoto(); renderEditGallery();
-      if ($("edPuffs")) {
-        $("edPuffs").oninput = () => { $("edPuffsNum").value = $("edPuffs").value; };
-        $("edPuffsNum").oninput = () => { let v = parseInt($("edPuffsNum").value, 10); if (isNaN(v) || v < 0) v = 0; $("edPuffs").value = Math.min(v, +$("edPuffs").max); };
-      }
       $("edAddFlavor").onclick = () => {
         const v = $("edNewFlavor").value.trim(); if (!v) return;
         if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
@@ -5098,16 +5187,15 @@
       const upd = (field, value) => fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, field, value }) });
       $("edSave").disabled = true; $("edSave").textContent = "Сохраняю…";
       try {
+        const specs = collectSpecs("edSpecs");
         if (isVar) {
           const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
           if (!variants.length) { alertMsg("Оставьте хотя бы один вкус."); return; }
-          let volume = "", strength = p.strength || "", name = p.brand || p.name;
-          if (p.category === "disposable") { volume = $("edPuffsNum").value; name = [p.brand, volume].filter(x => x && x !== "0").join(" "); }
-          else if (p.category === "liquid") { strength = $("edStrength").value.trim(); volume = $("edVolume").value.trim(); name = p.brand; }
+          // У одноразок число затяжек — часть названия модели («Elf Bar 6000»).
+          const name = (p.category === "disposable" && specs.volume)
+            ? [p.brand, specs.volume].filter(x => x && x !== "0").join(" ") : (p.brand || p.name);
           await upd("price", $("edPrice").value);
           await upd("cost", $("edCost").value || 0);
-          await upd("volume", volume);
-          if (p.category === "liquid") await upd("strength", strength);
           if (name) await upd("name", name);
           await fetch("/api/admin/product/variants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, variants }) });
         } else {
@@ -5120,10 +5208,12 @@
           await upd("stock", $("edStock").value);
           await upd("brand", $("edBrand").value.trim());
           await upd("flavor", $("edFlavor").value.trim());
-          await upd("strength", $("edStrengthG").value.trim());
-          await upd("volume", $("edVolumeG").value.trim());
           await upd("description", $("edDesc").value.trim());
         }
+        // Характеристики сохраняем одним запросом — сервер сам разложит крепость
+        // и объём по своим колонкам, а остальное в JSON.
+        await fetch("/api/admin/product/specs", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData, id: editId, specs }) });
         await upd("city", $("edCity").value);
         await upd("is_hit", $("edHit").checked ? 1 : 0);
         if (editPhotoFile) {

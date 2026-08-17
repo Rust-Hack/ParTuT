@@ -351,6 +351,21 @@ def init_db():
         )
     """)
 
+    # Характеристики категории. У картриджа сопротивление и совместимость,
+    # у пода мощность и аккумулятор — общие «бренд и вкус» на всё это не годятся.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS category_specs (
+            id       {ID_COL},
+            category TEXT    NOT NULL,
+            key      TEXT    NOT NULL,
+            label    TEXT    NOT NULL,
+            unit     TEXT,
+            kind     TEXT    NOT NULL DEFAULT 'text',
+            options  TEXT,
+            sort     INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     # Отзывы. Пишет только тот, кто товар покупал, — иначе это не отзыв, а
     # анонимная запись в интернете, и цена ей соответствующая.
     cur.execute(f"""
@@ -385,6 +400,8 @@ def init_db():
     _ensure_user_columns()      # coins / referred_by у пользователей
     _ensure_order_columns()     # coins_used / доставка у заказов
     seed_categories()           # стартовые категории, если таблица пустая
+    _ensure_category_columns()  # has_flavors у категорий
+    seed_category_specs()       # характеристики категорий, если их ещё нет
     seed_locations()            # добавит стартовые точки, если таблица пустая
     seed_delivery()             # дефолтные способы получения для Минск/Туров
 
@@ -404,13 +421,32 @@ def _ensure_product_columns():
     cur = conn.cursor()
     cols = _table_columns(cur, "products")
     # photo_thumb — file_id уменьшенной копии для сетки каталога (см. _pick_photo_sizes)
-    for c in ("brand", "flavor", "strength", "volume", "photo_thumb"):
+    # specs — характеристики, свои у каждой категории (JSON). Старые колонки
+    # strength/volume остаются на месте: по ним живут прежние товары, бот и
+    # подписи в каталоге, и переносить их значило бы чинить то, что не сломано.
+    for c in ("brand", "flavor", "strength", "volume", "photo_thumb", "specs"):
         if c not in cols:
             cur.execute(f"ALTER TABLE products ADD COLUMN {c} TEXT")
     # Закупочная цена. Без неё статистика показывает выручку, но никогда —
     # прибыль, и решения о закупке принимаются вслепую.
     if "cost" not in cols:
         cur.execute("ALTER TABLE products ADD COLUMN cost REAL DEFAULT 0")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_category_columns():
+    """has_flavors — заводится ли товар этой категории списком вкусов.
+
+    Раньше это решал жёсткий список кодов в коде: вкусы были у одноразок и
+    жидкостей, и новая категория такой возможности получить не могла."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "categories")
+    if "has_flavors" not in cols:
+        cur.execute("ALTER TABLE categories ADD COLUMN has_flavors INTEGER DEFAULT 0")
+        cur.execute(_q("UPDATE categories SET has_flavors = 1 WHERE code IN (%s, %s)"),
+                    ("disposable", "liquid"))
     conn.commit()
     conn.close()
 
@@ -794,6 +830,184 @@ def seed_categories():
     conn.close()
 
 
+# Характеристики по категориям. Набор собран по тому, что реально указывают в
+# карточках вейп-магазины: у картриджа спрашивают сопротивление, объём и
+# совместимость, у пода — мощность, аккумулятор и тип затяжки. Владелец может
+# всё это менять, здесь только разумная отправная точка.
+# key strength/volume — особые: они лежат в своих колонках товара (см. SPEC_COLUMNS).
+SPEC_SEED = {
+    "disposable": [
+        ("volume", "Затяжек", "", "number", None),
+        ("strength", "Крепость", "мг", "number", None),
+    ],
+    "liquid": [
+        ("strength", "Крепость", "мг", "number", None),
+        ("volume", "Объём", "мл", "number", None),
+        ("base", "Тип", "", "select", ["Солевая", "Классическая"]),
+    ],
+    "podsystem": [
+        ("power", "Мощность", "Вт", "number", None),
+        ("battery", "Аккумулятор", "мАч", "number", None),
+        ("pod_volume", "Объём картриджа", "мл", "number", None),
+        ("draw", "Затяжка", "", "select", ["MTL (сигаретная)", "RDL", "DL (прямая)", "Регулируемая"]),
+        ("charge", "Зарядка", "", "select", ["USB-C", "Micro-USB", "Беспроводная"]),
+        ("screen", "Экран", "", "select", ["Есть", "Нет"]),
+    ],
+    "coils": [
+        ("kind", "Тип", "", "select", ["Картридж", "Испаритель", "Койл", "Вата"]),
+        ("resistance", "Сопротивление", "Ом", "number", None),
+        ("volume", "Объём", "мл", "number", None),
+        ("fit", "Совместимость", "", "text", None),
+        ("pack", "В упаковке", "шт", "number", None),
+    ],
+    "devices": [
+        ("power", "Мощность", "Вт", "number", None),
+        ("battery", "Аккумулятор", "мАч", "number", None),
+        ("battery_type", "Питание", "", "select", ["Встроенный", "18650", "21700", "2×18650"]),
+        ("screen", "Экран", "", "select", ["Есть", "Нет"]),
+    ],
+    "accessories": [
+        ("kind", "Тип", "", "text", None),
+        ("fit", "Совместимость", "", "text", None),
+    ],
+}
+
+# Эти характеристики хранятся в собственных колонках товара, а не в JSON:
+# по ним живут прежние товары, подписи в каталоге и карточка в боте.
+SPEC_COLUMNS = ("strength", "volume")
+SPEC_KINDS = ("number", "text", "select")
+
+
+def seed_category_specs():
+    """Стартовые характеристики — только для категорий, у которых их ещё нет."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT category AS c FROM category_specs")
+    have = {r["c"] for r in cur.fetchall()}
+    for category, rows in SPEC_SEED.items():
+        if category in have:
+            continue
+        for i, (key, label, unit, kind, options) in enumerate(rows):
+            cur.execute(_q("INSERT INTO category_specs (category, key, label, unit, kind, options, sort) "
+                           "VALUES (%s, %s, %s, %s, %s, %s, %s)"),
+                        (category, key, label, unit, kind,
+                         (json.dumps(options, ensure_ascii=False) if options else None), (i + 1) * 10))
+    conn.commit()
+    conn.close()
+
+
+def _spec_json(r):
+    try:
+        options = json.loads(r["options"]) if r["options"] else []
+    except (TypeError, ValueError):
+        options = []
+    return {"id": r["id"], "category": r["category"], "key": r["key"], "label": r["label"],
+            "unit": r["unit"] or "", "kind": r["kind"] or "text", "options": options, "sort": r["sort"]}
+
+
+def list_category_specs(category=None):
+    conn = connect()
+    cur = conn.cursor()
+    if category:
+        cur.execute(_q("SELECT * FROM category_specs WHERE category = %s ORDER BY sort, id"), (category,))
+    else:
+        cur.execute("SELECT * FROM category_specs ORDER BY category, sort, id")
+    rows = [_spec_json(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def add_category_spec(category, label, unit="", kind="text", options=None, key=None):
+    """Добавляет характеристику категории. Возвращает id или None, если такая уже есть."""
+    label = (label or "").strip()[:40]
+    if not label:
+        return None
+    kind = kind if kind in SPEC_KINDS else "text"
+    key = (key or _category_code(label))[:32]
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT 1 AS x FROM category_specs WHERE category = %s AND key = %s"), (category, key))
+    if cur.fetchone():
+        conn.close()
+        return None
+    cur.execute(_q("SELECT COALESCE(MAX(sort), 0) AS mx FROM category_specs WHERE category = %s"), (category,))
+    sort = int(cur.fetchone()["mx"]) + 10
+    sid = _insert_id(cur, "INSERT INTO category_specs (category, key, label, unit, kind, options, sort) "
+                          "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                     (category, key, label, (unit or "").strip()[:12], kind,
+                      (json.dumps(options, ensure_ascii=False) if options else None), sort))
+    conn.commit()
+    conn.close()
+    return sid
+
+
+def update_category_spec(spec_id, label=None, unit=None, options=None, sort=None):
+    """Правит подпись, единицу, варианты и порядок. Ключ не меняется — за ним значения товаров."""
+    conn = connect()
+    cur = conn.cursor()
+    if label is not None:
+        cur.execute(_q("UPDATE category_specs SET label = %s WHERE id = %s"), ((label or "").strip()[:40], spec_id))
+    if unit is not None:
+        cur.execute(_q("UPDATE category_specs SET unit = %s WHERE id = %s"), ((unit or "").strip()[:12], spec_id))
+    if options is not None:
+        cur.execute(_q("UPDATE category_specs SET options = %s WHERE id = %s"),
+                    (json.dumps(options, ensure_ascii=False) if options else None, spec_id))
+    if sort is not None:
+        cur.execute(_q("UPDATE category_specs SET sort = %s WHERE id = %s"), (int(sort), spec_id))
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def delete_category_spec(spec_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM category_specs WHERE id = %s"), (spec_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def product_specs(row):
+    """Характеристики товара: JSON + значения из собственных колонок."""
+    out = {}
+    try:
+        raw = row["specs"] if "specs" in row.keys() else None
+    except (AttributeError, TypeError):
+        raw = row.get("specs") if isinstance(row, dict) else None
+    if raw:
+        try:
+            out.update({k: v for k, v in json.loads(raw).items() if str(v).strip() != ""})
+        except (TypeError, ValueError):
+            pass
+    for col in SPEC_COLUMNS:
+        try:
+            val = row[col]
+        except (KeyError, IndexError, TypeError):
+            val = None
+        if val not in (None, ""):
+            out[col] = val
+    return out
+
+
+def set_product_specs(product_id, values):
+    """Сохраняет характеристики товара. strength/volume уходят в свои колонки,
+    остальное — в JSON: так прежние товары и подписи в каталоге остаются целы."""
+    values = {str(k): ("" if v is None else str(v).strip()) for k, v in (values or {}).items()}
+    extra = {k: v for k, v in values.items() if k not in SPEC_COLUMNS and v != ""}
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE products SET specs = %s WHERE id = %s"),
+                (json.dumps(extra, ensure_ascii=False) if extra else None, product_id))
+    for col in SPEC_COLUMNS:
+        if col in values:
+            cur.execute(_q(f"UPDATE products SET {col} = %s WHERE id = %s"), (values[col], product_id))
+    conn.commit()
+    conn.close()
+
+
 def list_categories():
     conn = connect()
     cur = conn.cursor()
@@ -829,10 +1043,13 @@ def add_category(name, emoji="", sort=0):
     return code
 
 
-def update_category(code, name=None, emoji=None, sort=None):
+def update_category(code, name=None, emoji=None, sort=None, has_flavors=None):
     """Переименовать категорию или сменить значок. Код не меняется — за ним товары."""
     conn = connect()
     cur = conn.cursor()
+    if has_flavors is not None:
+        cur.execute(_q("UPDATE categories SET has_flavors = %s WHERE code = %s"),
+                    (1 if has_flavors else 0, code))
     if name is not None:
         cur.execute(_q("UPDATE categories SET name = %s WHERE code = %s"), ((name or "").strip()[:40], code))
     if emoji is not None:

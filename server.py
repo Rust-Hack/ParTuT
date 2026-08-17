@@ -253,7 +253,9 @@ def api_admin_request_decide():
 # Заказы трогают только остатки, поэтому чистят каталог и статистику, а не всё подряд.
 _STOCK_KEYS = ("products", "stats")
 _WRITE_PATHS = {
-    "/api/admin/product": (), "/api/admin/product/update": (),
+    "/api/admin/product": (), "/api/admin/product/update": (), "/api/admin/product/specs": (),
+    "/api/admin/category/spec": ("categories",), "/api/admin/category/spec/update": ("categories",),
+    "/api/admin/category/spec/delete": ("categories",),
     "/api/admin/product/variants": (), "/api/admin/product/delete": (),
     "/api/admin/photo": (), "/api/admin/photo/add": (), "/api/admin/photo/delete": (),
     # Оценка живёт в карточке товара, поэтому её публикация обновляет витрину.
@@ -713,8 +715,15 @@ def api_categories():
     """Категории товара — витрина строит по ним фильтры, админка формы."""
     cached = _cache_get("categories")
     if cached is None:
+        by_cat = {}
+        for s in db.list_category_specs():
+            by_cat.setdefault(s["category"], []).append(s)
         cached = _cache_set("categories", [{"code": c["code"], "name": c["name"],
-                                            "emoji": c["emoji"] or "", "sort": c["sort"]}
+                                            "emoji": c["emoji"] or "", "sort": c["sort"],
+                                            # Вкусы есть не у всего: у картриджей их нет,
+                                            # а у жидкостей товар без них не завести.
+                                            "has_flavors": bool(c.get("has_flavors")),
+                                            "specs": by_cat.get(c["code"], [])}
                                            for c in db.list_categories()], 300)
     return jsonify(cached)
 
@@ -759,7 +768,63 @@ def api_admin_category_update():
         return jsonify({"ok": False, "error": "not_found"}), 404
     sort = data.get("sort")
     db.update_category(code, name=data.get("name"), emoji=data.get("emoji"),
-                       sort=(int(sort) if str(sort or "").strip().lstrip("-").isdigit() else None))
+                       sort=(int(sort) if str(sort or "").strip().lstrip("-").isdigit() else None),
+                       has_flavors=(bool(data.get("has_flavors")) if "has_flavors" in data else None))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/category/spec", methods=["POST"])
+def api_admin_category_spec_add():
+    """Добавить характеристику категории («Сопротивление, Ом» у расходников)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    category = (data.get("category") or "").strip()
+    if category not in db.category_codes():
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    options = data.get("options")
+    if isinstance(options, str):
+        options = [o.strip() for o in options.split(",") if o.strip()]
+    sid = db.add_category_spec(category, data.get("label") or "", data.get("unit") or "",
+                               data.get("kind") or "text", options or None)
+    if not sid:
+        return jsonify({"ok": False, "error": "exists"}), 400
+    return jsonify({"ok": True, "id": sid})
+
+
+@app.route("/api/admin/category/spec/update", methods=["POST"])
+def api_admin_category_spec_update():
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        sid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    options = data.get("options")
+    if isinstance(options, str):
+        options = [o.strip() for o in options.split(",") if o.strip()]
+    sort = data.get("sort")
+    if not db.update_category_spec(sid, label=data.get("label"), unit=data.get("unit"),
+                                   options=options,
+                                   sort=(int(sort) if str(sort or "").strip().lstrip("-").isdigit() else None)):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/category/spec/delete", methods=["POST"])
+def api_admin_category_spec_delete():
+    """Убрать характеристику из категории. Значения у товаров остаются в базе:
+    вернули поле — вернулись и они, а удалять чужие данные молча нельзя."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        sid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if not db.delete_category_spec(sid):
+        return jsonify({"ok": False, "error": "not_found"}), 404
     return jsonify({"ok": True})
 
 
@@ -862,6 +927,9 @@ def _all_products_payload():
             "cost": round(float(p["cost"] or 0), 2),   # видит только админка
             "brand": p["brand"] or "", "flavor": p["flavor"] or "",
             "strength": p["strength"] or "", "volume": p["volume"] or "",
+            # Характеристики своей категории: сопротивление у картриджа,
+            # мощность и аккумулятор у пода.
+            "specs": db.product_specs(p),
             "variants": variants_by.get(p["id"], []),
             # Сколько человек ждут поступления — админу видно, что завозить.
             "waiting": waiting.get(p["id"], 0),
@@ -1770,6 +1838,36 @@ def api_raffle_join():
 #  АДМИН-API (только для тех, кто в ADMIN_IDS)
 # ============================================================
 
+def _save_specs(product_id, category, values):
+    """Пишет только те характеристики, которые заведены у этой категории.
+
+    Иначе в товар попало бы что угодно из запроса, и карточка бы показывала
+    поля, которых в категории нет."""
+    if not isinstance(values, dict):
+        return
+    allowed = {s["key"] for s in db.list_category_specs(category)}
+    clean = {k: v for k, v in values.items() if k in allowed}
+    if clean:
+        db.set_product_specs(product_id, clean)
+
+
+@app.route("/api/admin/product/specs", methods=["POST"])
+def api_admin_product_specs():
+    """Сохранить характеристики товара (все разом)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        pid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    p = db.get_product(pid)
+    if not p:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    _save_specs(pid, p["category"], data.get("specs"))
+    return jsonify({"ok": True})
+
+
 @app.route("/api/admin/product", methods=["POST"])
 def api_admin_add():
     """Добавить товар из приложения."""
@@ -1814,6 +1912,7 @@ def api_admin_add():
             if fl:
                 db.add_variant(pid, fl, max(0, st))
         db.recalc_product_stock(pid)
+        _save_specs(pid, category, data.get("specs"))
         return jsonify({"ok": True, "id": pid})
 
     # Обычный товар (одно количество, без вкусов).
@@ -1825,6 +1924,7 @@ def api_admin_add():
     volume = (data.get("volume") or "").strip()
     pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc,
                          brand=brand, flavor=flavor, strength=strength, volume=volume, cost=cost)
+    _save_specs(pid, category, data.get("specs"))
     return jsonify({"ok": True, "id": pid})
 
 
