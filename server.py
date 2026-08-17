@@ -1236,6 +1236,23 @@ def api_admin_users():
     return jsonify({"ok": True, "users": users, "total": total, "shown": len(users)})
 
 
+@app.route("/api/admin/customer", methods=["POST"])
+def api_admin_customer():
+    """Карточка покупателя: история заказов, суммы, любимые товары."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        target = int(data.get("user_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    card = db.customer_card(target)
+    if not card:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    card["super"] = is_super_admin(target)
+    return jsonify({"ok": True, "card": card})
+
+
 @app.route("/api/admin/referral/unlink", methods=["POST"])
 def api_admin_referral_unlink():
     """Отвязать конкретного реферала по его id. Обычный админ — через подтверждение."""

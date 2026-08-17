@@ -992,6 +992,113 @@ def list_users(search="", limit=300):
     return out, total
 
 
+def customer_card(user_id, limit=30):
+    """Всё об одном покупателе на одном экране: кто он, что покупал, сколько принёс.
+
+    Деньги считаем только по ВЫДАННЫМ заказам: «оформил и не забрал» — это не
+    покупка, и складывать её в выручку значит завышать ценность клиента.
+    Возвращает None, если про такого человека нечего показать.
+    """
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM users WHERE user_id = %s"), (user_id,))
+    u = cur.fetchone()
+    # Берём все заказы, а не первые N: суммы и любимые товары должны считаться по
+    # всей истории, даже если на экран попадёт только последняя страница.
+    cur.execute(_q("SELECT * FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT 500"), (user_id,))
+    rows = cur.fetchall()
+    if not u and not rows:
+        conn.close()
+        return None
+    cur.execute(_q("SELECT COUNT(*) AS c FROM users WHERE referred_by = %s"), (user_id,))
+    referrals = cur.fetchone()["c"]
+    point = ""
+    point_id = (u["pickup_point_id"] if u else None)
+    if point_id:
+        cur.execute(_q("SELECT address FROM pickup_points WHERE id = %s"), (point_id,))
+        p = cur.fetchone()
+        point = p["address"] if p else ""
+    conn.close()
+
+    issued = [r for r in rows if r["status"] == "issued"]
+    spent = sum(float(r["total"] or 0) for r in issued)
+    qty_by_name, profit, revenue_known = {}, 0.0, 0.0
+    for r in issued:
+        try:
+            items = json.loads(r["items"])
+        except (TypeError, ValueError):
+            items = []
+        for it in items:
+            try:
+                q = int(it.get("qty", 0))
+            except (TypeError, ValueError):
+                continue
+            nm = it.get("name", "?")
+            price = float(it.get("price", 0) or 0)
+            cost = float(it.get("cost", 0) or 0)
+            qty_by_name[nm] = qty_by_name.get(nm, 0) + q
+            # Нулевая закупочная — это «не заполнено», а не «досталось даром».
+            if cost > 0:
+                profit += q * (price - cost)
+                revenue_known += q * price
+    favorites = [{"name": n, "qty": q} for n, q in sorted(qty_by_name.items(), key=lambda x: -x[1])[:5]]
+
+    dates = [r["created_at"] for r in issued if r["created_at"]]
+    first_buy = min(dates) if dates else ""
+    last_buy = max(dates) if dates else ""
+    days_since = None
+    if last_buy:
+        try:
+            days_since = (datetime.datetime.now() - datetime.datetime.strptime(last_buy[:16], "%Y-%m-%d %H:%M")).days
+        except ValueError:
+            days_since = None
+
+    username = ""
+    for r in rows:                       # заказы идут новыми вверх — берём свежее имя
+        if r["username"]:
+            username = r["username"]
+            break
+
+    out_orders = []
+    for r in rows[:limit]:
+        try:
+            items = [{"name": it.get("name", "?"), "flavor": it.get("flavor", ""),
+                      "qty": int(it.get("qty", 0) or 0)} for it in json.loads(r["items"])]
+        except (TypeError, ValueError):
+            items = []
+        out_orders.append({
+            "id": r["id"], "created_at": r["created_at"], "status": r["status"],
+            "total": round(float(r["total"] or 0), 2), "city": r["city"], "items": items,
+            "delivery_method": r["delivery_method"] or "", "address": r["delivery_address"] or "",
+            "promo_code": r["promo_code"] or "", "coins_used": int(r["coins_used"] or 0),
+        })
+
+    return {
+        "id": user_id, "username": username,
+        "coins": int((u["coins"] if u else 0) or 0),
+        "age_ok": bool(u["age_ok"]) if u else False,
+        "phone": (u["phone"] if u else "") or "",
+        "point": point,
+        "referred_by": (u["referred_by"] if u else None),
+        "referrals": referrals,
+        "ref_earned": int((u["ref_earned"] if u else 0) or 0),
+        "no_reminders": bool(u["no_reminders"]) if u else False,
+        "joined": (u["created_at"] if u else "") or "",
+        "orders_total": len(rows),
+        "issued": len(issued),
+        "canceled": sum(1 for r in rows if r["status"] == "canceled"),
+        "open": sum(1 for r in rows if r["status"] in ("new", "paid", "confirmed")),
+        "spent": round(spent, 2),
+        "avg_check": round(spent / len(issued), 2) if issued else 0,
+        "profit": round(profit, 2),
+        "profit_known": revenue_known > 0,      # была ли хоть одна позиция с закупочной ценой
+        "first_buy": first_buy, "last_buy": last_buy, "days_since": days_since,
+        "favorites": favorites,
+        "history": out_orders,
+        "history_shown": len(out_orders),
+    }
+
+
 def delete_user(user_id):
     """Полностью удаляет запись пользователя (монеты, 18+, прокруты, реф-связь).
     Заказы остаются в истории. Возвращает True, если пользователь был удалён."""

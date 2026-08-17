@@ -497,6 +497,25 @@
     .superbadge { font-size: 10px; font-weight: 800; color: var(--brand-neon); border: 1px solid var(--brand-neon); border-radius: 6px; padding: 1px 5px; text-shadow: 0 0 6px var(--brand-glow); white-space: nowrap; }
     .reqbadge { display: inline-block; min-width: 18px; text-align: center; font-size: 11px; font-weight: 800; color: #fff; background: var(--danger); border-radius: 999px; padding: 1px 6px; margin-left: 4px; }
     .uprotected { font-size: 12px; color: var(--hint); font-style: italic; }
+    /* Карточка покупателя: сначала цифры, потом история */
+    .cctiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 4px 0 12px; }
+    .cctile { background: var(--surface-2); border: 1px solid transparent; border-radius: 12px; padding: 10px 12px; }
+    .cctile .v { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .cctile .k { font-size: 11.5px; color: var(--hint); margin-top: 2px; }
+    .cctile .k small { display: block; font-size: 10.5px; opacity: .8; }
+    .ccflag { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 4px 11px; margin-bottom: 10px; }
+    .ccflag.good { background: rgba(76,175,80,.16); color: #2e9e4f; }
+    .ccflag.warn { background: rgba(239,83,80,.14); color: var(--danger); }
+    .ccflag.calm { background: var(--surface-2); color: var(--hint); }
+    .cchead { font-size: 12px; font-weight: 700; color: var(--hint); text-transform: uppercase; letter-spacing: .04em; margin: 16px 0 8px; }
+    .ccfav { display: flex; flex-wrap: wrap; gap: 6px; }
+    .ccfav span { background: var(--surface-2); border-radius: 999px; padding: 5px 11px; font-size: 12.5px; }
+    .ccorder { border-bottom: 1px solid var(--line); padding: 9px 0; }
+    .ccorder:last-child { border-bottom: none; }
+    .ccorder .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .ccorder .sum { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .ccorder .items { font-size: 12.5px; color: var(--hint); margin-top: 3px; }
+    .ccorder .when { font-size: 12px; color: var(--hint); }
     .idcopy { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
     .idcopy:active { color: var(--brand-neon); }
     .minitoast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%) translateY(10px); background: rgba(8,16,20,.92); color: #fff; padding: 9px 16px; border-radius: 999px; font-size: 13px; font-weight: 600; box-shadow: 0 4px 16px rgba(0,0,0,.4); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 100; }
@@ -3398,28 +3417,87 @@
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("msgSend").disabled = false; $("msgSend").textContent = "Отправить"; }
     };
-    // Подробная карточка пользователя (тап по строке).
-    function showUserCard(u) {
+    // «5 покупки» выдаёт машину с головой. Русский счёт: 1 покупка, 2 покупки, 5 покупок.
+    function plural(n, one, few, many) {
+      const d = Math.abs(n) % 10, dd = Math.abs(n) % 100;
+      if (d === 1 && dd !== 11) return one;
+      if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return few;
+      return many;
+    }
+    // База отдаёт «2026-08-17 17:30» — человеку читать удобнее «17.08.2026, 17:30».
+    function whenRu(s) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}:\d{2})/.exec(String(s || ""));
+      return m ? `${m[3]}.${m[2]}.${m[1]}, ${m[4]}` : (s || "—");
+    }
+    // Карточка покупателя (тап по строке): кто это, что берёт и сколько принёс.
+    async function showUserCard(u) {
       if (!u) return;
       const who = (u.username ? `@${esc(u.username)}` : `ID ${u.id}`) + (u.super ? " 🛡" : "");
+      showInfo(who, `<div style="color:var(--hint)">Загрузка…</div>`);
+      let card = null;
+      try {
+        const r = await fetch("/api/admin/customer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: u.id }) });
+        const d = await r.json();
+        card = d.ok ? d.card : null;
+      } catch (e) { card = null; }
+      // Не открылась история — показываем то, что уже знаем из списка, а не пустоту.
+      const c = card || { ...u, issued: u.orders, spent: u.spent, avg_check: 0, favorites: [], history: [],
+                          coins: u.coins, phone: "", point: "", days_since: null, profit: 0, profit_known: false,
+                          canceled: 0, open: 0, orders_total: u.orders, first_buy: "", last_buy: u.last_order || "" };
+
+      // Одна строка сверху, по которой сразу понятно, как себя вести с человеком.
+      let flag = `<div class="ccflag calm">Пока не покупал</div>`;
+      if (c.issued >= 3) flag = `<div class="ccflag good">Постоянный — ${c.issued} ${plural(c.issued, "покупка", "покупки", "покупок")}</div>`;
+      else if (c.issued >= 1) flag = `<div class="ccflag calm">Покупал ${c.issued} ${plural(c.issued, "раз", "раза", "раз")}</div>`;
+      if (c.days_since !== null && c.days_since >= 30) flag = `<div class="ccflag warn">Молчит ${c.days_since} ${plural(c.days_since, "день", "дня", "дней")} — можно напомнить</div>`;
+
+      const tiles = `<div class="cctiles">
+        <div class="cctile"><div class="v">${(c.spent || 0).toFixed(2)} Br</div><div class="k">Принёс за всё время</div></div>
+        <div class="cctile"><div class="v">${(c.avg_check || 0).toFixed(2)} Br</div><div class="k">Средний чек</div></div>
+        <div class="cctile"><div class="v">${c.issued || 0}</div><div class="k">Выдано заказов${c.canceled ? `<small>отклонено: ${c.canceled}</small>` : ""}${c.open ? `<small>в работе: ${c.open}</small>` : ""}</div></div>
+        <div class="cctile"><div class="v">${c.profit_known ? (c.profit || 0).toFixed(2) + " Br" : "—"}</div><div class="k">Заработали на нём${c.profit_known ? "" : `<small>нет закупочных цен</small>`}</div></div>
+      </div>`;
+
+      const fav = (c.favorites || []).length
+        ? `<div class="cchead">Что берёт</div><div class="ccfav">${c.favorites.map(f => `<span>${esc(f.name)} · ${f.qty} шт</span>`).join("")}</div>`
+        : "";
+
       const rows = [
-        ["Баланс", `${u.coins} 🪙`],
+        ["Баланс", `${c.coins} 🪙`],
         ["Прокруты колеса", `${u.wheel_spins} 🎡`],
-        ["Заказов (выдано)", `${u.orders}`],
-        ["Сумма покупок", `${u.spent} Br`],
-        ["Последний заказ", u.last_order || "—"],
-        ["Рефералов", `${u.referrals}`],
-        ["Пригласил", u.referred_by ? `id ${u.referred_by}` : "—"],
-        ["Заработано на рефералах", `${u.ref_earned} 🪙`],
-        ["18+", u.age_ok ? "да" : "нет"],
+        ["Телефон", c.phone || "—"],
+        ["Своя точка самовывоза", c.point || "—"],
+        ["Первая покупка", c.first_buy ? whenRu(c.first_buy) : "—"],
+        ["Последняя покупка", c.last_buy ? whenRu(c.last_buy) : "—"],
+        ["Рефералов", `${c.referrals}`],
+        ["Пригласил", c.referred_by ? `id ${c.referred_by}` : "—"],
+        ["Заработано на рефералах", `${c.ref_earned || 0} 🪙`],
+        ["18+", c.age_ok ? "да" : "нет"],
+        ["Напоминания", c.no_reminders ? "отписался" : "получает"],
       ].map(([k, v]) => `<div class="statrow"><span>${k}</span><b>${esc(String(v))}</b></div>`).join("");
+
+      const hist = (c.history || []).length
+        ? `<div class="cchead">История заказов</div>` + c.history.map(o => {
+            const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
+            const items = (o.items || []).map(i => esc(i.name) + (i.flavor ? ` — ${esc(i.flavor)}` : "") + ` ×${i.qty}`).join(", ");
+            return `<div class="ccorder">
+              <div class="top"><span class="when">№${o.id} · ${esc(whenRu(o.created_at))}</span><span class="obadge ${st.cls}">${st.label}</span></div>
+              <div class="top" style="margin-top:4px"><span class="items">${items || "—"}</span><span class="sum">${o.total.toFixed(2)} Br</span></div>
+            </div>`;
+          }).join("")
+          + (c.orders_total > c.history_shown ? `<div style="color:var(--hint);font-size:12px;margin-top:8px">Показаны последние ${c.history_shown} из ${c.orders_total}.</div>` : "")
+        : `<div class="cchead">История заказов</div><div style="color:var(--hint);font-size:13px">Заказов ещё не было.</div>`;
+
       const acts = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
         <button class="bigbtn" id="ucMsg" style="flex:1 1 100%">✍️ Написать клиенту</button>
         <button class="bigbtn" id="ucCoins" style="flex:1 1 100%;background:var(--surface-2);color:var(--text)">💰 Изменить монеты / прокруты</button>
-        ${(u.referred_by && !u.super) ? `<button class="closebtn ucUnref" style="flex:1;color:var(--danger)">Отвязать реферала</button>` : ""}
+        ${(c.referred_by && !u.super) ? `<button class="closebtn ucUnref" style="flex:1;color:var(--danger)">Отвязать реферала</button>` : ""}
         ${!u.super ? `<button class="closebtn ucDel" style="flex:1;color:var(--danger)">🗑 Удалить</button>` : `<div style="flex:1;color:var(--hint);text-align:center;align-self:center">🛡 защищён</div>`}
       </div>`;
-      showInfo(who, `<div style="color:var(--hint);font-size:12px;margin-bottom:8px">ID ${u.id}</div>${rows}${acts}`);
+
+      showInfo(who, `<div style="color:var(--hint);font-size:12px;margin-bottom:8px"><span class="idcopy" data-copy="${u.id}">ID ${u.id} 📋</span></div>`
+        + flag + tiles + fav + `<div class="cchead">Профиль</div>` + rows + hist + acts);
+      bindIdCopy($("infoBody"));
       const close = () => closeOverlay($("infoOverlay"));
       if ($("ucMsg")) $("ucMsg").onclick = () => { close(); openAdminMsg(u.id, who); };
       if ($("ucCoins")) $("ucCoins").onclick = () => { ["coinUserId", "unrefId"].forEach(f => { if ($(f)) $(f).value = u.id; }); close(); toast(`ID ${u.id} подставлен в «Монеты и прокруты»`); };
