@@ -254,6 +254,8 @@ def api_admin_request_decide():
 _STOCK_KEYS = ("products", "stats")
 _WRITE_PATHS = {
     "/api/admin/product": (), "/api/admin/product/update": (), "/api/admin/product/specs": (),
+    "/api/admin/product/from-model": (), "/api/admin/model": (), "/api/admin/model/delete": (),
+    "/api/admin/model/photo": (),
     "/api/admin/category/spec": ("categories",), "/api/admin/category/spec/update": ("categories",),
     "/api/admin/category/spec/delete": ("categories",),
     "/api/admin/product/variants": (), "/api/admin/product/delete": (),
@@ -921,6 +923,9 @@ def _all_products_payload():
             "photos": photos,
             "rating": ratings.get(p["id"], {"avg": 0, "count": 0}),
             "id": p["id"], "name": p["name"], "price": p["price"],
+            # Ссылка на модель из «Ассортимента»: у товара, заведённого по ней,
+            # описание правится там, а здесь остаются цена, закупка и остаток.
+            "model_id": p["model_id"] if "model_id" in p.keys() else None,
             "stock": p["stock"], "is_hit": p["is_hit"],
             "category": p["category"], "city": p["city"],
             "description": p["description"] or "",
@@ -2766,6 +2771,140 @@ def api_flavors():
     if cached is None:
         cached = _cache_set("flavors", db.known_flavors(), 300)
     return jsonify(cached)
+
+
+@app.route("/api/admin/models", methods=["POST"])
+def api_admin_models():
+    """Ассортимент: что магазин вообще продаёт (независимо от наличия на точках)."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    models = db.list_models()
+    for m in models:
+        m["products"] = db.count_products_of_model(m["id"])
+        m["photo_url"] = f"/api/photo?file_id={m['photo']}" if m["photo"] else None
+        m["thumb_url"] = f"/api/photo?file_id={m['photo_thumb'] or m['photo']}" if m["photo"] else None
+    return jsonify({"ok": True, "models": models})
+
+
+def _clean_specs(category, values):
+    """Оставляет только характеристики, заведённые у этой категории."""
+    if not isinstance(values, dict):
+        return {}
+    allowed = {s["key"] for s in db.list_category_specs(category)}
+    return {k: str(v).strip() for k, v in values.items() if k in allowed and str(v).strip() != ""}
+
+
+@app.route("/api/admin/model", methods=["POST"])
+def api_admin_model_save():
+    """Создать или изменить модель. Правка расходится по всем её товарам."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    category = (data.get("category") or "").strip()
+    name = (data.get("name") or "").strip()
+    if category not in db.category_codes() or not name:
+        return jsonify({"ok": False, "error": "bad_data"}), 400
+    specs = _clean_specs(category, data.get("specs"))
+    flavors, seen = [], set()
+    for f in (data.get("flavors") or []):
+        f = str(f).strip()
+        if f and f.lower() not in seen:
+            seen.add(f.lower())
+            flavors.append(f)
+    mid = data.get("id")
+    if mid:
+        if not db.get_model(int(mid)):
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        moved = db.update_model(int(mid), category=category, name=name, brand=data.get("brand") or "",
+                                description=data.get("description") or "", specs=specs, flavors=flavors)
+        return jsonify({"ok": True, "id": int(mid), "updated": moved})
+    new_id = db.add_model(category, name, data.get("brand") or "", data.get("description") or "", specs, flavors)
+    return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/admin/model/delete", methods=["POST"])
+def api_admin_model_delete():
+    """Убрать модель из ассортимента. Товары на точках остаются: их снимают
+    с продажи отдельно, иначе одно нажатие обнуляло бы все точки разом."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        mid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    used = db.count_products_of_model(mid)
+    if used and not data.get("force"):
+        return jsonify({"ok": False, "error": "has_products", "count": used}), 400
+    if not db.delete_model(mid):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify({"ok": True, "count": used})
+
+
+@app.route("/api/admin/model/photo", methods=["POST"])
+def api_admin_model_photo():
+    """Фото модели — оно же появляется у всех её товаров на точках."""
+    user = get_admin(request.form.get("initData", ""))
+    if not user:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        mid = int(request.form.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if not db.get_model(mid):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"ok": False, "error": "no_file"}), 400
+    try:
+        msg = tg.send_photo(int(user["id"]), file.read(),
+                            caption="🖼 Фото модели сохранено", disable_notification=True)
+        file_id, thumb_id = _pick_photo_sizes(msg.photo)
+    except Exception as e:
+        print(f"Не смог обработать фото модели: {e}")
+        return jsonify({"ok": False, "error": "send_failed"}), 500
+    db.set_model_photo(mid, file_id, thumb_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/product/from-model", methods=["POST"])
+def api_admin_product_from_model():
+    """Завоз: модель появляется на точке с ценой и остатком."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        mid = int(data.get("model_id"))
+        price = float(str(data.get("price")).replace(",", "."))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_data"}), 400
+    m = db.get_model(mid)
+    city = (data.get("city") or "").strip()
+    if not m or city not in db.location_names():
+        return jsonify({"ok": False, "error": "bad_data"}), 400
+    try:
+        cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
+    except (TypeError, ValueError):
+        cost = 0.0
+    variants = data.get("variants") if isinstance(data.get("variants"), list) else []
+    try:
+        stock = max(0, int(data.get("stock") or 0))
+    except (TypeError, ValueError):
+        stock = 0
+    pid = db.add_product_from_model(mid, city, max(0.0, price), cost,
+                                    0 if variants else stock, 1 if data.get("is_hit") else 0)
+    if variants:
+        for v in variants:
+            fl = str(v.get("flavor", "")).strip()
+            try:
+                st = max(0, int(v.get("stock", 0)))
+            except (TypeError, ValueError):
+                st = 0
+            if fl:
+                db.add_variant(pid, fl, st)
+        db.recalc_product_stock(pid)
+    return jsonify({"ok": True, "id": pid})
 
 
 @app.route("/api/admin/brand", methods=["POST"])

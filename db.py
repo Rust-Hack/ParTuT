@@ -351,6 +351,25 @@ def init_db():
         )
     """)
 
+    # Модели («Ассортимент») — что магазин вообще продаёт: бренд, название,
+    # характеристики, вкусы и фото. Товар на точке — это НАЛИЧИЕ модели: цена,
+    # закупка, остаток. Раньше модели не было, и одна и та же подсистема на трёх
+    # точках описывалась трижды — с тройным шансом описать её по-разному.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS models (
+            id          {ID_COL},
+            category    TEXT NOT NULL,
+            brand       TEXT,
+            name        TEXT NOT NULL,
+            description TEXT,
+            specs       TEXT,
+            flavors     TEXT,
+            photo       TEXT,
+            photo_thumb TEXT,
+            created_at  TEXT
+        )
+    """)
+
     # Характеристики категории. У картриджа сопротивление и совместимость,
     # у пода мощность и аккумулятор — общие «бренд и вкус» на всё это не годятся.
     cur.execute(f"""
@@ -402,6 +421,7 @@ def init_db():
     seed_categories()           # стартовые категории, если таблица пустая
     _ensure_category_columns()  # has_flavors у категорий
     seed_category_specs()       # характеристики категорий, если их ещё нет
+    models_seeded_from_products()   # разово собирает ассортимент из прежних товаров
     seed_locations()            # добавит стартовые точки, если таблица пустая
     seed_delivery()             # дефолтные способы получения для Минск/Туров
 
@@ -427,6 +447,10 @@ def _ensure_product_columns():
     for c in ("brand", "flavor", "strength", "volume", "photo_thumb", "specs"):
         if c not in cols:
             cur.execute(f"ALTER TABLE products ADD COLUMN {c} TEXT")
+    # Ссылка на модель из «Ассортимента». NULL — товар заведён до её появления:
+    # он продолжает работать сам по себе, просто не обновляется вместе с моделью.
+    if "model_id" not in cols:
+        cur.execute("ALTER TABLE products ADD COLUMN model_id INTEGER")
     # Закупочная цена. Без неё статистика показывает выручку, но никогда —
     # прибыль, и решения о закупке принимаются вслепую.
     if "cost" not in cols:
@@ -3389,6 +3413,185 @@ def delete_brand(brand_id):
     cur.execute(_q("DELETE FROM brands WHERE id = %s"), (brand_id,))
     conn.commit()
     conn.close()
+
+
+# ---------- Ассортимент: модели товаров ----------
+
+def _model_json(r):
+    def _load(raw, default):
+        try:
+            return json.loads(raw) if raw else default
+        except (TypeError, ValueError):
+            return default
+    return {"id": r["id"], "category": r["category"], "brand": r["brand"] or "", "name": r["name"],
+            "description": r["description"] or "", "specs": _load(r["specs"], {}),
+            "flavors": _load(r["flavors"], []),
+            "photo": r["photo"] or "", "photo_thumb": r["photo_thumb"] or ""}
+
+
+def list_models(category=None):
+    conn = connect()
+    cur = conn.cursor()
+    if category:
+        cur.execute(_q("SELECT * FROM models WHERE category = %s ORDER BY brand, name"), (category,))
+    else:
+        cur.execute("SELECT * FROM models ORDER BY category, brand, name")
+    rows = [_model_json(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_model(model_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM models WHERE id = %s"), (model_id,))
+    row = cur.fetchone()
+    conn.close()
+    return _model_json(row) if row else None
+
+
+def add_model(category, name, brand="", description="", specs=None, flavors=None):
+    conn = connect()
+    cur = conn.cursor()
+    mid = _insert_id(cur, "INSERT INTO models (category, brand, name, description, specs, flavors, created_at) "
+                          "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                     (category, (brand or "").strip(), (name or "").strip(), (description or "").strip(),
+                      json.dumps(specs or {}, ensure_ascii=False),
+                      json.dumps(flavors or [], ensure_ascii=False), _now_str()))
+    conn.commit()
+    conn.close()
+    return mid
+
+
+def update_model(model_id, category=None, name=None, brand=None, description=None, specs=None, flavors=None):
+    """Правит модель и переносит изменения на все её товары.
+
+    Ради этого модель и заводится: описание живёт в одном месте, а не в трёх
+    копиях по точкам, которые расходятся при первой же правке."""
+    conn = connect()
+    cur = conn.cursor()
+    sets, params = [], []
+    for col, val in (("category", category), ("name", name), ("brand", brand), ("description", description)):
+        if val is not None:
+            sets.append(f"{col} = %s")
+            params.append(str(val).strip())
+    if specs is not None:
+        sets.append("specs = %s")
+        params.append(json.dumps(specs, ensure_ascii=False))
+    if flavors is not None:
+        sets.append("flavors = %s")
+        params.append(json.dumps(flavors, ensure_ascii=False))
+    if sets:
+        cur.execute(_q(f"UPDATE models SET {', '.join(sets)} WHERE id = %s"), (*params, model_id))
+    conn.commit()
+    conn.close()
+    return propagate_model(model_id)
+
+
+def set_model_photo(model_id, file_id, thumb_id=""):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE models SET photo = %s, photo_thumb = %s WHERE id = %s"),
+                (file_id, thumb_id or "", model_id))
+    conn.commit()
+    conn.close()
+    return propagate_model(model_id)
+
+
+def propagate_model(model_id):
+    """Разносит описание модели по её товарам на точках. Цену, закупку и остаток
+    не трогает — это как раз то, что у каждой точки своё."""
+    m = get_model(model_id)
+    if not m:
+        return 0
+    specs = {k: v for k, v in (m["specs"] or {}).items() if k not in SPEC_COLUMNS}
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE products SET category = %s, brand = %s, name = %s, description = %s, specs = %s "
+                   "WHERE model_id = %s"),
+                (m["category"], m["brand"], m["name"], m["description"],
+                 json.dumps(specs, ensure_ascii=False) if specs else None, model_id))
+    n = cur.rowcount
+    for col in SPEC_COLUMNS:
+        cur.execute(_q(f"UPDATE products SET {col} = %s WHERE model_id = %s"),
+                    (str((m["specs"] or {}).get(col, "") or ""), model_id))
+    if m["photo"]:
+        cur.execute(_q("UPDATE products SET photo = %s, photo_thumb = %s WHERE model_id = %s"),
+                    (m["photo"], m["photo_thumb"], model_id))
+    conn.commit()
+    conn.close()
+    return n
+
+
+def count_products_of_model(model_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COUNT(*) AS c FROM products WHERE model_id = %s"), (model_id,))
+    n = int(cur.fetchone()["c"])
+    conn.close()
+    return n
+
+
+def delete_model(model_id):
+    """Убирает модель из ассортимента. Товары на точках остаются — их снимают
+    с продажи отдельно, иначе одно нажатие стирало бы остатки всех точек."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE products SET model_id = NULL WHERE model_id = %s"), (model_id,))
+    cur.execute(_q("DELETE FROM models WHERE id = %s"), (model_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def add_product_from_model(model_id, city, price, cost=0, stock=0, is_hit=0):
+    """Заводит наличие модели на точке. Описание берётся из модели целиком."""
+    m = get_model(model_id)
+    if not m:
+        return None
+    specs = m["specs"] or {}
+    pid = add_product(city, m["category"], m["name"], price, stock, is_hit, m["description"],
+                      brand=m["brand"], flavor="",
+                      strength=str(specs.get("strength", "") or ""),
+                      volume=str(specs.get("volume", "") or ""), cost=cost)
+    extra = {k: v for k, v in specs.items() if k not in SPEC_COLUMNS and str(v).strip() != ""}
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE products SET model_id = %s, specs = %s, photo = %s, photo_thumb = %s WHERE id = %s"),
+                (model_id, json.dumps(extra, ensure_ascii=False) if extra else None,
+                 m["photo"] or None, m["photo_thumb"] or None, pid))
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def models_seeded_from_products():
+    """Разовый перенос: из существующих товаров собираем модели.
+
+    Один и тот же товар мог быть заведён на нескольких точках — это одна
+    модель, поэтому группируем по «категория + бренд + название»."""
+    if get_setting("models_seeded"):
+        return 0
+    made = 0
+    groups = {}
+    for p in get_all_products():
+        key = (p["category"], (p["brand"] or "").strip(), p["name"].strip())
+        groups.setdefault(key, []).append(p)
+    for (category, brand, name), rows in groups.items():
+        first = rows[0]
+        mid = add_model(category, name, brand, first["description"] or "", product_specs(first), [])
+        if first["photo"]:
+            set_model_photo(mid, first["photo"], first["photo_thumb"] or "")
+        conn = connect()
+        cur = conn.cursor()
+        for p in rows:
+            cur.execute(_q("UPDATE products SET model_id = %s WHERE id = %s"), (mid, p["id"]))
+        conn.commit()
+        conn.close()
+        made += 1
+    set_setting("models_seeded", "1")
+    return made
 
 
 # ---------- Варианты товара (вкус + остаток) ----------

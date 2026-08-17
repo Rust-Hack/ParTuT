@@ -931,7 +931,8 @@
     <div class="prow" id="mProducts"><span>🛍 Товары</span><span>›</span></div>
     <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
     <div class="prow" id="mCats"><span>🗂 Категории товара</span><span>›</span></div>
-    <div class="prow" id="mBrands"><span>🏷 Бренды и вкусы</span><span>›</span></div>
+    <div class="prow" id="mModels"><span>📚 Ассортимент</span><span>›</span></div>
+    <div class="prow" id="mBrands"><span>🏷 Бренды</span><span>›</span></div>
     <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
     <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
     <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
@@ -1167,35 +1168,9 @@
 
     <details class="sect">
       <summary class="secthead">➕ Новый товар</summary>
-      <div class="sectbody form">
-      <label>Точка (город)</label><select id="afCity"></select>
-      <label>Категория</label><select id="afCat"></select>
-      <div id="nameField"><label>Название</label><input id="afName" placeholder="Например: Vaporesso XROS"></div>
-      <label>Цена (Br)</label><input id="afPrice" inputmode="decimal" placeholder="18.5">
-      <label>Закупочная цена (Br)</label><input id="afCost" inputmode="decimal" placeholder="12">
-      <div class="dnote" style="margin:6px 0 0">Видите только вы. Без неё статистика покажет выручку, но не прибыль.</div>
-
-      <!-- Категории со вкусами: бренд из базы, вкусы с остатком -->
-      <div id="dispFields" style="display:none">
-        <label>Бренд</label><select id="dispBrand"></select>
-        <label>Вкусы и остаток (отметьте нужные)</label>
-        <div id="dispFlavors"></div>
-      </div>
-
-      <!-- Обычный товар: одно количество; бренд и вкус — из справочника -->
-      <div id="genFields">
-        <label>Остаток (шт.)</label><input id="afStock" inputmode="numeric" placeholder="10">
-        <label>Бренд</label><div id="afBrandBox"></div>
-        <label>Вкус (если есть)</label><div id="afFlavorBox"></div>
-      </div>
-
-      <!-- Характеристики этой категории: у картриджа сопротивление, у пода мощность -->
-      <div id="afSpecs"></div>
-
-      <label>Описание (необязательно)</label><input id="afDesc" placeholder="Коротко">
-      <div class="chk"><input type="checkbox" id="afHit"><label for="afHit" style="margin:0">🔥 Отметить как «Хит»</label></div>
-      <label>Фото (необязательно)</label><input type="file" id="afPhoto" accept="image/*">
-      <button class="bigbtn" id="afAdd" style="margin-top:16px">Добавить товар</button>
+      <div class="sectbody">
+        <p style="color:var(--hint);font-size:13.5px;margin:0 0 12px;text-align:left">Товар — это наличие модели на точке: цена, закупка и остаток. Сама модель (бренд, характеристики, вкусы, фото) описывается один раз в «Ассортименте», и оттуда же заводится на любую точку кнопкой 📥.</p>
+        <button class="bigbtn" id="toModels">📚 Открыть ассортимент</button>
       </div>
     </details>
 
@@ -1272,9 +1247,72 @@
     </div>
   </div>
 
-  <!-- Раздел: Бренды и вкусы -->
+  <!-- Завоз модели на точку -->
+  <div class="view ontop" id="stockInView">
+    <div class="viewhead"><h2>📥 Завезти</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="stockInClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <div id="stockInName" style="font-weight:800;font-size:16px"></div>
+      <div id="stockInMeta" style="color:var(--hint);font-size:13px;margin-bottom:6px"></div>
+      <label>Точка (город)</label><select id="stockInCity"></select>
+      <div class="rowf">
+        <div><label>Цена (Br)</label><input id="stockInPrice" inputmode="decimal" placeholder="18.5"></div>
+        <div><label>Закупка (Br)</label><input id="stockInCost" inputmode="decimal" placeholder="12"></div>
+      </div>
+      <div id="stockInStockWrap"><label>Остаток (шт.)</label><input id="stockInStock" inputmode="numeric" placeholder="10"></div>
+      <div id="stockInFlavorsWrap" style="display:none">
+        <label>Вкусы и остаток</label>
+        <div id="stockInFlavors"></div>
+      </div>
+      <div class="chk" style="margin-top:12px"><input type="checkbox" id="stockInHit">
+        <label for="stockInHit" style="margin:0">🔥 Отметить как «Хит»</label></div>
+      <div id="stockInWhere" style="color:var(--hint);font-size:12.5px;margin-top:10px"></div>
+      <button class="bigbtn" id="stockInSave" style="margin-top:14px">Завезти на точку</button>
+    </div>
+  </div>
+
+  <!-- Раздел: Ассортимент (модели) -->
+  <div class="view" id="modelsView">
+    <div class="viewhead"><h2>📚 Ассортимент</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="modelsClose">‹ Назад</button></div>
+
+    <details class="sect" id="mdFormSect">
+      <summary class="secthead">➕ Новая модель</summary>
+      <div class="sectbody form">
+        <p style="color:var(--hint);font-size:13px;margin:0 0 6px;text-align:left">Здесь описывается сам товар: бренд, характеристики, вкусы и фото. Цена и остаток — в «Товарах», отдельно по каждой точке.</p>
+        <label>Категория</label><select id="mdCat"></select>
+        <label>Бренд</label><div id="mdBrandBox"></div>
+        <label>Название модели</label><input id="mdName" placeholder="Например: XROS 3">
+        <label>Описание (необязательно)</label><input id="mdDesc" placeholder="Коротко">
+        <div id="mdSpecs"></div>
+        <div id="mdFlavorsWrap">
+          <label>Вкусы</label>
+          <div style="display:flex;gap:8px">
+            <input id="mdFlavorInput" placeholder="Например: Манго" style="flex:1" list="mdFlavorKnown">
+            <datalist id="mdFlavorKnown"></datalist>
+            <button class="iconbtn ok" id="mdFlavorAdd" style="width:auto;padding:0 16px">＋</button>
+          </div>
+          <div id="mdFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
+        </div>
+        <label>Фото</label>
+        <div class="edphoto"><img id="mdPhotoPrev" alt="" style="display:none"><input type="file" id="mdPhoto" accept="image/*"></div>
+        <button class="bigbtn" id="mdSave" style="margin-top:14px">Сохранить модель</button>
+        <button class="closebtn" id="mdCancel" style="display:none">Отменить редактирование</button>
+      </div>
+    </details>
+
+    <details class="sect" open>
+      <summary class="secthead">Что мы продаём</summary>
+      <div class="sectbody">
+        <input id="mdSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
+        <div id="mdList"></div>
+      </div>
+    </details>
+  </div>
+
+  <!-- Раздел: Бренды -->
   <div class="view" id="brandsView">
-    <div class="viewhead"><h2>🏷 Бренды и вкусы</h2>
+    <div class="viewhead"><h2>🏷 Бренды</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="brandsClose">‹ Назад</button></div>
     <details class="sect" id="brFormSect">
       <summary class="secthead">➕ Добавить бренд</summary>
@@ -3410,6 +3448,220 @@
     $("mLocations").onclick = openLocations;
     $("mBrands").onclick = openBrands;
 
+    // ---------- Ассортимент: модели ----------
+    // Модель описывается один раз. Товар на точке — это её наличие: цена,
+    // закупка, остаток. Раньше одна подсистема на трёх точках описывалась
+    // трижды, и три описания расходились после первой же правки.
+    let models = [], editingModelId = null, modelFlavors = [], modelPhotoFile = null, modelSearch = "";
+    $("mModels").onclick = openModels;
+    $("modelsClose").onclick = () => $("modelsView").classList.remove("show");
+    $("mdSearch").oninput = () => { modelSearch = $("mdSearch").value; renderModelList(); };
+
+    async function fetchModels() {
+      try {
+        const r = await fetch("/api/admin/models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        models = d.ok ? d.models : [];
+      } catch (e) { models = []; }
+    }
+    async function openModels() {
+      $("modelsView").classList.add("show");
+      $("mdCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+      await Promise.all([fetchModels(), fetchBrands(), fetchFlavors()]);
+      resetModelForm();
+      renderModelList();
+    }
+    function renderModelForm() {
+      const cat = $("mdCat").value;
+      $("mdBrandBox").innerHTML = pickerHtml("mdBrand", $("mdBrand") ? pickerValue("mdBrand") : "", brandNames(cat), "+ Новый бренд…");
+      bindPicker("mdBrand");
+      $("mdSpecs").innerHTML = specFieldsHtml(cat, collectSpecs("mdSpecs"), "mds_");
+      // Вкусы спрашиваем только там, где они есть: у зарядки их не бывает.
+      $("mdFlavorsWrap").style.display = catHasFlavors(cat) ? "" : "none";
+      $("mdFlavorKnown").innerHTML = knownFlavors.map(f => `<option value="${esc(f)}">`).join("");
+      renderModelFlavors();
+    }
+    $("mdCat").onchange = renderModelForm;
+    function renderModelFlavors() {
+      $("mdFlavorChips").innerHTML = modelFlavors.map((f, i) =>
+        `<span class="fchip">${esc(f)}<b data-mfx="${i}">✕</b></span>`).join("");
+      $("mdFlavorChips").querySelectorAll("[data-mfx]").forEach(b =>
+        b.onclick = () => { modelFlavors.splice(+b.dataset.mfx, 1); renderModelFlavors(); });
+    }
+    $("mdFlavorAdd").onclick = () => {
+      const v = $("mdFlavorInput").value.trim();
+      if (!v) return;
+      v.split(",").map(x => x.trim()).filter(Boolean).forEach(f => {
+        if (!modelFlavors.some(x => x.toLowerCase() === f.toLowerCase())) modelFlavors.push(f);
+      });
+      $("mdFlavorInput").value = ""; renderModelFlavors();
+    };
+    $("mdFlavorInput").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("mdFlavorAdd").click(); } };
+    $("mdPhoto").onchange = () => {
+      const f = $("mdPhoto").files[0]; modelPhotoFile = f || null;
+      if (f) { $("mdPhotoPrev").src = URL.createObjectURL(f); $("mdPhotoPrev").style.display = ""; }
+    };
+    function resetModelForm() {
+      editingModelId = null; modelFlavors = []; modelPhotoFile = null;
+      $("mdName").value = ""; $("mdDesc").value = ""; $("mdPhoto").value = "";
+      $("mdPhotoPrev").style.display = "none"; $("mdPhotoPrev").removeAttribute("src");
+      $("mdCancel").style.display = "none"; $("mdSave").textContent = "Сохранить модель";
+      renderModelForm();
+    }
+    $("mdCancel").onclick = resetModelForm;
+
+    $("mdSave").onclick = async () => {
+      const name = $("mdName").value.trim();
+      if (!name) { alertMsg("Введите название модели."); return; }
+      const brandName = pickerValue("mdBrand");
+      await ensureBrandExists(brandName);
+      const body = { initData, category: $("mdCat").value, name, brand: brandName,
+                     description: $("mdDesc").value.trim(), specs: collectSpecs("mdSpecs"), flavors: modelFlavors };
+      if (editingModelId) body.id = editingModelId;
+      $("mdSave").disabled = true; $("mdSave").textContent = "Сохраняю…";
+      try {
+        const r = await fetch("/api/admin/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось сохранить модель."); return; }
+        if (modelPhotoFile) {
+          const fd = new FormData();
+          fd.append("initData", initData); fd.append("id", d.id); fd.append("file", modelPhotoFile);
+          await fetch("/api/admin/model/photo", { method: "POST", body: fd });
+        }
+        const updated = d.updated;
+        resetModelForm();
+        await Promise.all([fetchModels(), fetchFlavors()]);
+        await refreshProducts();     // правка модели меняет и товары на точках
+        renderModelList();
+        alertMsg(updated ? `Сохранено ✅ Обновлено товаров на точках: ${updated}` : "Модель сохранена ✅");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("mdSave").disabled = false; $("mdSave").textContent = editingModelId ? "Обновить модель" : "Сохранить модель"; }
+    };
+
+    function renderModelList() {
+      const q = modelSearch.trim().toLowerCase();
+      const list = models.filter(m => !q || `${m.name} ${m.brand}`.toLowerCase().includes(q));
+      if (!list.length) {
+        $("mdList").innerHTML = `<p style="color:var(--hint)">${models.length ? "Ничего не найдено." : "Ассортимент пуст — добавьте первую модель."}</p>`;
+        return;
+      }
+      let html = "";
+      for (const [code, cn] of CAT_OPTS) {
+        const group = list.filter(m => m.category === code);
+        if (!group.length) continue;
+        html += `<div class="brgroup">${cn} · ${group.length}</div>`;
+        html += group.map(m => {
+          const specs = specsOf(m.category).map(s => {
+            const v = (m.specs || {})[s.key];
+            return (v === undefined || String(v).trim() === "") ? null : `${s.label}: ${withUnit(v, s.unit)}`;
+          }).filter(Boolean).join(" · ");
+          const where = m.products
+            ? `${m.products} ${plural(m.products, "точка", "точки", "точек")}`
+            : `<span style="color:var(--danger)">нет ни на одной точке</span>`;
+          return `<div class="admrow">
+            <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
+              <small>${where}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small></div>
+            <button class="iconbtn ok" data-mdstock="${m.id}" title="Завезти на точку">📥</button>
+            <button class="iconbtn" data-mdedit="${m.id}">✏️</button>
+            <button class="iconbtn danger" data-mddel="${m.id}">🗑</button></div>`;
+        }).join("");
+      }
+      $("mdList").innerHTML = html;
+      $("mdList").querySelectorAll("[data-mdedit]").forEach(b => b.onclick = () => editModel(+b.dataset.mdedit));
+      $("mdList").querySelectorAll("[data-mddel]").forEach(b => b.onclick = () => delModel(+b.dataset.mddel));
+      $("mdList").querySelectorAll("[data-mdstock]").forEach(b => b.onclick = () => openStockIn(+b.dataset.mdstock));
+    }
+    // ----- Завоз: модель появляется на точке с ценой и остатком -----
+    let stockInModel = null;
+    $("stockInClose").onclick = () => $("stockInView").classList.remove("show");
+    function openStockIn(modelId) {
+      stockInModel = models.find(m => m.id === modelId);
+      if (!stockInModel) return;
+      const m = stockInModel;
+      $("stockInView").classList.add("show");
+      $("stockInName").textContent = `${m.brand ? m.brand + " " : ""}${m.name}`;
+      $("stockInMeta").textContent = catName(m.category);
+      $("stockInCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
+      $("stockInPrice").value = ""; $("stockInCost").value = ""; $("stockInStock").value = "";
+      $("stockInHit").checked = false;
+      const withFlavors = m.flavors.length > 0;
+      $("stockInFlavorsWrap").style.display = withFlavors ? "" : "none";
+      $("stockInStockWrap").style.display = withFlavors ? "none" : "";
+      $("stockInFlavors").innerHTML = m.flavors.map(f =>
+        `<div class="admrow" data-flavor="${esc(f)}"><label class="an" style="display:flex;gap:8px;align-items:center;font-weight:600">
+           <input type="checkbox" class="sifchk" style="width:auto" checked> ${esc(f)}</label>
+         <input class="sifst" inputmode="numeric" placeholder="шт." style="width:64px" value="0"></div>`).join("");
+      // Где модель уже стоит — чтобы не завезти второй раз на ту же точку.
+      const where = allProducts.filter(p => p.model_id === m.id);
+      $("stockInWhere").innerHTML = where.length
+        ? "Уже на точках: " + where.map(p => `${esc(p.city)} — ${p.price} Br, ${p.stock} шт`).join("; ")
+        : "Пока нет ни на одной точке.";
+    }
+    $("stockInSave").onclick = async () => {
+      if (!stockInModel) return;
+      const price = $("stockInPrice").value.trim();
+      if (!price) { alertMsg("Укажите цену."); return; }
+      const city = $("stockInCity").value;
+      if (allProducts.some(p => p.model_id === stockInModel.id && p.city === city)) {
+        alertMsg("На этой точке модель уже есть — правьте её в разделе «Товары».");
+        return;
+      }
+      const body = { initData, model_id: stockInModel.id, city, price,
+                     cost: $("stockInCost").value.trim(), is_hit: $("stockInHit").checked };
+      if (stockInModel.flavors.length) {
+        body.variants = [...document.querySelectorAll("#stockInFlavors .admrow")]
+          .filter(row => row.querySelector(".sifchk").checked)
+          .map(row => ({ flavor: row.dataset.flavor, stock: row.querySelector(".sifst").value || "0" }));
+        if (!body.variants.length) { alertMsg("Отметьте хотя бы один вкус."); return; }
+      } else {
+        body.stock = $("stockInStock").value.trim() || "0";
+      }
+      $("stockInSave").disabled = true; $("stockInSave").textContent = "Завожу…";
+      try {
+        const r = await fetch("/api/admin/product/from-model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось завезти — проверьте цену и точку."); return; }
+        await refreshProducts(); await fetchModels(); renderModelList();
+        $("stockInView").classList.remove("show");
+        alertMsg("Завезено ✅");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("stockInSave").disabled = false; $("stockInSave").textContent = "Завезти на точку"; }
+    };
+
+    function editModel(id) {
+      const m = models.find(x => x.id === id); if (!m) return;
+      editingModelId = id; modelFlavors = [...m.flavors]; modelPhotoFile = null;
+      $("mdCat").value = m.category;
+      renderModelForm();
+      $("mdName").value = m.name; $("mdDesc").value = m.description || "";
+      if ($("mdBrand")) $("mdBrand").value = m.brand || "";
+      $("mdSpecs").innerHTML = specFieldsHtml(m.category, m.specs, "mds_");
+      if (m.thumb_url) { $("mdPhotoPrev").src = m.thumb_url; $("mdPhotoPrev").style.display = ""; }
+      $("mdCancel").style.display = "block"; $("mdSave").textContent = "Обновить модель";
+      $("mdFormSect").open = true;
+      $("mdName").scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    function delModel(id, force) {
+      const m = models.find(x => x.id === id);
+      const ask = force
+        ? `Модель есть на точках. Товары там останутся, но перестанут обновляться вместе с моделью. Всё равно убрать из ассортимента?`
+        : `Убрать «${m ? m.name : ""}» из ассортимента?`;
+      confirmMsg(ask, async () => {
+        try {
+          const r = await fetch("/api/admin/model/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ initData, id, force: !!force }) });
+          const d = await r.json();
+          if (!d.ok) {
+            if (d.error === "has_products") { delModel(id, true); return; }
+            alertMsg("Не удалось убрать модель.");
+            return;
+          }
+          await fetchModels(); renderModelList();
+          toast("Убрана из ассортимента");
+        } catch (e) { alertMsg("Сеть недоступна."); }
+      });
+    }
+
     // Фильтры админ-списка товаров
     let admSearch = "", admCatFilter = "all", admLocFilter = "all";
 
@@ -3428,10 +3680,6 @@
     $("admSearch").oninput = () => { admSearch = $("admSearch").value; renderAdminList(); };
 
     function openProducts() {
-      $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
-      $("afCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
-      renderFlavorChips();
-      updateAddMode();
       renderAdmFilters();
       renderAdminList();
       $("productsView").classList.add("show");
@@ -5055,93 +5303,9 @@
       return out;
     }
 
-    function updateAddMode() {
-      const cat = $("afCat").value;
-      const variantMode = catHasFlavors(cat);
-      $("dispFields").style.display = variantMode ? "block" : "none";
-      $("genFields").style.display = variantMode ? "none" : "block";
-      $("nameField").style.display = variantMode ? "none" : "block";   // имя собираем сами
-      $("afSpecs").innerHTML = specFieldsHtml(cat, {}, "afs_");
-      if (!variantMode) {
-        // Бренд и вкус — из справочника «Бренды и вкусы», как и у товаров со вкусами.
-        $("afBrandBox").innerHTML = pickerHtml("afBrand", "", brandNames(cat), "+ Новый бренд…");
-        $("afFlavorBox").innerHTML = pickerHtml("afFlavor", "", knownFlavors, "+ Новый вкус…");
-        bindPicker("afBrand"); bindPicker("afFlavor");
-      }
-      if (variantMode) {
-        const list = brands.filter(b => !b.category || b.category === cat);   // общие бренды тоже
-        $("dispBrand").innerHTML = list.length
-          ? list.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("")
-          : `<option value="">— сначала добавьте бренд этой категории выше —</option>`;
-        renderDispFlavors();
-      }
-    }
-    function renderDispFlavors() {
-      const b = brands.find(x => x.id === +$("dispBrand").value);
-      const flavors = b ? b.flavors : [];
-      if (!flavors.length) { $("dispFlavors").innerHTML = `<p style="color:var(--hint)">У бренда нет вкусов — добавьте их в разделе «Бренды».</p>`; return; }
-      $("dispFlavors").innerHTML = flavors.map(f =>
-        `<div class="admrow"><label class="an" style="display:flex;gap:8px;align-items:center;font-weight:600">
-           <input type="checkbox" class="dfchk" style="width:auto"> ${esc(f)}</label>
-         <input class="dfst" inputmode="numeric" placeholder="шт." style="width:64px" value="0"></div>`).join("");
-      $("dispFlavors").querySelectorAll(".admrow").forEach((row, i) => row.dataset.flavor = flavors[i]);
-    }
-    $("afCat").onchange = updateAddMode;
-    $("dispBrand").onchange = renderDispFlavors;
-    function clearAddForm() {
-      $("afName").value = ""; $("afPrice").value = ""; $("afCost").value = ""; $("afStock").value = ""; $("afDesc").value = ""; $("afHit").checked = false; $("afPhoto").value = "";
-      updateAddMode();      // заодно пересобирает бренд, вкус и характеристики
-    }
-
-    $("afAdd").onclick = async () => {
-      const category = $("afCat").value, price = $("afPrice").value;
-      if (price === "") { alertMsg("Укажите цену."); return; }
-      const specs = collectSpecs("afSpecs");
-      let body, name;
-      if (catHasFlavors(category)) {
-        const b = brands.find(x => x.id === +$("dispBrand").value);
-        if (!b) { alertMsg("Выберите бренд (создайте его в разделе «Бренды»)."); return; }
-        const variants = [];
-        $("dispFlavors").querySelectorAll(".admrow").forEach(row => {
-          const chk = row.querySelector(".dfchk");
-          if (chk && chk.checked) variants.push({ flavor: row.dataset.flavor, stock: row.querySelector(".dfst").value || "0" });
-        });
-        if (!variants.length) { alertMsg("Отметьте хотя бы один вкус."); return; }
-        // Название собираем сами. У одноразок в него по традиции входит число
-        // затяжек («Elf Bar 6000») — так их и ищут; у остальных хватает бренда.
-        name = (category === "disposable" && specs.volume)
-          ? [b.name, specs.volume].filter(v => v && v !== "0").join(" ") : b.name;
-        body = { initData, city: $("afCity").value, category, name, price, cost: $("afCost").value,
-          description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
-          brand: b.name, variants, specs,
-          strength: specs.strength || "", volume: specs.volume || "" };
-      } else {
-        name = $("afName").value.trim();
-        if (!name) { alertMsg("Заполните название."); return; }
-        if ($("afStock").value === "") { alertMsg("Укажите остаток."); return; }
-        const brandName = pickerValue("afBrand");
-        await ensureBrandExists(brandName);      // новое имя сразу попадает в справочник
-        body = { initData, city: $("afCity").value, category, name, price, cost: $("afCost").value,
-          stock: $("afStock").value, description: $("afDesc").value.trim(), is_hit: $("afHit").checked,
-          brand: brandName, flavor: pickerValue("afFlavor"), specs,
-          strength: specs.strength || "", volume: specs.volume || "" };
-      }
-      $("afAdd").disabled = true; $("afAdd").textContent = "Добавляю…";
-      try {
-        const r = await fetch("/api/admin/product", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        const d = await r.json();
-        if (!d.ok) { alertMsg("Не удалось добавить — проверьте поля."); return; }
-        const f = $("afPhoto").files[0];
-        if (f) {
-          const fd = new FormData(); fd.append("initData", initData); fd.append("id", d.id); fd.append("file", f);
-          await fetch("/api/admin/photo", { method: "POST", body: fd });
-        }
-        clearAddForm();
-        await refreshProducts();
-        alertMsg("Товар добавлен ✅");
-      } catch (e) { alertMsg("Сеть недоступна."); }
-      finally { $("afAdd").disabled = false; $("afAdd").textContent = "Добавить товар"; }
-    };
+    // Форма «новый товар» переехала в «Ассортимент»: модель описывается один раз,
+    // а здесь у товара остаётся то, что своё у каждой точки — цена и остаток.
+    $("toModels").onclick = () => { $("productsView").classList.remove("show"); openModels(); };
 
     function renderAdminList() {
       if (!allProducts.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
@@ -5269,8 +5433,48 @@
       const catOptions = CAT_OPTS.map(([c, n]) => `<option value="${c}" ${p.category === c ? 'selected' : ''}>${n}</option>`).join("");
       const cityOptions = locations.map(l => `<option value="${esc(l.name)}" ${p.city === l.name ? 'selected' : ''}>${esc(l.name)}</option>`).join("");
 
+      // ---- Товар, заведённый из ассортимента: тут только цена и остаток ----
+      // Название, бренд, характеристики и вкусы — свойства модели: они одинаковы
+      // на всех точках, и править их здесь значило бы разводить копии.
+      if (p.model_id) {
+        const md = models.find(m => m.id === p.model_id);
+        $("editBody").innerHTML = `
+          <div class="card-block form">
+            <div style="font-weight:800">${esc(p.name)}</div>
+            <div class="csub" style="margin-top:4px">${esc(p.brand || "")} · ${catName(p.category)} · ${esc(p.city)}</div>
+            <label>Точка (город)</label><select id="edCity">${cityOptions}</select>
+            <div class="rowf">
+              <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
+              <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
+            </div>
+            ${isVar ? `<label>Вкусы и остаток</label><div id="edVarList"></div>
+              <div style="display:flex;gap:8px;margin-top:10px">
+                <input id="edNewFlavor" placeholder="Добавить вкус" style="flex:1" list="edFlavorOpts">
+                <datalist id="edFlavorOpts">${(md ? md.flavors : []).map(f => `<option value="${esc(f)}">`).join("")}</datalist>
+                <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
+              </div>`
+              : `<label>Остаток (шт.)</label><input id="edStock" inputmode="numeric" value="${p.stock}">`}
+            ${editHitBlock(p)}
+            <div class="dnote" style="margin-top:12px">Название, характеристики, вкусы и фото — в «Ассортименте»: там они правятся сразу для всех точек.</div>
+            <button class="closebtn" id="edToModel" style="margin-top:6px">📚 Открыть модель</button>
+            <button class="bigbtn" id="edSave" style="margin-top:10px">Сохранить</button>
+          </div>`;
+        if (isVar) renderEditVariants();
+        if ($("edAddFlavor")) $("edAddFlavor").onclick = () => {
+          const v = $("edNewFlavor").value.trim(); if (!v) return;
+          if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
+          $("edNewFlavor").value = ""; renderEditVariants();
+        };
+        $("edToModel").onclick = () => {
+          $("editView").classList.remove("show");
+          openModels().then(() => editModel(p.model_id));
+        };
+        $("edSave").onclick = () => saveEdit(p);
+        return;
+      }
+
       if (!isVar) {
-        // ---- Обычный товар: все поля правятся вручную ----
+        // ---- Товар без модели (заведён до «Ассортимента»): поля правятся вручную ----
         $("editBody").innerHTML = `
           <div class="card-block form">
             <div class="csub">${catName(p.category)} · ${esc(p.city)}</div>
@@ -5346,6 +5550,24 @@
       const upd = (field, value) => fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, field, value }) });
       $("edSave").disabled = true; $("edSave").textContent = "Сохраняю…";
       try {
+        // Товар из ассортимента: сохраняем только то, что своё у этой точки.
+        if (p.model_id) {
+          await upd("price", $("edPrice").value);
+          await upd("cost", $("edCost").value || 0);
+          if (isVar) {
+            const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
+            if (!variants.length) { alertMsg("Оставьте хотя бы один вкус."); return; }
+            await fetch("/api/admin/product/variants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, variants }) });
+          } else {
+            await upd("stock", $("edStock").value);
+          }
+          await upd("city", $("edCity").value);
+          await upd("is_hit", $("edHit").checked ? 1 : 0);
+          await refreshProducts();
+          $("editView").classList.remove("show");
+          alertMsg("Сохранено ✅");
+          return;
+        }
         const specs = collectSpecs("edSpecs");
         if (isVar) {
           const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
