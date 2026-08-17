@@ -924,6 +924,7 @@
     <div class="prow" id="mOrders"><span>📦 Заказы</span><span>›</span></div>
     <div class="prow" id="mProducts"><span>🛍 Товары</span><span>›</span></div>
     <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
+    <div class="prow" id="mCats"><span>🗂 Категории товара</span><span>›</span></div>
     <div class="prow" id="mBrands"><span>🏷 Бренды и вкусы</span><span>›</span></div>
     <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
     <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
@@ -1235,6 +1236,22 @@
     </div>
   </div>
 
+  <!-- Раздел: Категории товара -->
+  <div class="view" id="catsView">
+    <div class="viewhead"><h2>🗂 Категории</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="catsClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <div style="font-weight:800;margin-bottom:4px">Разделы каталога</div>
+      <p style="color:var(--hint);font-size:13px;margin:4px 0 0;text-align:left">Порядок в списке — такой же, как у покупателя. У одноразок и жидкостей есть свои поля в карточке товара (затяжки, крепость, объём), поэтому их лучше не удалять.</p>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <input id="catEmojiNew" placeholder="🍬" style="width:64px;text-align:center">
+        <input id="catNameNew" placeholder="Например: Расходники" style="flex:1">
+        <button class="iconbtn ok" id="catAdd" style="width:auto;padding:0 16px">Добавить</button>
+      </div>
+      <div id="catList" style="margin-top:12px"></div>
+    </div>
+  </div>
+
   <!-- Раздел: Бренды и вкусы -->
   <div class="view" id="brandsView">
     <div class="viewhead"><h2>🏷 Бренды и вкусы</h2>
@@ -1332,8 +1349,34 @@
     }
     const currentTheme = () => document.documentElement.getAttribute("data-theme") || "light";
 
-    const CATS = { "": "Все товары", liquid: "Жидкости", podsystem: "Подсистемы", disposable: "Одноразки" };
-    const CAT_EMOJI = { disposable: "🔋", liquid: "💧", podsystem: "🧩" };
+    // Категории ведёт владелец в админке, поэтому приходят из базы. Стартовые
+    // значения — чтобы экран не был пустым, пока ответ в пути.
+    let categories = [
+      { code: "disposable", name: "Одноразки", emoji: "🔋" },
+      { code: "liquid", name: "Жидкости", emoji: "💧" },
+      { code: "podsystem", name: "Подсистемы", emoji: "🧩" },
+    ];
+    let CATS = {}, CAT_EMOJI = {}, CAT_OPTS = [];
+    function applyCategories() {
+      CATS = { "": "Все товары" };
+      CAT_EMOJI = {};
+      CAT_OPTS = [];
+      categories.forEach(c => {
+        CATS[c.code] = c.name;
+        if (c.emoji) CAT_EMOJI[c.code] = c.emoji;
+        CAT_OPTS.push([c.code, c.name]);
+      });
+    }
+    applyCategories();
+    async function fetchCategories() {
+      try {
+        const r = await fetch("/api/categories");
+        const list = await r.json();
+        if (Array.isArray(list) && list.length) { categories = list; applyCategories(); }
+      } catch (e) {}
+      // Выбранной категории могло не стать — иначе витрина молча покажет пусто.
+      if (cat && !CATS[cat]) cat = "";
+    }
     let locations = [];   // [{id, name}] — точки продаж, приходят из базы
     const CUR = `<span class="cur">Br</span>`;
     const withUnit = (val, unit) => { val = String(val || "").trim(); if (!val) return ""; return /[a-zа-я%]/i.test(val) ? val : val + " " + unit; };
@@ -1565,11 +1608,11 @@
       $("pointName").textContent = city || "Выбери точку";
     }
     async function loadCatalog() {
-      await Promise.all([fetchLocations(), fetchProducts()]);
+      await Promise.all([fetchLocations(), fetchProducts(), fetchCategories()]);
       recomputeCities(); renderChips(); updateFilterBtn(); renderGrid();
     }
     async function refreshProducts() {
-      await Promise.all([fetchLocations(), fetchProducts()]);
+      await Promise.all([fetchLocations(), fetchProducts(), fetchCategories()]);
       recomputeCities(); renderChips(); updateFilterBtn(); renderGrid(); renderNav();
       if ($("productsView").classList.contains("show")) renderAdminList();
       if ($("locationsView").classList.contains("show")) renderLocList();
@@ -3185,7 +3228,6 @@
     function prodQty(delta) { changeQty(currentProductId, delta, null); renderProduct(); }
 
     // ---------- Админка (только для админов) ----------
-    const CAT_OPTS = [["liquid", "Жидкости"], ["podsystem", "Подсистемы"], ["disposable", "Одноразки"]];
 
     async function openAdmin() {
       if ($("mRequests")) $("mRequests").style.display = (me && me.is_super) ? "" : "none";
@@ -3286,6 +3328,97 @@
       renderLocList();
     }
     $("locationsClose").onclick = () => $("locationsView").classList.remove("show");
+
+    // ----- Категории товара -----
+    // Раньше «Расходники» появлялись только правкой кода и деплоем. Теперь
+    // владелец заводит раздел сам, и витрина перестраивается сразу.
+    $("mCats").onclick = openCats;
+    $("catsClose").onclick = () => $("catsView").classList.remove("show");
+    async function openCats() {
+      $("catsView").classList.add("show");
+      await fetchCategories();
+      renderCatList();
+    }
+    let catEditing = null;      // код категории, которую сейчас переименовывают
+    function renderCatList() {
+      $("catList").innerHTML = categories.map(c => {
+        const used = allProducts.filter(p => p.category === c.code).length;
+        // Правка прямо в строке: окно prompt в Telegram открывается не везде,
+        // и на таких кнопках это оборачивается «нажал — ничего не произошло».
+        if (catEditing === c.code) {
+          return `<div class="admrow">
+            <input class="cate" value="${esc(c.emoji || "")}" placeholder="🍬" style="width:56px;text-align:center">
+            <input class="catn" value="${esc(c.name)}" style="flex:1">
+            <button class="iconbtn ok" data-csave="${esc(c.code)}">✓</button>
+            <button class="iconbtn" data-ccancel="1">✕</button>
+          </div>`;
+        }
+        return `<div class="admrow">
+          <div class="an">${c.emoji ? esc(c.emoji) + " " : ""}${esc(c.name)}<small>${used ? `${used} ${plural(used, "товар", "товара", "товаров")}` : "пусто"}</small></div>
+          <button class="iconbtn" data-cup="${esc(c.code)}" title="Выше">↑</button>
+          <button class="iconbtn" data-crn="${esc(c.code)}" title="Переименовать">✏️</button>
+          <button class="iconbtn danger" data-cdel="${esc(c.code)}">✕</button>
+        </div>`;
+      }).join("");
+      $("catList").querySelectorAll("[data-cup]").forEach(b => b.onclick = () => moveCat(b.dataset.cup, -1));
+      $("catList").querySelectorAll("[data-crn]").forEach(b => b.onclick = () => { catEditing = b.dataset.crn; renderCatList(); });
+      $("catList").querySelectorAll("[data-cdel]").forEach(b => b.onclick = () => delCat(b.dataset.cdel));
+      $("catList").querySelectorAll("[data-ccancel]").forEach(b => b.onclick = () => { catEditing = null; renderCatList(); });
+      $("catList").querySelectorAll("[data-csave]").forEach(b => b.onclick = () => {
+        const row = b.closest(".admrow");
+        saveCatName(b.dataset.csave, row.querySelector(".catn").value.trim(), row.querySelector(".cate").value.trim());
+      });
+    }
+    async function saveCatName(code, name, emoji) {
+      if (!name) { alertMsg("Название не может быть пустым."); return; }
+      const d = await catApi("/api/admin/category/update", { code, name, emoji });
+      if (!d.ok) { alertMsg("Не удалось переименовать."); return; }
+      catEditing = null;
+      await afterCatsChanged();
+    }
+    async function catApi(path, body) {
+      try {
+        const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, ...body }) });
+        return await r.json();
+      } catch (e) { alertMsg("Сеть недоступна."); return { ok: false }; }
+    }
+    $("catAdd").onclick = async () => {
+      const name = $("catNameNew").value.trim();
+      if (!name) { alertMsg("Введите название категории."); return; }
+      const d = await catApi("/api/admin/category", { name, emoji: $("catEmojiNew").value.trim() });
+      if (!d.ok) { alertMsg(d.error === "exists" ? "Такая категория уже есть." : "Не удалось добавить."); return; }
+      $("catNameNew").value = ""; $("catEmojiNew").value = "";
+      await afterCatsChanged();
+      toast("Категория добавлена ✅");
+    };
+    async function moveCat(code, dir) {
+      const i = categories.findIndex(c => c.code === code);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= categories.length) return;
+      // Меняем местами веса соседей — так порядок задаётся одним понятным движением.
+      const a = categories[i], b = categories[j];
+      await catApi("/api/admin/category/update", { code: a.code, sort: b.sort });
+      await catApi("/api/admin/category/update", { code: b.code, sort: a.sort });
+      await afterCatsChanged();
+    }
+    function delCat(code) {
+      const c = categories.find(x => x.code === code);
+      confirmMsg(`Удалить категорию «${c ? c.name : code}»?`, async () => {
+        const d = await catApi("/api/admin/category/delete", { code });
+        if (!d.ok) {
+          alertMsg(d.error === "has_products" ? `Сначала перенесите товары: в этой категории их ${d.count}.`
+                 : d.error === "last_one" ? "Это последняя категория — без неё товар не завести."
+                 : "Не удалось удалить.");
+          return;
+        }
+        await afterCatsChanged();
+        toast("Категория удалена");
+      });
+    }
+    async function afterCatsChanged() {
+      await refreshProducts();     // фильтры каталога и формы админки строятся по категориям
+      renderCatList();
+    }
 
     function openBrands() {
       $("brCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");

@@ -37,7 +37,7 @@ import errors
 import notifications
 from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CITY_ADMINS,
                    CONFIRM_MINUTES, is_admin, is_super_admin, admins_for_city, all_admin_ids,
-                   CITIES, CATEGORIES)
+                   CITIES)
 
 db.init_db()
 config.seed_admins_from_env()   # разовый перенос админов из окружения в базу
@@ -259,6 +259,8 @@ _WRITE_PATHS = {
     # Оценка живёт в карточке товара, поэтому её публикация обновляет витрину.
     "/api/admin/review/decide": (),
     "/api/admin/location": (), "/api/admin/location/delete": (),
+    "/api/admin/category": ("categories",), "/api/admin/category/update": ("categories",),
+    "/api/admin/category/delete": ("categories",),
     "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),
     "/api/admin/point": (), "/api/admin/point/update": (), "/api/admin/point/delete": (),
     "/api/admin/stock/move": _STOCK_KEYS,
@@ -669,6 +671,64 @@ def api_locations():
         cached = _cache_set("locations",
                             [{"id": r["id"], "name": r["name"]} for r in db.get_locations()], 300)
     return jsonify(cached)
+
+
+@app.route("/api/categories")
+def api_categories():
+    """Категории товара — витрина строит по ним фильтры, админка формы."""
+    cached = _cache_get("categories")
+    if cached is None:
+        cached = _cache_set("categories", [{"code": c["code"], "name": c["name"],
+                                            "emoji": c["emoji"] or "", "sort": c["sort"]}
+                                           for c in db.list_categories()], 300)
+    return jsonify(cached)
+
+
+@app.route("/api/admin/category", methods=["POST"])
+def api_admin_category_add():
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "error": "bad_name"}), 400
+    code = db.add_category(name, data.get("emoji") or "")
+    if not code:
+        return jsonify({"ok": False, "error": "exists"}), 400
+    return jsonify({"ok": True, "code": code})
+
+
+@app.route("/api/admin/category/update", methods=["POST"])
+def api_admin_category_update():
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    code = (data.get("code") or "").strip()
+    if code not in db.category_codes():
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    sort = data.get("sort")
+    db.update_category(code, name=data.get("name"), emoji=data.get("emoji"),
+                       sort=(int(sort) if str(sort or "").strip().lstrip("-").isdigit() else None))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/category/delete", methods=["POST"])
+def api_admin_category_delete():
+    """Удалить можно только пустую категорию: иначе товары остались бы в разделе,
+    которого нет, и пропали бы из витрины молча."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    code = (data.get("code") or "").strip()
+    if code not in db.category_codes():
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    used = db.count_products_in_category(code)
+    if used:
+        return jsonify({"ok": False, "error": "has_products", "count": used}), 400
+    if len(db.category_codes()) <= 1:
+        return jsonify({"ok": False, "error": "last_one"}), 400     # без категорий товар не завести
+    db.delete_category(code)
+    return jsonify({"ok": True})
 
 
 def _delivery_json(m):
@@ -1669,7 +1729,7 @@ def api_admin_add():
     city = data.get("city")
     category = data.get("category")
     name = (data.get("name") or "").strip()
-    if city not in db.location_names() or category not in CATEGORIES or not name:
+    if city not in db.location_names() or category not in db.category_codes() or not name:
         return jsonify({"ok": False, "error": "bad_data"}), 400
     try:
         price = float(str(data.get("price")).replace(",", "."))
@@ -1740,7 +1800,7 @@ def api_admin_update():
             value = str(raw).strip()
         elif field == "category":
             value = str(raw).strip()
-            if value not in CATEGORIES:
+            if value not in db.category_codes():
                 return jsonify({"ok": False, "error": "bad_value"}), 400
         elif field == "city":
             value = str(raw).strip()
@@ -2555,7 +2615,7 @@ def api_admin_brand():
         return jsonify({"ok": False, "error": "forbidden"}), 403
     name = (data.get("name") or "").strip()
     category = data.get("category") or "disposable"
-    if not name or category not in CATEGORIES:
+    if not name or category not in db.category_codes():
         return jsonify({"ok": False, "error": "bad_data"}), 400
     flavors = [str(f).strip() for f in (data.get("flavors") or []) if str(f).strip()]
 

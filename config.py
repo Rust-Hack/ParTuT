@@ -23,11 +23,11 @@ WEBAPP_URL = os.environ.get("WEBAPP_URL", "").strip()
 
 
 # --- Справочники: код <-> красивое название ---
-CATEGORIES = {
-    "disposable": "🔋 Одноразки",
-    "liquid":     "💧 Жидкости",
-    "podsystem":  "🧩 Подсистемы",
-}
+# Категории переехали в базу (таблица categories, стартовый набор — db.CATEGORY_SEED):
+# владелец заводит и переименовывает их прямо в приложении. Здесь оставлен только
+# ориентир, что коды disposable/liquid/podsystem — особые: к ним привязаны свои
+# поля в редакторе товара (затяжки у одноразок, крепость и объём у жидкостей).
+SPECIAL_CATEGORIES = ("disposable", "liquid", "podsystem")
 
 CITIES = {
     "minsk":  "Минск",

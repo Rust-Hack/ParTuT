@@ -32,9 +32,18 @@ load_dotenv()
 
 # Общие настройки и справочники берём из config.py (их же использует server.py).
 from config import (
-    BOT_TOKEN, WEBAPP_URL, CATEGORIES, CITIES,
+    BOT_TOKEN, WEBAPP_URL, CITIES,
     ADMIN_IDS, SUPER_ADMIN_IDS, is_admin, is_super_admin,
 )
+
+
+def _category_title(code):
+    """Человеческое имя категории. Категорию могли переименовать или удалить —
+    тогда показываем код, а не пустое место."""
+    for c in db.list_categories():
+        if c["code"] == code:
+            return f"{c['emoji']} {c['name']}".strip()
+    return code
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -304,8 +313,10 @@ def admin_city_keyboard():
 
 def admin_cat_keyboard():
     kb = types.InlineKeyboardMarkup()
-    for code, title in CATEGORIES.items():
-        kb.add(types.InlineKeyboardButton(title, callback_data=f"admcat:{code}"))
+    # Категории живут в базе — владелец заводит их сам, и кнопки должны это видеть.
+    for c in db.list_categories():
+        title = f"{c['emoji']} {c['name']}".strip()
+        kb.add(types.InlineKeyboardButton(title, callback_data=f"admcat:{c['code']}"))
     kb.add(types.InlineKeyboardButton("✖️ Отмена", callback_data="adm:cancel"))
     return kb
 
@@ -441,7 +452,7 @@ def show_product_card(chat_id, product_id):
         return
 
     city = CITIES.get(p["city"], p["city"])
-    category = CATEGORIES.get(p["category"], p["category"])
+    category = _category_title(p["category"])
     hit = "🔥 да" if p["is_hit"] == 1 else "нет"
     has_photo = "есть" if p["photo"] else "нет"
     text = (

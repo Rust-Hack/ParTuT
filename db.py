@@ -340,6 +340,17 @@ def init_db():
         )
     """)
 
+    # Категории товара. Раньше они были прошиты в коде, и добавить «Расходники»
+    # можно было только правкой файлов и деплоем — то есть через меня.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS categories (
+            code  TEXT PRIMARY KEY,
+            name  TEXT NOT NULL,
+            emoji TEXT,
+            sort  INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     # Отзывы. Пишет только тот, кто товар покупал, — иначе это не отзыв, а
     # анонимная запись в интернете, и цена ей соответствующая.
     cur.execute(f"""
@@ -373,6 +384,7 @@ def init_db():
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
     _ensure_user_columns()      # coins / referred_by у пользователей
     _ensure_order_columns()     # coins_used / доставка у заказов
+    seed_categories()           # стартовые категории, если таблица пустая
     seed_locations()            # добавит стартовые точки, если таблица пустая
     seed_delivery()             # дефолтные способы получения для Минск/Туров
 
@@ -714,6 +726,125 @@ def seed_locations():
             cur.execute(_q("INSERT INTO locations (name, sort) VALUES (%s, %s)"), (name, i))
         conn.commit()
     conn.close()
+
+
+# ---------- Категории товара ----------
+
+# Стартовый набор. Первые три были в коде с самого начала — их коды менять
+# нельзя: по ним заведены все существующие товары и бренды, а у одноразок и
+# жидкостей к коду привязаны свои поля (затяжки, крепость и объём).
+CATEGORY_SEED = [
+    ("disposable",  "Одноразки",   "🔋", 10),
+    ("liquid",      "Жидкости",    "💧", 20),
+    ("podsystem",   "Подсистемы",  "🧩", 30),
+    ("coils",       "Расходники",  "⚙️", 40),   # испарители, картриджи, вата
+    ("devices",     "Устройства",  "🔧", 50),   # моды, боксы, наборы
+    ("accessories", "Аксессуары",  "🔌", 60),   # зарядки, аккумуляторы, чехлы
+]
+
+_TRANSLIT = {"а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+             "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+             "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "c",
+             "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e",
+             "ю": "yu", "я": "ya"}
+
+
+def _category_code(name):
+    """Латинский код из названия: «Расходники» → «rashodniki».
+
+    Код — внутреннее имя: он попадает в ссылки и хранится в каждом товаре.
+    Кириллица в таких местах живёт плохо, поэтому переводим сразу."""
+    out = []
+    for ch in (name or "").strip().lower():
+        if ch in _TRANSLIT:
+            out.append(_TRANSLIT[ch])
+        elif ch.isalnum():
+            out.append(ch)
+        elif ch in " -_":
+            out.append("_")
+    code = "".join(out).strip("_")[:24]
+    return code or "cat"
+
+
+def seed_categories():
+    """Стартовые категории — только если таблица пустая. Дальше их ведёт админ."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM categories")
+    if cur.fetchone()["c"] == 0:
+        for code, name, emoji, sort in CATEGORY_SEED:
+            cur.execute(_q("INSERT INTO categories (code, name, emoji, sort) VALUES (%s, %s, %s, %s)"),
+                        (code, name, emoji, sort))
+        conn.commit()
+    conn.close()
+
+
+def list_categories():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM categories ORDER BY sort, name")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def category_codes():
+    return {c["code"] for c in list_categories()}
+
+
+def add_category(name, emoji="", sort=0):
+    """Добавляет категорию. Возвращает код или None, если такая уже есть."""
+    name = (name or "").strip()[:40]
+    if not name:
+        return None
+    code = _category_code(name)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT 1 AS x FROM categories WHERE code = %s OR LOWER(name) = %s"), (code, name.lower()))
+    if cur.fetchone():
+        conn.close()
+        return None
+    if not sort:
+        cur.execute("SELECT COALESCE(MAX(sort), 0) AS mx FROM categories")
+        sort = int(cur.fetchone()["mx"]) + 10          # новая встаёт в конец списка
+    cur.execute(_q("INSERT INTO categories (code, name, emoji, sort) VALUES (%s, %s, %s, %s)"),
+                (code, name, (emoji or "").strip()[:8], int(sort)))
+    conn.commit()
+    conn.close()
+    return code
+
+
+def update_category(code, name=None, emoji=None, sort=None):
+    """Переименовать категорию или сменить значок. Код не меняется — за ним товары."""
+    conn = connect()
+    cur = conn.cursor()
+    if name is not None:
+        cur.execute(_q("UPDATE categories SET name = %s WHERE code = %s"), ((name or "").strip()[:40], code))
+    if emoji is not None:
+        cur.execute(_q("UPDATE categories SET emoji = %s WHERE code = %s"), ((emoji or "").strip()[:8], code))
+    if sort is not None:
+        cur.execute(_q("UPDATE categories SET sort = %s WHERE code = %s"), (int(sort), code))
+    conn.commit()
+    conn.close()
+
+
+def count_products_in_category(code):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COUNT(*) AS c FROM products WHERE category = %s"), (code,))
+    n = int(cur.fetchone()["c"])
+    conn.close()
+    return n
+
+
+def delete_category(code):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM categories WHERE code = %s"), (code,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 # ---------- 18+ ----------
