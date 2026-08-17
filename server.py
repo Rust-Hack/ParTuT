@@ -257,7 +257,7 @@ _WRITE_PATHS = {
     "/api/admin/product/variants": (), "/api/admin/product/delete": (),
     "/api/admin/photo": (), "/api/admin/photo/add": (), "/api/admin/photo/delete": (),
     # Оценка живёт в карточке товара, поэтому её публикация обновляет витрину.
-    "/api/admin/review/decide": (),
+    "/api/admin/review/decide": (), "/api/admin/review/delete": (),
     "/api/admin/location": (), "/api/admin/location/delete": (),
     "/api/admin/category": ("categories",), "/api/admin/category/update": ("categories",),
     "/api/admin/category/delete": ("categories",),
@@ -565,6 +565,7 @@ def api_reviews():
     return jsonify({"ok": True, "reviews": [{
         "id": r["id"], "rating": r["rating"], "text": r["text"] or "",
         "who": _review_author(r), "created_at": r["created_at"] or "",
+        "reply": (r["reply"] or "") if "reply" in r else "",
     } for r in rows]})
 
 
@@ -632,16 +633,50 @@ def _notify_new_review(review_id):
 
 @app.route("/api/admin/reviews", methods=["POST"])
 def api_admin_reviews():
-    """Отзывы на модерации."""
+    """Отзывы для админа: очередь на модерацию, опубликованные, скрытые."""
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    rows = db.pending_reviews()
-    return jsonify({"ok": True, "reviews": [{
+    status = (data.get("status") or "pending").strip()
+    if status not in ("pending", "approved", "hidden", "all"):
+        status = "pending"
+    rows = db.admin_reviews(status)
+    return jsonify({"ok": True, "status": status, "pending": db.count_pending_reviews(), "reviews": [{
         "id": r["id"], "product_id": r["product_id"], "product": r["product_name"] or "товар удалён",
         "rating": r["rating"], "text": r["text"] or "", "who": _review_author(r),
-        "created_at": r["created_at"] or "",
+        "created_at": r["created_at"] or "", "status": r["status"],
+        "reply": r.get("reply") or "",
     } for r in rows]})
+
+
+@app.route("/api/admin/review/delete", methods=["POST"])
+def api_admin_review_delete():
+    """Удалить отзыв насовсем. «Скрыть» оставляет его в базе — это для мусора."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        rid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if not db.delete_review(rid):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/review/reply", methods=["POST"])
+def api_admin_review_reply():
+    """Ответ магазина под отзывом. Пустой текст убирает ответ."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        rid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if not db.set_review_reply(rid, data.get("text") or ""):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify({"ok": True})
 
 
 @app.route("/api/admin/review/decide", methods=["POST"])

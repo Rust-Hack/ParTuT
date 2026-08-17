@@ -660,6 +660,9 @@
     .rev .rtop { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
     .rev .rwho { color: var(--hint); }
     .rev p { margin: 5px 0 0; font-size: 14px; line-height: 1.45; text-align: left; }
+    .revreply { margin-top: 7px; padding: 8px 10px; background: var(--surface-2); border-radius: 10px;
+      font-size: 13.5px; line-height: 1.45; text-align: left; }
+    .revreply b { font-weight: 700; }
     /* Выставление оценки: звёзды-кнопки */
     .rateset { display: flex; gap: 6px; justify-content: center; margin: 6px 0 14px; }
     .rateset button { font-size: 32px; line-height: 1; background: none; border: none; padding: 2px; color: var(--line); }
@@ -940,7 +943,8 @@
     <div class="viewhead"><h2>⭐ Отзывы</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="reviewsClose">‹ Назад</button></div>
     <div class="card-block">
-      <p style="color:var(--hint);font-size:13px;margin:0 0 10px;text-align:left">Отзыв виден покупателям только после публикации. Скрывайте спам и оскорбления, а не низкие оценки: магазин, где все отзывы на пять, доверия не вызывает.</p>
+      <p style="color:var(--hint);font-size:13px;margin:0 0 10px;text-align:left">Отзыв виден покупателям только после публикации. Скрывайте спам и оскорбления, а не низкие оценки: магазин, где все отзывы на пять, доверия не вызывает. На честную тройку лучше ответить — ответ виден под отзывом.</p>
+      <div class="ochips" id="revFilter" style="margin-bottom:10px"></div>
       <div id="reviewsList"></div>
     </div>
   </div>
@@ -1786,13 +1790,13 @@
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
 
-    // На полке оценку показываем от трёх отзывов. Одна пятёрка рисует «★ 5.0» и
-    // выглядит убедительнее сотни оценок 4.6 — это обман, пусть и не нарочный.
-    // В карточке товара оценка видна с первого отзыва: там рядом стоит их число.
+    // Оценка видна прямо на полке, с первого же отзыва — но всегда рядом с их
+    // числом. «★ 5.0» само по себе выглядит убедительнее сотни оценок 4.6;
+    // «★ 5.0 · 1 отзыв» такого впечатления не создаёт и не врёт покупателю.
     function gridRating(p) {
       const r = p.rating || {};
-      if (!r.count || r.count < 3) return "";
-      return `<div class="cstars"><span class="stars">★</span> ${r.avg.toFixed(1)} <small>· ${r.count}</small></div>`;
+      if (!r.count) return "";
+      return `<div class="cstars"><span class="stars">★</span> ${r.avg.toFixed(1)} <small>· ${r.count} ${plural(r.count, "отзыв", "отзыва", "отзывов")}</small></div>`;
     }
     function cardHtml(p) {
       const photo = p.photo_url ? `<img src="${thumbOf(p)}" alt="" loading="lazy" decoding="async" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
@@ -3209,7 +3213,8 @@
       box.innerHTML = `<h3>Отзывы покупателей</h3>` + (list.length
         ? list.map(v => `<div class="rev">
             <div class="rtop"><span class="stars">${starsHtml(v.rating)}</span><span class="rwho">${esc(v.who)} · ${esc(whenRu(v.created_at).slice(0, 10))}</span></div>
-            ${v.text ? `<p>${esc(v.text)}</p>` : ""}</div>`).join("")
+            ${v.text ? `<p>${esc(v.text)}</p>` : ""}
+            ${v.reply ? `<div class="revreply"><b>Ответ магазина:</b> ${esc(v.reply)}</div>` : ""}</div>`).join("")
         : `<div style="color:var(--hint);font-size:13px">Пока без текста — только оценки.</div>`);
     }
 
@@ -4017,48 +4022,96 @@
     $("mReviews").onclick = openReviewsAdmin;
     $("reviewsClose").onclick = () => $("reviewsView").classList.remove("show");
 
+    // Фильтр: раньше админ видел только очередь, и опубликованный отзыв исчезал
+    // из его поля зрения навсегда — убрать его было уже нечем.
+    const REV_FILTERS = [["pending", "На модерации"], ["approved", "Опубликованные"],
+                         ["hidden", "Скрытые"], ["all", "Все"]];
+    let revFilter = "pending", revReplying = null;
+
     async function openReviewsAdmin() {
       $("reviewsView").classList.add("show");
       await loadPendingReviews();
     }
+    function renderRevFilter() {
+      $("revFilter").innerHTML = REV_FILTERS.map(([k, n]) =>
+        `<button class="ochip ${revFilter === k ? 'active' : ''}" data-rf="${k}">${n}</button>`).join("");
+      $("revFilter").querySelectorAll("[data-rf]").forEach(b => b.onclick = () => {
+        revFilter = b.dataset.rf; revReplying = null; loadPendingReviews();
+      });
+    }
     async function loadPendingReviews(silent) {
-      if (!silent) $("reviewsList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      if (!silent) { renderRevFilter(); $("reviewsList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`; }
       try {
-        const r = await fetch("/api/admin/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const r = await fetch("/api/admin/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, status: silent ? "pending" : revFilter }) });
         const d = await r.json();
         const list = d.reviews || [];
         // Счётчик в меню: иначе отзыв висит непроверенным, пока о нём не вспомнят.
         const badge = $("revBadge");
-        if (badge) { badge.textContent = list.length; badge.style.display = list.length ? "" : "none"; }
+        if (badge) { badge.textContent = d.pending || 0; badge.style.display = d.pending ? "" : "none"; }
         if (!silent) renderPendingReviews(list);
-        return list.length;
+        return d.pending || 0;
       } catch (e) {
         if (!silent) $("reviewsList").innerHTML = `<p style="color:var(--hint)">Сеть недоступна.</p>`;
         return 0;
       }
     }
+    const REV_STATUS_RU = { pending: "на модерации", approved: "опубликован", hidden: "скрыт" };
     function renderPendingReviews(list) {
-      if (!list.length) { $("reviewsList").innerHTML = `<p style="color:var(--hint);margin:0">Новых отзывов нет.</p>`; return; }
+      if (!list.length) {
+        $("reviewsList").innerHTML = `<p style="color:var(--hint);margin:0">${revFilter === "pending" ? "Новых отзывов нет." : "Здесь пусто."}</p>`;
+        return;
+      }
       $("reviewsList").innerHTML = list.map(v => `<div class="rev">
         <div class="rtop"><span class="stars">${starsHtml(v.rating)}</span><span class="rwho">${esc(v.who)} · ${esc(whenRu(v.created_at).slice(0, 10))}</span></div>
-        <div style="font-size:13px;color:var(--hint);margin-top:3px">${esc(v.product)}</div>
+        <div style="font-size:13px;color:var(--hint);margin-top:3px">${esc(v.product)} · ${REV_STATUS_RU[v.status] || v.status}</div>
         ${v.text ? `<p>${esc(v.text)}</p>` : `<p style="color:var(--hint)">Без текста — только оценка.</p>`}
-        <div style="display:flex;gap:8px;margin-top:8px">
-          <button class="unrefx" data-rok="${v.id}">Опубликовать</button>
-          <button class="delx" data-rno="${v.id}">Скрыть</button>
-        </div></div>`).join("");
+        ${v.reply && revReplying !== v.id ? `<div class="revreply"><b>Ответ магазина:</b> ${esc(v.reply)}</div>` : ""}
+        ${revReplying === v.id ? `<textarea class="admsearch rrtext" style="min-height:70px;margin-top:8px" placeholder="Ответ покупателю">${esc(v.reply || "")}</textarea>
+          <div style="display:flex;gap:8px"><button class="unrefx" data-rsave="${v.id}">Сохранить ответ</button><button class="unrefx" data-rcancel="1">Отмена</button></div>` : `
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          ${v.status !== "approved" ? `<button class="unrefx" data-rok="${v.id}">Опубликовать</button>` : ""}
+          ${v.status !== "hidden" ? `<button class="unrefx" data-rno="${v.id}">Скрыть</button>` : ""}
+          <button class="unrefx" data-rrep="${v.id}">${v.reply ? "Изменить ответ" : "Ответить"}</button>
+          <button class="delx" data-rdel="${v.id}">Удалить</button>
+        </div>`}</div>`).join("");
       $("reviewsList").querySelectorAll("[data-rok]").forEach(b => b.onclick = () => decideReview(+b.dataset.rok, true));
       $("reviewsList").querySelectorAll("[data-rno]").forEach(b => b.onclick = () => decideReview(+b.dataset.rno, false));
+      $("reviewsList").querySelectorAll("[data-rdel]").forEach(b => b.onclick = () => delReview(+b.dataset.rdel));
+      $("reviewsList").querySelectorAll("[data-rrep]").forEach(b => b.onclick = () => { revReplying = +b.dataset.rrep; renderPendingReviews(list); });
+      $("reviewsList").querySelectorAll("[data-rcancel]").forEach(b => b.onclick = () => { revReplying = null; renderPendingReviews(list); });
+      $("reviewsList").querySelectorAll("[data-rsave]").forEach(b => b.onclick = () => {
+        saveReviewReply(+b.dataset.rsave, b.closest(".rev").querySelector(".rrtext").value.trim());
+      });
+    }
+    async function reviewApi(path, body) {
+      try {
+        const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, ...body }) });
+        return await r.json();
+      } catch (e) { alertMsg("Сеть недоступна."); return { ok: false }; }
     }
     async function decideReview(id, ok) {
-      try {
-        const r = await fetch("/api/admin/review/decide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, ok }) });
-        const d = await r.json();
-        if (!d.ok) { alertMsg("Не удалось."); return; }
-        toast(ok ? "Опубликован ✅" : "Скрыт");
+      const d = await reviewApi("/api/admin/review/decide", { id, ok });
+      if (!d.ok) { alertMsg("Не удалось."); return; }
+      toast(ok ? "Опубликован ✅" : "Скрыт");
+      await loadPendingReviews();
+      refreshProducts();       // средняя оценка в карточке товара меняется сразу
+    }
+    function delReview(id) {
+      // Удаление — навсегда. «Скрыть» оставляет отзыв в базе, его можно вернуть.
+      confirmMsg("Удалить отзыв насовсем? Скрытый отзыв можно вернуть, удалённый — нет.", async () => {
+        const d = await reviewApi("/api/admin/review/delete", { id });
+        if (!d.ok) { alertMsg("Не удалось удалить."); return; }
+        toast("Отзыв удалён");
         await loadPendingReviews();
-        if (ok) refreshProducts();       // оценка в карточке товара меняется сразу
-      } catch (e) { alertMsg("Сеть недоступна."); }
+        refreshProducts();
+      });
+    }
+    async function saveReviewReply(id, text) {
+      const d = await reviewApi("/api/admin/review/reply", { id, text });
+      if (!d.ok) { alertMsg("Не удалось сохранить ответ."); return; }
+      revReplying = null;
+      toast(text ? "Ответ сохранён ✅" : "Ответ убран");
+      await loadPendingReviews();
     }
 
     async function openPromos() {

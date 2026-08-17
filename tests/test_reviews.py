@@ -130,12 +130,61 @@ def run():
     c2("решение по несуществующему отзыву — 404",
       client.post("/api/admin/review/decide", json={"initData": "x", "id": 999999, "ok": True}).status_code == 404)
 
+    # --- Опубликованный отзыв не пропадает из админки ---
+    # Раньше админ видел только очередь: опубликованный уходил из поля зрения
+    # навсегда, и убрать его было уже нечем.
+    c3 = Checker("Управление опубликованными")
+    приняты = client.post("/api/admin/reviews", json={"initData": "x", "status": "approved"}).get_json()
+    c3("опубликованные видны админу", len(приняты["reviews"]) == 1)
+    c3("статус отдаётся", приняты["reviews"][0]["status"] == "approved")
+    c3("счётчик очереди отдельно от списка", приняты["pending"] == 0)
+    скрытые = client.post("/api/admin/reviews", json={"initData": "x", "status": "hidden"}).get_json()["reviews"]
+    c3("скрытые тоже видны", len(скрытые) == 1)
+    c3("во «всех» оба", len(client.post("/api/admin/reviews", json={"initData": "x", "status": "all"}).get_json()["reviews"]) == 2)
+    c3("выдуманный фильтр не роняет — показываем очередь",
+      client.post("/api/admin/reviews", json={"initData": "x", "status": "мусор"}).get_json()["status"] == "pending")
+
+    # Скрытый можно вернуть — на то он и скрытый, а не удалённый.
+    client.post("/api/admin/review/decide", json={"initData": "x", "id": rid2, "ok": True})
+    c3("скрытый вернулся в публикацию", _product(pid)["rating"]["count"] == 2)
+    client.post("/api/admin/review/decide", json={"initData": "x", "id": rid2, "ok": False})
+
+    # --- Ответ магазина ---
+    c3("ответ сохранён",
+      client.post("/api/admin/review/reply", json={"initData": "x", "id": rid, "text": "Спасибо! Партия свежая."}).get_json()["ok"])
+    видно = client.get(f"/api/reviews?product_id={pid}").get_json()["reviews"][0]
+    c3("ответ виден покупателям", видно["reply"] == "Спасибо! Партия свежая.")
+    client.post("/api/admin/review/reply", json={"initData": "x", "id": rid, "text": "   "})
+    c3("пустой ответ убирает его",
+      client.get(f"/api/reviews?product_id={pid}").get_json()["reviews"][0]["reply"] == "")
+    c3("ответ на несуществующий отзыв — 404",
+      client.post("/api/admin/review/reply", json={"initData": "x", "id": 999999, "text": "?"}).status_code == 404)
+
+    # --- Удаление ---
+    c3("отзыв удаляется",
+      client.post("/api/admin/review/delete", json={"initData": "x", "id": rid}).get_json()["ok"])
+    c3("и пропадает с витрины", _product(pid)["rating"]["count"] == 0)
+    c3("и из списка товара", client.get(f"/api/reviews?product_id={pid}").get_json()["reviews"] == [])
+    c3("повторное удаление — 404",
+      client.post("/api/admin/review/delete", json={"initData": "x", "id": rid}).status_code == 404)
+    c3("после удаления покупатель может оценить заново",
+      any(p["id"] == pid for p in (as_user(BUYER, username="vasya") or
+                                   client.post("/api/my-reviews", json={"initData": "x"}).get_json()["can"])))
+    as_admin()
+
+    deny_admin()
+    c3("посторонний не удаляет",
+      client.post("/api/admin/review/delete", json={"initData": "x", "id": rid2}).status_code == 403)
+    c3("посторонний не отвечает",
+      client.post("/api/admin/review/reply", json={"initData": "x", "id": rid2, "text": "я тут главный"}).status_code == 403)
+    as_admin()
+
     # --- Товар удалён — отзывы уходят с ним ---
     db.delete_product(pid)
     c2("висячих отзывов не осталось", db.list_reviews(pid, "approved") == [] and db.count_pending_reviews() == 0)
 
     _clean()
-    return c.fails + c2.fails
+    return c.fails + c2.fails + c3.fails
 
 
 if __name__ == "__main__":

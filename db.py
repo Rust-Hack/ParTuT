@@ -487,6 +487,21 @@ def _ensure_delivery_columns():
         cur.execute("ALTER TABLE delivery_methods ADD COLUMN needs_point INTEGER DEFAULT 0")
     conn.commit()
     conn.close()
+    _ensure_review_columns()
+
+
+def _ensure_review_columns():
+    """Ответ продавца на отзыв. Спокойный ответ на тройку убеждает нового
+    покупателя сильнее, чем её отсутствие."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "reviews")
+    if "reply" not in cols:
+        cur.execute("ALTER TABLE reviews ADD COLUMN reply TEXT")
+    if "replied_at" not in cols:
+        cur.execute("ALTER TABLE reviews ADD COLUMN replied_at TEXT")
+    conn.commit()
+    conn.close()
 
 
 # ---------- Розыгрыши ----------
@@ -2372,16 +2387,52 @@ def list_reviews_by_user(user_id, limit=50):
     return rows
 
 
-def pending_reviews(limit=50):
-    """Ждут решения — их видит админ."""
+def admin_reviews(status="pending", limit=100):
+    """Отзывы для админа. status='all' — все, включая опубликованные и скрытые.
+
+    Раньше админ видел только очередь на модерацию: опубликованный отзыв
+    исчезал из его поля зрения навсегда, и убрать его было уже нельзя."""
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("SELECT r.*, p.name AS product_name FROM reviews r "
-                   "LEFT JOIN products p ON p.id = r.product_id "
-                   "WHERE r.status = 'pending' ORDER BY r.id DESC LIMIT %s"), (limit,))
+    sql = ("SELECT r.*, p.name AS product_name FROM reviews r "
+           "LEFT JOIN products p ON p.id = r.product_id ")
+    if status and status != "all":
+        cur.execute(_q(sql + "WHERE r.status = %s ORDER BY r.id DESC LIMIT %s"), (status, limit))
+    else:
+        cur.execute(_q(sql + "ORDER BY r.id DESC LIMIT %s"), (limit,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+def pending_reviews(limit=50):
+    """Ждут решения — их видит админ."""
+    return admin_reviews("pending", limit)
+
+
+def delete_review(review_id):
+    """Убирает отзыв насовсем. «Скрыть» оставляет запись (можно вернуть),
+    удаление — для мусора, который держать незачем."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM reviews WHERE id = %s"), (review_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def set_review_reply(review_id, text):
+    """Ответ магазина на отзыв. Пустой текст убирает ответ."""
+    text = (text or "").strip()[:REVIEW_MAX_TEXT]
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE reviews SET reply = %s, replied_at = %s WHERE id = %s"),
+                (text or None, (_now_str() if text else None), review_id))
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
 
 
 def count_pending_reviews():
