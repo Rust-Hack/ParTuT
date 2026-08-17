@@ -36,7 +36,8 @@ import db
 import errors
 import notifications
 from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CITY_ADMINS,
-                   CONFIRM_MINUTES, is_admin, is_super_admin, admins_for_city, CITIES, CATEGORIES)
+                   CONFIRM_MINUTES, is_admin, is_super_admin, admins_for_city, all_admin_ids,
+                   CITIES, CATEGORIES)
 
 db.init_db()
 config.seed_admins_from_env()   # разовый перенос админов из окружения в базу
@@ -255,6 +256,8 @@ _WRITE_PATHS = {
     "/api/admin/product": (), "/api/admin/product/update": (),
     "/api/admin/product/variants": (), "/api/admin/product/delete": (),
     "/api/admin/photo": (), "/api/admin/photo/add": (), "/api/admin/photo/delete": (),
+    # Оценка живёт в карточке товара, поэтому её публикация обновляет витрину.
+    "/api/admin/review/decide": (),
     "/api/admin/location": (), "/api/admin/location/delete": (),
     "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),
     "/api/admin/point": (), "/api/admin/point/update": (), "/api/admin/point/delete": (),
@@ -546,6 +549,116 @@ def api_reminders():
 
 
 # ============================================================
+#  ОТЗЫВЫ
+# ============================================================
+
+@app.route("/api/reviews")
+def api_reviews():
+    """Опубликованные отзывы о товаре — их видят все."""
+    try:
+        pid = int(request.args.get("product_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    rows = db.list_reviews(pid)
+    return jsonify({"ok": True, "reviews": [{
+        "id": r["id"], "rating": r["rating"], "text": r["text"] or "",
+        "who": _review_author(r), "created_at": r["created_at"] or "",
+    } for r in rows]})
+
+
+def _review_author(r):
+    """Как подписан отзыв. Полное имя не показываем — покупателю неприятно
+    увидеть себя по имени под отзывом о вейпе."""
+    name = (r["username"] or "").lstrip("@").strip()
+    return f"@{name}" if name else "Покупатель"
+
+
+@app.route("/api/my-reviews", methods=["POST"])
+def api_my_reviews():
+    """Что этот покупатель может оценить и что уже написал."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+    mine = [{"product_id": r["product_id"], "rating": r["rating"], "status": r["status"]}
+            for r in db.list_reviews_by_user(uid)]
+    return jsonify({"ok": True, "can": db.reviewable_products(uid), "mine": mine})
+
+
+@app.route("/api/review", methods=["POST"])
+def api_review():
+    """Оставить отзыв. Право даёт покупка, а не желание высказаться."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    uid = int(user["id"])
+    try:
+        pid = int(data.get("product_id"))
+        rating = int(data.get("rating"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+    if rating < 1 or rating > 5:
+        return jsonify({"ok": False, "error": "bad_rating"}), 400
+    if not any(p["id"] == pid for p in db.reviewable_products(uid)):
+        # Либо не покупал, либо уже оценивал — из ответа этого не видно специально.
+        return jsonify({"ok": False, "error": "not_allowed"}), 403
+    rid = db.add_review(pid, uid, rating, data.get("text") or "", user.get("username") or "")
+    if not rid:
+        return jsonify({"ok": False, "error": "not_allowed"}), 403
+    _bg(_notify_new_review, rid)
+    return jsonify({"ok": True, "id": rid})
+
+
+def _notify_new_review(review_id):
+    """Сообщаем админам, что отзыв ждёт решения: иначе он повиснет невидимым."""
+    r = db.get_review(review_id)
+    if not r:
+        return
+    p = db.get_product(r["product_id"])
+    text = (f"⭐ Новый отзыв на модерации\n"
+            f"{'★' * int(r['rating'])}{'☆' * (5 - int(r['rating']))} — {(p['name'] if p else 'товар')}\n"
+            f"От: {_review_author(r)}\n\n{(r['text'] or '(без текста)')}\n\n"
+            f"Опубликовать — в приложении: Админ → Отзывы")
+    for aid in all_admin_ids():
+        try:
+            tg.send_message(aid, text)
+        except Exception as e:
+            print(f"Не смог сообщить админу {aid} об отзыве: {e}")
+
+
+@app.route("/api/admin/reviews", methods=["POST"])
+def api_admin_reviews():
+    """Отзывы на модерации."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    rows = db.pending_reviews()
+    return jsonify({"ok": True, "reviews": [{
+        "id": r["id"], "product_id": r["product_id"], "product": r["product_name"] or "товар удалён",
+        "rating": r["rating"], "text": r["text"] or "", "who": _review_author(r),
+        "created_at": r["created_at"] or "",
+    } for r in rows]})
+
+
+@app.route("/api/admin/review/decide", methods=["POST"])
+def api_admin_review_decide():
+    """Опубликовать отзыв или скрыть его."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        rid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    status = "approved" if data.get("ok") else "hidden"
+    if not db.set_review_status(rid, status):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify({"ok": True, "status": status})
+
+
+# ============================================================
 #  ЛОКАЦИИ (точки продаж)
 # ============================================================
 
@@ -609,6 +722,11 @@ def _all_products_payload():
     except Exception as e:
         waiting = {}                      # счётчик — не повод ронять витрину
         print(f"Не удалось посчитать ожидающих: {e}")
+    try:
+        ratings = db.product_ratings()
+    except Exception as e:
+        ratings = {}                      # без оценок витрина живёт
+        print(f"Не удалось прочитать оценки товаров: {e}")
     gallery = {}
     try:
         for ph in db.all_product_photos():
@@ -625,6 +743,7 @@ def _all_products_payload():
                            "thumb": f"/api/photo?file_id={ph['thumb_id'] or ph['file_id']}"})
         out.append({
             "photos": photos,
+            "rating": ratings.get(p["id"], {"avg": 0, "count": 0}),
             "id": p["id"], "name": p["name"], "price": p["price"],
             "stock": p["stock"], "is_hit": p["is_hit"],
             "category": p["category"], "city": p["city"],

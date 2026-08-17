@@ -1,0 +1,143 @@
+"""Отзывы о товарах.
+
+Главное правило: право на отзыв даёт покупка. Иначе оценка ничего не значит —
+конкурент поставит единицу, не потратив ни рубля, а покупатель, который на неё
+посмотрел, примет решение по выдумке.
+
+Второе правило: пока отзыв не опубликован, он не влияет ни на среднюю оценку,
+ни на витрину. Модерация без этого была бы декорацией.
+"""
+from _common import db, client, server, Checker, as_user, as_admin, deny_admin, SENT, reset_sent
+
+
+BUYER = 9801
+STRANGER = 9802
+
+
+def _clean():
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute("DELETE FROM reviews")
+    cur.execute("DELETE FROM orders")
+    cur.execute("DELETE FROM products")
+    conn.commit(); conn.close()
+    server._cache_bust()
+
+
+def _buy(uid, pid, name, status="issued"):
+    oid = db.create_order(uid, "buyer", "Минск", [{"id": pid, "name": name, "price": 20.0, "qty": 1}], 20.0, "")
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("UPDATE orders SET status = %s WHERE id = %s"), (status, oid))
+    conn.commit(); conn.close()
+    return oid
+
+
+def _product(pid):
+    server._cache_bust()
+    return next(p for p in client.get("/api/products").get_json() if p["id"] == pid)
+
+
+def run():
+    c = Checker("Отзывы")
+    _clean()
+
+    pid = db.add_product("Минск", "podsystem", "ОтзывПод", 20.0, 5)
+    other = db.add_product("Минск", "podsystem", "ДругойПод", 25.0, 5)
+
+    # --- Не покупал — не оценивает ---
+    as_user(STRANGER, username="chuzhoy")
+    r = client.post("/api/review", json={"initData": "x", "product_id": pid, "rating": 1, "text": "фигня"})
+    c("посторонний оценить не может", r.status_code == 403)
+    c("у товара нет оценки", _product(pid)["rating"]["count"] == 0)
+
+    # Незавершённый заказ — тоже ещё не покупка.
+    as_user(BUYER, username="vasya")
+    _buy(BUYER, pid, "ОтзывПод", status="new")
+    c("до выдачи оценить нельзя",
+      client.post("/api/review", json={"initData": "x", "product_id": pid, "rating": 5}).status_code == 403)
+
+    # --- Покупал — оценивает ---
+    _buy(BUYER, pid, "ОтзывПод")
+    can = client.post("/api/my-reviews", json={"initData": "x"}).get_json()
+    c("товар предложен к оценке", any(p["id"] == pid for p in can["can"]))
+    c("некупленный товар не предложен", all(p["id"] != other for p in can["can"]))
+
+    reset_sent()
+    real_bg = server._bg
+    server._bg = lambda fn, *a, **k: fn(*a, **k)   # уведомление — сразу, без потока
+    try:
+        r = client.post("/api/review", json={"initData": "x", "product_id": pid, "rating": 5, "text": "Держит долго, пар густой"})
+    finally:
+        server._bg = real_bg
+    c("отзыв принят", (r.get_json() or {}).get("ok"))
+    c("админу пришло уведомление", any("отзыв" in (t or "").lower() for _, t, _ in SENT))
+
+    # --- До публикации отзыв не влияет ни на что ---
+    c("на витрине оценки ещё нет", _product(pid)["rating"]["count"] == 0)
+    c("в списке товара отзыва ещё нет",
+      client.get(f"/api/reviews?product_id={pid}").get_json()["reviews"] == [])
+
+    # --- Дважды один и тот же человек не оценивает ---
+    c("повторный отзыв отклонён",
+      client.post("/api/review", json={"initData": "x", "product_id": pid, "rating": 1}).status_code == 403)
+    c("оценённый товар больше не предлагают",
+      all(p["id"] != pid for p in client.post("/api/my-reviews", json={"initData": "x"}).get_json()["can"]))
+    c("свой отзыв покупателю виден со статусом",
+      client.post("/api/my-reviews", json={"initData": "x"}).get_json()["mine"][0]["status"] == "pending")
+
+    # --- Мусор на входе ---
+    c("оценка вне 1..5 отклонена",
+      client.post("/api/review", json={"initData": "x", "product_id": other, "rating": 9}).status_code == 400)
+    c("нечисловая оценка отклонена",
+      client.post("/api/review", json={"initData": "x", "product_id": other, "rating": "пять"}).status_code == 400)
+
+    # --- Модерация ---
+    c2 = Checker("Модерация отзывов")
+    deny_admin()
+    c2("посторонний модерацию не видит",
+      client.post("/api/admin/reviews", json={"initData": "x"}).status_code == 403)
+    c2("посторонний не публикует",
+      client.post("/api/admin/review/decide", json={"initData": "x", "id": 1, "ok": True}).status_code == 403)
+    as_admin()
+
+    pend = client.post("/api/admin/reviews", json={"initData": "x"}).get_json()["reviews"]
+    c2("отзыв ждёт решения", len(pend) == 1)
+    c2("админ видит товар и оценку", pend[0]["product"] == "ОтзывПод" and pend[0]["rating"] == 5)
+    c2("автор подписан ником", pend[0]["who"] == "@vasya")
+
+    rid = pend[0]["id"]
+    c2("опубликован", client.post("/api/admin/review/decide", json={"initData": "x", "id": rid, "ok": True}).get_json()["status"] == "approved")
+    c2("очередь опустела", client.post("/api/admin/reviews", json={"initData": "x"}).get_json()["reviews"] == [])
+    pub = client.get(f"/api/reviews?product_id={pid}").get_json()["reviews"]
+    c2("отзыв виден всем", len(pub) == 1 and pub[0]["text"].startswith("Держит"))
+    c2("оценка появилась на витрине", _product(pid)["rating"] == {"avg": 5.0, "count": 1})
+
+    # --- Средняя оценка считается по опубликованным ---
+    as_user(STRANGER, username="petya")
+    _buy(STRANGER, pid, "ОтзывПод")
+    client.post("/api/review", json={"initData": "x", "product_id": pid, "rating": 2, "text": "Быстро сел"})
+    c2("непроверенный отзыв среднюю не двигает", _product(pid)["rating"]["avg"] == 5.0)
+    as_admin()
+    rid2 = client.post("/api/admin/reviews", json={"initData": "x"}).get_json()["reviews"][0]["id"]
+    client.post("/api/admin/review/decide", json={"initData": "x", "id": rid2, "ok": True})
+    c2("после публикации средняя пересчитана", _product(pid)["rating"] == {"avg": 3.5, "count": 2})
+
+    # --- Скрытый отзыв ---
+    client.post("/api/admin/review/decide", json={"initData": "x", "id": rid2, "ok": False})
+    c2("скрытый ушёл из списка", len(client.get(f"/api/reviews?product_id={pid}").get_json()["reviews"]) == 1)
+    c2("и из средней оценки", _product(pid)["rating"] == {"avg": 5.0, "count": 1})
+    c2("скрытый не возвращается в очередь",
+      client.post("/api/admin/reviews", json={"initData": "x"}).get_json()["reviews"] == [])
+    c2("решение по несуществующему отзыву — 404",
+      client.post("/api/admin/review/decide", json={"initData": "x", "id": 999999, "ok": True}).status_code == 404)
+
+    # --- Товар удалён — отзывы уходят с ним ---
+    db.delete_product(pid)
+    c2("висячих отзывов не осталось", db.list_reviews(pid, "approved") == [] and db.count_pending_reviews() == 0)
+
+    _clean()
+    return c.fails + c2.fails
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(1 if run() else 0)

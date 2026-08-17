@@ -340,6 +340,21 @@ def init_db():
         )
     """)
 
+    # Отзывы. Пишет только тот, кто товар покупал, — иначе это не отзыв, а
+    # анонимная запись в интернете, и цена ей соответствующая.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS reviews (
+            id         {ID_COL},
+            product_id INTEGER NOT NULL,
+            user_id    BIGINT  NOT NULL,
+            username   TEXT,
+            rating     INTEGER NOT NULL,
+            text       TEXT,
+            status     TEXT    NOT NULL DEFAULT 'pending',
+            created_at TEXT
+        )
+    """)
+
     # Дополнительные фото товара (главное лежит в products.photo). Одна картинка
     # не показывает ни размер, ни комплект, ни экран — покупателю приходится
     # верить на слово, а продавцу отвечать на одни и те же вопросы в чате.
@@ -2150,6 +2165,133 @@ def is_product_photo(file_id):
     return found
 
 
+# ---------- Отзывы ----------
+
+REVIEW_MAX_TEXT = 500
+
+
+def reviewable_products(user_id):
+    """Что этот человек может оценить: купил (заказ выдан) и ещё не оценивал.
+
+    Право на отзыв даёт покупка, а не желание высказаться: иначе конкурент
+    поставит единицу, не потратив ни рубля, а оценка товара перестанет
+    что-либо значить."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT items FROM orders WHERE user_id = %s AND status = 'issued'"), (user_id,))
+    bought = {}
+    for r in cur.fetchall():
+        try:
+            for it in json.loads(r["items"]):
+                pid = int(it.get("id", 0))
+                if pid:
+                    bought[pid] = it.get("name", "")
+        except (TypeError, ValueError):
+            pass
+    if not bought:
+        conn.close()
+        return []
+    marks = ",".join(["%s"] * len(bought))
+    cur.execute(_q(f"SELECT product_id FROM reviews WHERE user_id = %s AND product_id IN ({marks})"),
+                (user_id, *bought.keys()))
+    already = {r["product_id"] for r in cur.fetchall()}
+    # Названия берём из живого каталога: в старом заказе товар мог называться иначе.
+    cur.execute(_q(f"SELECT id, name FROM products WHERE id IN ({marks})"), tuple(bought.keys()))
+    names = {r["id"]: r["name"] for r in cur.fetchall()}
+    conn.close()
+    return [{"id": pid, "name": names.get(pid) or bought[pid]}
+            for pid in bought if pid not in already and pid in names]
+
+
+def add_review(product_id, user_id, rating, text="", username=""):
+    """Сохраняет отзыв в статусе «на модерации». Возвращает id или None, если уже оценивал."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT 1 AS x FROM reviews WHERE user_id = %s AND product_id = %s LIMIT 1"),
+                (user_id, product_id))
+    if cur.fetchone():
+        conn.close()
+        return None                      # один человек — один отзыв на товар
+    rid = _insert_id(cur, "INSERT INTO reviews (product_id, user_id, username, rating, text, status, created_at) "
+                          "VALUES (%s, %s, %s, %s, %s, 'pending', %s)",
+                     (product_id, user_id, (username or "")[:64], int(rating),
+                      (text or "").strip()[:REVIEW_MAX_TEXT], _now_str()))
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def list_reviews(product_id, status="approved", limit=50):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM reviews WHERE product_id = %s AND status = %s ORDER BY id DESC LIMIT %s"),
+                (product_id, status, limit))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def list_reviews_by_user(user_id, limit=50):
+    """Отзывы одного человека — чтобы показать ему его же оценку и её судьбу."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM reviews WHERE user_id = %s ORDER BY id DESC LIMIT %s"), (user_id, limit))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def pending_reviews(limit=50):
+    """Ждут решения — их видит админ."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT r.*, p.name AS product_name FROM reviews r "
+                   "LEFT JOIN products p ON p.id = r.product_id "
+                   "WHERE r.status = 'pending' ORDER BY r.id DESC LIMIT %s"), (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def count_pending_reviews():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM reviews WHERE status = 'pending'")
+    n = int(cur.fetchone()["c"])
+    conn.close()
+    return n
+
+
+def set_review_status(review_id, status):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE reviews SET status = %s WHERE id = %s"), (status, review_id))
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def get_review(review_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM reviews WHERE id = %s"), (review_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def product_ratings():
+    """{товар: {avg, count}} по опубликованным отзывам — одним запросом на всю витрину."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT product_id, COUNT(*) AS c, AVG(rating) AS a FROM reviews "
+                "WHERE status = 'approved' GROUP BY product_id")
+    out = {r["product_id"]: {"count": int(r["c"]), "avg": round(float(r["a"] or 0), 1)} for r in cur.fetchall()}
+    conn.close()
+    return out
+
+
 # ---------- Галерея товара ----------
 
 MAX_EXTRA_PHOTOS = 5      # плюс главное фото — шесть картинок на карточку
@@ -2300,6 +2442,7 @@ def delete_product(product_id):
     # Галерея без товара никому не видна, но место занимает и мешает считать
     # картинки — убираем вместе с товаром.
     cur.execute(_q("DELETE FROM product_photos WHERE product_id = %s"), (product_id,))
+    cur.execute(_q("DELETE FROM reviews WHERE product_id = %s"), (product_id,))
     conn.commit()
     conn.close()
 

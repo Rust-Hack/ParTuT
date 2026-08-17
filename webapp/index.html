@@ -646,6 +646,28 @@
     .view h2.pd-name { font-size: 22px; font-weight: 800; margin: 16px 0 6px; text-align: left; }
     .pd-price { color: var(--accent); font-size: 24px; font-weight: 800; }
     .view p.pd-desc { color: var(--hint); font-size: 15px; line-height: 1.5; margin-top: 12px; text-align: left; }
+    /* Оценки и отзывы */
+    .stars { letter-spacing: 1px; color: #f5a623; }
+    .cstars { font-size: 12px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .cstars small { color: var(--hint); font-weight: 400; }
+    .rateline { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 14px; }
+    .rateline b { font-variant-numeric: tabular-nums; }
+    .rateline small { color: var(--hint); }
+    .revs { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+    .revs h3 { font-size: 15px; font-weight: 800; margin: 0 0 10px; text-align: left; }
+    .rev { padding: 9px 0; border-bottom: 1px solid var(--line); }
+    .rev:last-child { border-bottom: none; }
+    .rev .rtop { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
+    .rev .rwho { color: var(--hint); }
+    .rev p { margin: 5px 0 0; font-size: 14px; line-height: 1.45; text-align: left; }
+    /* Выставление оценки: звёзды-кнопки */
+    .rateset { display: flex; gap: 6px; justify-content: center; margin: 6px 0 14px; }
+    .rateset button { font-size: 32px; line-height: 1; background: none; border: none; padding: 2px; color: var(--line); }
+    .rateset button.on { color: #f5a623; }
+    .revq { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .revq:last-of-type { border-bottom: none; }
+    .revq span { flex: 1; font-size: 14px; }
+    .revq button { border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 10px; padding: 6px 12px; font-size: 13px; font-weight: 700; }
     /* prodBody — собственный скролл (иначе flex:1 ломает прокрутку длинных карточек) */
     #prodBody { min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
     .pd-actions { padding-top: 16px; display: flex; gap: 12px; align-items: center; flex: 0 0 auto; }
@@ -908,7 +930,18 @@
     <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
     <div class="prow" id="mPromos"><span>🎟 Промокоды</span><span>›</span></div>
+    <div class="prow" id="mReviews"><span>⭐ Отзывы <b id="revBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
     <div class="prow" id="mStaff" style="display:none"><span>🔑 Доступ продавцов</span><span>›</span></div>
+  </div>
+
+  <!-- Отзывы на модерации -->
+  <div class="view" id="reviewsView">
+    <div class="viewhead"><h2>⭐ Отзывы</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="reviewsClose">‹ Назад</button></div>
+    <div class="card-block">
+      <p style="color:var(--hint);font-size:13px;margin:0 0 10px;text-align:left">Отзыв виден покупателям только после публикации. Скрывайте спам и оскорбления, а не низкие оценки: магазин, где все отзывы на пять, доверия не вызывает.</p>
+      <div id="reviewsList"></div>
+    </div>
   </div>
 
   <!-- Склад: приход и списание -->
@@ -1709,6 +1742,14 @@
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
 
+    // На полке оценку показываем от трёх отзывов. Одна пятёрка рисует «★ 5.0» и
+    // выглядит убедительнее сотни оценок 4.6 — это обман, пусть и не нарочный.
+    // В карточке товара оценка видна с первого отзыва: там рядом стоит их число.
+    function gridRating(p) {
+      const r = p.rating || {};
+      if (!r.count || r.count < 3) return "";
+      return `<div class="cstars"><span class="stars">★</span> ${r.avg.toFixed(1)} <small>· ${r.count}</small></div>`;
+    }
     function cardHtml(p) {
       const photo = p.photo_url ? `<img src="${thumbOf(p)}" alt="" loading="lazy" decoding="async" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
       const isFav = favs.includes(p.id);
@@ -1732,6 +1773,7 @@
       return `<div class="card${p.stock <= 0 ? " out" : ""}"><div class="imgwrap">${photo}${productBadges(p)}
           <button class="fav ${isFav?'on':''}" data-fav="${p.id}">${isFav?'♥':'♡'}</button></div>
         <div class="cbody"><p class="cname" data-open="${p.id}">${esc(p.name)}</p>
+          ${gridRating(p)}
           ${sub ? `<div class="csub">${esc(sub)}</div>` : ""}
           <div class="crow"><span class="cprice">${p.price.toFixed(2)} ${CUR}</span>${ctrl}</div></div></div>`;
     }
@@ -2285,6 +2327,7 @@
     // Шторка с правилами.
     function showInfo(title, html) {
       $("infoTitle").textContent = title; $("infoBody").innerHTML = html;
+      $("infoClose").textContent = "Понятно";   // подпись по умолчанию; форма меняет её на «Отмена»
       $("infoOverlay").classList.add("show");
     }
     $("infoClose").onclick = () => closeOverlay($("infoOverlay"));
@@ -3044,14 +3087,22 @@
           }).join("") + `</div>`;
       }
 
+      const rating = p.rating || { avg: 0, count: 0 };
+      const rateHtml = rating.count
+        ? `<div class="rateline"><span class="stars">${starsHtml(rating.avg)}</span><b>${rating.avg.toFixed(1)}</b><small>${rating.count} ${plural(rating.count, "отзыв", "отзыва", "отзывов")}</small></div>`
+        : "";
+
       $("prodBody").innerHTML = `<div class="pd-img">${photo}${productBadges(p, false)}</div>
         <div class="pd-card">
           <h2 class="pd-name">${esc(p.name)}</h2>
           <div class="pd-price">${p.price.toFixed(2)} ${CUR}</div>
+          ${rateHtml}
           ${infoHtml}
           ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}
           ${flavorHtml}
+          ${rating.count ? `<div class="revs" id="prodRevs"><h3>Отзывы покупателей</h3><div style="color:var(--hint);font-size:13px">Загрузка…</div></div>` : ""}
         </div>`;
+      if (rating.count) loadProductReviews(p.id);
       const gwrap = $("pgal");
       if (gwrap) {
         // Точки — единственная подсказка, что фото ещё есть; без них листать никто не догадается.
@@ -3069,6 +3120,29 @@
     }
 
     function flavorQty(flavor, delta) { changeQty(currentProductId, delta, flavor); renderProduct(); }
+
+    // ----- Отзывы в карточке товара -----
+    // Половинки не рисуем: пять звёзд читаются мгновенно, а «4.5 звезды» покупатель
+    // всё равно берёт из цифры рядом.
+    function starsHtml(avg) {
+      const n = Math.round(avg);
+      return "★".repeat(n) + `<span style="opacity:.3">${"★".repeat(5 - n)}</span>`;
+    }
+    async function loadProductReviews(pid) {
+      let list = [];
+      try {
+        const r = await fetch(`/api/reviews?product_id=${pid}`);
+        const d = await r.json();
+        list = d.ok ? d.reviews : [];
+      } catch (e) { list = []; }
+      const box = $("prodRevs");
+      if (!box || currentProductId !== pid) return;    // карточку успели закрыть
+      box.innerHTML = `<h3>Отзывы покупателей</h3>` + (list.length
+        ? list.map(v => `<div class="rev">
+            <div class="rtop"><span class="stars">${starsHtml(v.rating)}</span><span class="rwho">${esc(v.who)} · ${esc(whenRu(v.created_at).slice(0, 10))}</span></div>
+            ${v.text ? `<p>${esc(v.text)}</p>` : ""}</div>`).join("")
+        : `<div style="color:var(--hint);font-size:13px">Пока без текста — только оценки.</div>`);
+    }
 
     function renderProdActions(p) {
       if (hasVariants(p)) {
@@ -3118,6 +3192,7 @@
       // Раздавать доступ может только владелец: иначе продавец выпишет права сам себе.
       if ($("mStaff")) $("mStaff").style.display = (me && me.is_super) ? "" : "none";
       if (me && me.is_super) loadReqBadge();
+      loadPendingReviews(true);          // счётчик отзывов — без открытия раздела
       await fetchBrands();               // нужно разделам «Товары» и «Бренды»
       $("adminView").classList.add("show");
     }
@@ -3779,6 +3854,54 @@
     $("mPromos").onclick = openPromos;
     $("promosClose").onclick = () => $("promosView").classList.remove("show");
 
+    // ----- Отзывы на модерации -----
+    $("mReviews").onclick = openReviewsAdmin;
+    $("reviewsClose").onclick = () => $("reviewsView").classList.remove("show");
+
+    async function openReviewsAdmin() {
+      $("reviewsView").classList.add("show");
+      await loadPendingReviews();
+    }
+    async function loadPendingReviews(silent) {
+      if (!silent) $("reviewsList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      try {
+        const r = await fetch("/api/admin/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        const list = d.reviews || [];
+        // Счётчик в меню: иначе отзыв висит непроверенным, пока о нём не вспомнят.
+        const badge = $("revBadge");
+        if (badge) { badge.textContent = list.length; badge.style.display = list.length ? "" : "none"; }
+        if (!silent) renderPendingReviews(list);
+        return list.length;
+      } catch (e) {
+        if (!silent) $("reviewsList").innerHTML = `<p style="color:var(--hint)">Сеть недоступна.</p>`;
+        return 0;
+      }
+    }
+    function renderPendingReviews(list) {
+      if (!list.length) { $("reviewsList").innerHTML = `<p style="color:var(--hint);margin:0">Новых отзывов нет.</p>`; return; }
+      $("reviewsList").innerHTML = list.map(v => `<div class="rev">
+        <div class="rtop"><span class="stars">${starsHtml(v.rating)}</span><span class="rwho">${esc(v.who)} · ${esc(whenRu(v.created_at).slice(0, 10))}</span></div>
+        <div style="font-size:13px;color:var(--hint);margin-top:3px">${esc(v.product)}</div>
+        ${v.text ? `<p>${esc(v.text)}</p>` : `<p style="color:var(--hint)">Без текста — только оценка.</p>`}
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="unrefx" data-rok="${v.id}">Опубликовать</button>
+          <button class="delx" data-rno="${v.id}">Скрыть</button>
+        </div></div>`).join("");
+      $("reviewsList").querySelectorAll("[data-rok]").forEach(b => b.onclick = () => decideReview(+b.dataset.rok, true));
+      $("reviewsList").querySelectorAll("[data-rno]").forEach(b => b.onclick = () => decideReview(+b.dataset.rno, false));
+    }
+    async function decideReview(id, ok) {
+      try {
+        const r = await fetch("/api/admin/review/decide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, ok }) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось."); return; }
+        toast(ok ? "Опубликован ✅" : "Скрыт");
+        await loadPendingReviews();
+        if (ok) refreshProducts();       // оценка в карточке товара меняется сразу
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+
     async function openPromos() {
       $("promosView").classList.add("show");
       $("pmCode").value = ""; $("pmValue").value = ""; $("pmMin").value = ""; $("pmUses").value = "";
@@ -3935,14 +4058,60 @@
         const d = await r.json();
         myOrders = d.orders || [];
       } catch (e) { myOrders = []; }
+      await loadReviewables();      // «оцените покупку» показываем сразу, а не вторым экраном
       renderMyOrders();
     }
+    // ----- Оценить покупку (из «Мои заказы») -----
+    let reviewables = [];
+    async function loadReviewables() {
+      try {
+        const r = await fetch("/api/my-reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        reviewables = d.ok ? d.can : [];
+      } catch (e) { reviewables = []; }
+    }
+    function reviewPromptHtml() {
+      if (!reviewables.length) return "";
+      return `<div class="ocard">
+        <div class="ocard-id">Оцените покупку</div>
+        <div class="ocard-sub" style="margin-bottom:6px">Отзыв увидят другие покупатели после проверки продавцом.</div>
+        ${reviewables.map((p, i) => `<div class="revq"><span>${esc(p.name)}</span><button data-rev="${i}">Оценить</button></div>`).join("")}
+      </div>`;
+    }
+    function openReviewSheet(p) {
+      let picked = 0;
+      showInfo(p.name, `
+        <div class="rateset" id="rateSet">${[1, 2, 3, 4, 5].map(n => `<button data-star="${n}">★</button>`).join("")}</div>
+        <textarea id="revText" class="admsearch" style="min-height:90px;resize:vertical" placeholder="Что понравилось, что нет (не обязательно)"></textarea>
+        <button class="bigbtn" id="revSend" style="margin-top:12px">Отправить отзыв</button>`);
+      $("infoClose").textContent = "Отмена";   // это форма, а не сообщение: «Понятно» тут не ответ
+      const paint =() => document.querySelectorAll("#rateSet button").forEach(b => b.classList.toggle("on", +b.dataset.star <= picked));
+      document.querySelectorAll("#rateSet button").forEach(b => b.onclick = () => { picked = +b.dataset.star; paint(); });
+      $("revSend").onclick = async () => {
+        if (!picked) { alertMsg("Поставьте оценку от 1 до 5 звёзд."); return; }
+        $("revSend").disabled = true; $("revSend").textContent = "Отправляю…";
+        try {
+          const r = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ initData, product_id: p.id, rating: picked, text: $("revText").value.trim() }) });
+          const d = await r.json();
+          if (d.ok) {
+            closeOverlay($("infoOverlay"));
+            // Товар уходит из списка сразу: иначе человек оценит второй раз и получит отказ.
+            reviewables = reviewables.filter(x => x.id !== p.id);
+            renderMyOrders();
+            alertMsg("Спасибо! Отзыв появится после проверки ⭐");
+          } else alertMsg(d.error === "not_allowed" ? "Оценить можно только полученный товар." : "Не удалось отправить.");
+        } catch (e) { alertMsg("Сеть недоступна."); }
+        finally { $("revSend").disabled = false; $("revSend").textContent = "Отправить отзыв"; }
+      };
+    }
+
     function renderMyOrders() {
       if (!myOrders.length) {
         $("myOrdersList").innerHTML = `<div class="empty"><div class="circ">📦</div><h3>Заказов пока нет</h3><p>Оформите первый заказ в ассортименте.</p></div>`;
         return;
       }
-      $("myOrdersList").innerHTML = myOrders.map((o, idx) => {
+      $("myOrdersList").innerHTML = reviewPromptHtml() + myOrders.map((o, idx) => {
         const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
         const items = (o.items || []).map(it =>
           `<div class="oitem"><span>${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} ${CUR}</span></div>`).join("");
@@ -3971,6 +4140,7 @@
           ${cancelBtn}
         </div>`;
       }).join("");
+      $("myOrdersList").querySelectorAll("[data-rev]").forEach(b => b.onclick = () => openReviewSheet(reviewables[+b.dataset.rev]));
       $("myOrdersList").querySelectorAll("[data-repeat]").forEach(b => b.onclick = () => repeatOrder(myOrders[+b.dataset.repeat]));
       $("myOrdersList").querySelectorAll("[data-ask]").forEach(b => b.onclick = () => openSupport(myOrders[+b.dataset.ask].id));
       $("myOrdersList").querySelectorAll("[data-cancel]").forEach(b => b.onclick = () => cancelMyOrder(myOrders[+b.dataset.cancel]));
