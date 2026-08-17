@@ -1794,13 +1794,18 @@
       else if (sortMode === "str_asc") arr.sort((a, b) => strengthVal(a) - strengthVal(b));
       return arr;
     }
+    // Ищем и по бренду, и по вкусам: «мята» — обычный запрос покупателя, а
+    // раньше поиск смотрел только в название и не находил ничего.
+    function searchText(p) {
+      return [p.name, p.brand, ...flavorsOf(p)].filter(Boolean).join(" ").toLowerCase();
+    }
     function visibleProducts() {
       const s = search.trim().toLowerCase();
       return allProducts.filter(p => p.city === city
         && (!cat || p.category === cat)
         && (!brandFilters.length || brandFilters.includes(p.brand))
         && (!flavorFilters.length || flavorsOf(p).some(f => flavorFilters.includes(f)))
-        && (!s || p.name.toLowerCase().includes(s)));
+        && (!s || searchText(p).includes(s)));
     }
     // withSpecs=false на карточке товара: там крепость и объём уже перечислены
     // таблицей характеристик прямо под фото, дублировать их бейджами незачем.
@@ -1829,7 +1834,11 @@
       if (parts.length < 2) {
         specsOf(p.category).forEach(s => {
           const v = (p.specs || {})[s.key];
-          if (parts.length < 2 && v !== undefined && String(v).trim() !== "") parts.push(withUnit(v, s.unit));
+          if (parts.length >= 2 || v === undefined || String(v).trim() === "") return;
+          // Не повторяем то, что уже стоит в названии: у одноразки затяжки
+          // входят в имя модели, и «Elf Bar 6000 · 6000» выглядит ошибкой.
+          if (name.includes(String(v).trim().toLowerCase())) return;
+          parts.push(withUnit(v, s.unit));
         });
       }
       return parts.join(" · ");
@@ -5060,7 +5069,7 @@
         bindPicker("afBrand"); bindPicker("afFlavor");
       }
       if (variantMode) {
-        const list = brands.filter(b => b.category === cat);
+        const list = brands.filter(b => !b.category || b.category === cat);   // общие бренды тоже
         $("dispBrand").innerHTML = list.length
           ? list.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("")
           : `<option value="">— сначала добавьте бренд этой категории выше —</option>`;
@@ -5289,7 +5298,9 @@
 
       // ---- Товар-модель со вкусами ----
       const specs = `<div id="edSpecs">${specFieldsHtml(p.category, p.specs, "eds_")}</div>`;
-      const brandObj = brands.find(b => b.name === p.brand && b.category === p.category);
+      // Бренд ищем по имени: у общего бренда категория пустая, и прежнее условие
+      // «имя + категория» его не находило — список вкусов молча пустел.
+      const brandObj = brands.find(b => b.name === p.brand);
       const avail = brandObj ? brandObj.flavors : [];
       $("editBody").innerHTML = `
         <div class="card-block form">
