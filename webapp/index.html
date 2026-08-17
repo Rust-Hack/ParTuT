@@ -1610,6 +1610,7 @@
     async function loadCatalog() {
       await Promise.all([fetchLocations(), fetchProducts(), fetchCategories()]);
       recomputeCities(); renderChips(); updateFilterBtn(); renderGrid();
+      fetchAlsoBought();      // подсказки корзины — в фоне, каталог их не ждёт
     }
     async function refreshProducts() {
       await Promise.all([fetchLocations(), fetchProducts(), fetchCategories()]);
@@ -1889,8 +1890,10 @@
           <div class="mini"><button data-dec="${p.id}"${fattr}>−</button><span>${it.qty}</span><button data-inc="${p.id}"${fattr}>+</button></div></div>`;
       }).join("");
       const ups = upsellProducts();
+      // Заголовок обещает ровно то, что внутри: «часто берут вместе» — только
+      // когда это посчитано по заказам, иначе это просто витрина хитов.
       const upsHtml = ups.length
-        ? `<div class="upsell-h">Добавьте к заказу 🔥</div><div class="upsell">${ups.map(ucard).join("")}</div>`
+        ? `<div class="upsell-h">${ups.paired ? "С этим часто берут" : "Добавьте к заказу 🔥"}</div><div class="upsell">${ups.map(ucard).join("")}</div>`
         : "";
       const total = cartTotal();
       const coinVal = bonus.coin_value || 0.01;
@@ -1919,12 +1922,35 @@
       if ($("useCoinsChk")) $("useCoinsChk").onchange = () => { useCoins = $("useCoinsChk").checked; renderCart(); };
       $("checkout").onclick = openDelivery;
     }
-    // Допродажа: доступные товары этой точки (хиты вперёд), которых ещё нет в корзине
+    // Что покупали вместе — приходит с сервера, считается по выданным заказам.
+    let alsoBought = {};
+    async function fetchAlsoBought() {
+      try {
+        const r = await fetch("/api/also-bought");
+        const d = await r.json();
+        alsoBought = (d && typeof d === "object") ? d : {};
+      } catch (e) { alsoBought = {}; }
+    }
+    // Допродажа: сначала то, что реально берут вместе с содержимым корзины,
+    // потом — хиты. «Просто хиты» советуют всем одно и то же и к корзине
+    // отношения не имеют; совместная покупка — уже разговор по делу.
     function upsellProducts() {
       const inCart = new Set(Object.values(cart).map(it => it.product_id));
-      const pool = allProducts.filter(p => p.city === city && p.stock > 0 && !inCart.has(p.id));
-      pool.sort((a, b) => (b.is_hit ? 1 : 0) - (a.is_hit ? 1 : 0));
-      return pool.slice(0, 8);
+      const avail = (id) => {
+        const p = allProducts.find(x => x.id === id);
+        return (p && p.city === city && p.stock > 0 && !inCart.has(p.id)) ? p : null;
+      };
+      const picked = [], seen = new Set();
+      Object.values(cart).forEach(it => (alsoBought[it.product_id] || []).forEach(id => {
+        const p = avail(id);
+        if (p && !seen.has(id)) { seen.add(id); picked.push(p); }
+      }));
+      const paired = picked.length;
+      const hits = allProducts.filter(p => p.city === city && p.stock > 0 && !inCart.has(p.id) && !seen.has(p.id))
+                              .sort((a, b) => (b.is_hit ? 1 : 0) - (a.is_hit ? 1 : 0));
+      const list = picked.concat(hits).slice(0, 8);
+      list.paired = paired;      // по этому фронт выбирает честный заголовок блока
+      return list;
     }
     function ucard(p) {
       const photo = p.photo_url

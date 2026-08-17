@@ -684,6 +684,22 @@ def api_categories():
     return jsonify(cached)
 
 
+@app.route("/api/also-bought")
+def api_also_bought():
+    """Что покупали вместе — для подсказки в корзине. Считается по выданным заказам."""
+    cached = _cache_get("also_bought")
+    if cached is None:
+        try:
+            data = db.also_bought()
+        except Exception as e:
+            data = {}                     # без подсказок корзина работает как раньше
+            print(f"Не удалось посчитать совместные покупки: {e}")
+        # Ключи в JSON всё равно станут строками — приводим сразу, чтобы фронт
+        # не гадал, каким типом искать.
+        cached = _cache_set("also_bought", {str(k): v for k, v in data.items()}, 600)
+    return jsonify(cached)
+
+
 @app.route("/api/admin/category", methods=["POST"])
 def api_admin_category_add():
     data = request.get_json(force=True, silent=True) or {}

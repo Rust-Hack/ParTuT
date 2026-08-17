@@ -2412,6 +2412,36 @@ def get_review(review_id):
     return row
 
 
+def also_bought(top=5, scan=500, min_count=2):
+    """{товар: [товары, которые брали вместе с ним]} — по реальным выданным заказам.
+
+    Считаем только пары, встретившиеся не меньше min_count раз: единственная
+    совместная покупка — это совпадение, а не закономерность, и советовать по
+    ней значит выдавать шум за рекомендацию.
+    """
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT items FROM orders WHERE status = 'issued' ORDER BY id DESC LIMIT %s"), (scan,))
+    pairs = {}
+    for r in cur.fetchall():
+        try:
+            ids = {int(it.get("id", 0)) for it in json.loads(r["items"]) if it.get("id")}
+        except (TypeError, ValueError):
+            continue
+        for a in ids:
+            for b in ids:
+                if a != b:
+                    pairs.setdefault(a, {})
+                    pairs[a][b] = pairs[a].get(b, 0) + 1
+    conn.close()
+    out = {}
+    for a, others in pairs.items():
+        best = [pid for pid, n in sorted(others.items(), key=lambda x: -x[1]) if n >= min_count][:top]
+        if best:
+            out[a] = best
+    return out
+
+
 def product_ratings():
     """{товар: {avg, count}} по опубликованным отзывам — одним запросом на всю витрину."""
     conn = connect()
