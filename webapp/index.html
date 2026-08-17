@@ -620,6 +620,22 @@
       position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
     .pd-img img { width: 100%; height: 100%; object-fit: contain; padding: 16px; }
     .pd-img .ph { font-size: 76px; }
+    /* Галерея: листается пальцем, страницы «прилипают» — как в любой галерее телефона */
+    .pgal { display: flex; width: 100%; height: 100%; overflow-x: auto; scroll-snap-type: x mandatory;
+      scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    .pgal::-webkit-scrollbar { display: none; }
+    .pgal img { flex: 0 0 100%; scroll-snap-align: center; }
+    .pdots { position: absolute; left: 0; right: 0; bottom: 10px; display: flex; justify-content: center; gap: 6px; pointer-events: none; }
+    .pdots i { width: 6px; height: 6px; border-radius: 50%; background: var(--text); opacity: .22; transition: opacity .2s, width .2s; }
+    .pdots i.on { opacity: .75; width: 16px; border-radius: 3px; }
+    /* Галерея в редакторе товара */
+    .edgal { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .edgal .g { position: relative; width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: var(--img-bg); border: 1px solid var(--line); }
+    .edgal .g img { width: 100%; height: 100%; object-fit: cover; }
+    .edgal .g button { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border: none; border-radius: 50%;
+      background: rgba(0,0,0,.6); color: #fff; font-size: 12px; line-height: 1; padding: 0; }
+    .edgal .add { width: 64px; height: 64px; border-radius: 10px; border: 1px dashed var(--line); background: var(--surface-2);
+      color: var(--hint); font-size: 22px; display: flex; align-items: center; justify-content: center; }
     /* Скопом под .view — иначе общие правила .view h2 / .view p (они специфичнее
        одного класса) гасят и размер, и выравнивание: название товара уезжало в
        центр 21-м кеглем вместо 22-го слева, а описание — в центр 14-м.
@@ -2992,7 +3008,14 @@
     function renderProduct() {
       const p = allProducts.find(x => x.id === currentProductId);
       if (!p) { $("productView").classList.remove("show"); return; }
-      const photo = p.photo_url ? `<img src="${p.photo_url}" alt="">` : `<div class="ph">${CAT_EMOJI[p.category] || "🛒"}</div>`;
+      // Галерея: одна картинка — просто картинка, несколько — листаются пальцем.
+      const gal = (p.photos && p.photos.length) ? p.photos : (p.photo_url ? [{ url: p.photo_url }] : []);
+      const photo = !gal.length
+        ? `<div class="ph">${CAT_EMOJI[p.category] || "🛒"}</div>`
+        : gal.length === 1
+          ? `<img src="${gal[0].url}" alt="">`
+          : `<div class="pgal" id="pgal">${gal.map(g => `<img src="${g.url}" alt="" decoding="async">`).join("")}</div>`
+            + `<div class="pdots" id="pdots">${gal.map((_, i) => `<i class="${i ? "" : "on"}"></i>`).join("")}</div>`;
       const info = [];
       if (p.brand) info.push(["Бренд", p.brand]);
       if (p.flavor) info.push(["Вкус", p.flavor]);
@@ -3029,6 +3052,15 @@
           ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}
           ${flavorHtml}
         </div>`;
+      const gwrap = $("pgal");
+      if (gwrap) {
+        // Точки — единственная подсказка, что фото ещё есть; без них листать никто не догадается.
+        const dots = $("pdots").children;
+        gwrap.onscroll = () => {
+          const i = Math.round(gwrap.scrollLeft / gwrap.clientWidth);
+          [...dots].forEach((d, n) => d.classList.toggle("on", n === i));
+        };
+      }
       $("prodBody").querySelectorAll("[data-fladd]").forEach(b => b.onclick = () => flavorQty(b.dataset.fladd, +1));
       $("prodBody").querySelectorAll("[data-flinc]").forEach(b => b.onclick = () => flavorQty(b.dataset.flinc, +1));
       $("prodBody").querySelectorAll("[data-fldec]").forEach(b => b.onclick = () => flavorQty(b.dataset.fldec, -1));
@@ -4506,17 +4538,21 @@
       editId = id;
       editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock }));
       editPhotoFile = null;
+      // id > 0 — только дополнительные: главное фото меняется отдельным полем выше.
+      editPhotos = (p.photos || []).filter(g => g.id);
       renderEdit(p);
       $("editView").classList.add("show");
     }
 
     // Общий блок замены фото — превью + выбор файла (для любого товара).
     function editPhotoBlock(p) {
-      return `<label>Фото</label>
+      return `<label>Главное фото</label>
         <div class="edphoto">
           <img id="edPhotoPrev" alt="" src="${thumbOf(p) || ''}" ${p.photo_url ? '' : 'style="display:none"'}>
           <input type="file" id="edPhoto" accept="image/*">
-        </div>`;
+        </div>
+        <label style="margin-top:12px">Ещё фото <span style="color:var(--hint);font-weight:400">— покупатель листает их в карточке</span></label>
+        <div class="edgal" id="edGal"></div>`;
     }
     function editHitBlock(p) {
       return `<div class="chk" style="margin-top:12px"><input type="checkbox" id="edHit" ${p.is_hit ? 'checked' : ''}>
@@ -4530,6 +4566,54 @@
         const prev = $("edPhotoPrev");
         if (f && prev) { prev.src = URL.createObjectURL(f); prev.style.display = ""; }
       };
+    }
+
+    // ----- Галерея товара в редакторе -----
+    // Дополнительные фото сохраняются сразу, а не по кнопке «Сохранить»: у них нет
+    // полей, которые можно передумать заполнять, а ждать общего сохранения ради
+    // картинки — лишний шаг, на котором её теряют.
+    const MAX_EXTRA_PHOTOS = 5;
+    let editPhotos = [];
+    function renderEditGallery() {
+      const box = $("edGal"); if (!box) return;
+      box.innerHTML = editPhotos.map(g =>
+          `<div class="g"><img src="${g.thumb || g.url}" alt=""><button data-gdel="${g.id}" title="Убрать">✕</button></div>`).join("")
+        + (editPhotos.length < MAX_EXTRA_PHOTOS
+            ? `<label class="add">＋<input type="file" id="edGalAdd" accept="image/*" multiple style="display:none"></label>`
+            : `<div style="color:var(--hint);font-size:12px;align-self:center">Больше ${MAX_EXTRA_PHOTOS} — уже долгая загрузка у покупателя</div>`);
+      box.querySelectorAll("[data-gdel]").forEach(b => b.onclick = () => delEditPhoto(+b.dataset.gdel));
+      const add = $("edGalAdd");
+      if (add) add.onchange = () => addEditPhotos([...add.files]);
+    }
+    async function addEditPhotos(files) {
+      const box = $("edGal");
+      for (const f of files) {
+        if (editPhotos.length >= MAX_EXTRA_PHOTOS) { alertMsg(`Больше ${MAX_EXTRA_PHOTOS} дополнительных фото не нужно.`); break; }
+        if (box) box.insertAdjacentHTML("beforeend", `<div class="g" id="gLoading"><img src="${URL.createObjectURL(f)}" alt="" style="opacity:.45"></div>`);
+        try {
+          const fd = new FormData();
+          fd.append("initData", initData); fd.append("id", editId); fd.append("file", f);
+          const r = await fetch("/api/admin/photo/add", { method: "POST", body: fd });
+          const d = await r.json();
+          if (d.ok) editPhotos.push({ id: d.photo_id, url: URL.createObjectURL(f) });
+          else alertMsg(d.error === "too_many" ? `Больше ${MAX_EXTRA_PHOTOS} фото не нужно.` : "Фото не загрузилось.");
+        } catch (e) { alertMsg("Сеть недоступна."); }
+        const tmp = $("gLoading"); if (tmp) tmp.remove();
+      }
+      renderEditGallery();
+      refreshProducts();     // витрина должна увидеть новые фото, даже если админ закроет редактор
+    }
+    function delEditPhoto(photoId) {
+      confirmMsg("Убрать это фото?", async () => {
+        try {
+          const r = await fetch("/api/admin/photo/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, photo_id: photoId }) });
+          const d = await r.json();
+          if (!d.ok) { alertMsg("Не удалось убрать."); return; }
+          editPhotos = editPhotos.filter(g => g.id !== photoId);
+          renderEditGallery();
+          refreshProducts();
+        } catch (e) { alertMsg("Сеть недоступна."); }
+      });
     }
 
     function renderEdit(p) {
@@ -4563,7 +4647,7 @@
             ${editPhotoBlock(p)}
             <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
           </div>`;
-        bindEditPhoto();
+        bindEditPhoto(); renderEditGallery();
         $("edSave").onclick = () => saveEdit(p);
         return;
       }
@@ -4604,7 +4688,7 @@
           <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
         </div>`;
       renderEditVariants();
-      bindEditPhoto();
+      bindEditPhoto(); renderEditGallery();
       if ($("edPuffs")) {
         $("edPuffs").oninput = () => { $("edPuffsNum").value = $("edPuffs").value; };
         $("edPuffsNum").oninput = () => { let v = parseInt($("edPuffsNum").value, 10); if (isNaN(v) || v < 0) v = 0; $("edPuffs").value = Math.min(v, +$("edPuffs").max); };

@@ -340,6 +340,19 @@ def init_db():
         )
     """)
 
+    # Дополнительные фото товара (главное лежит в products.photo). Одна картинка
+    # не показывает ни размер, ни комплект, ни экран — покупателю приходится
+    # верить на слово, а продавцу отвечать на одни и те же вопросы в чате.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS product_photos (
+            id         {ID_COL},
+            product_id INTEGER NOT NULL,
+            file_id    TEXT    NOT NULL,
+            thumb_id   TEXT,
+            sort       INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
     conn.commit()
     conn.close()
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
@@ -2127,8 +2140,68 @@ def is_product_photo(file_id):
     cur.execute(_q("SELECT 1 AS x FROM products WHERE photo = %s OR photo_thumb = %s LIMIT 1"),
                 (file_id, file_id))
     found = cur.fetchone() is not None
+    if not found:
+        # Дополнительные фото — такие же картинки товара: их тоже держим у себя,
+        # иначе галерея после перезапуска качалась бы из Telegram заново.
+        cur.execute(_q("SELECT 1 AS x FROM product_photos WHERE file_id = %s OR thumb_id = %s LIMIT 1"),
+                    (file_id, file_id))
+        found = cur.fetchone() is not None
     conn.close()
     return found
+
+
+# ---------- Галерея товара ----------
+
+MAX_EXTRA_PHOTOS = 5      # плюс главное фото — шесть картинок на карточку
+
+
+def get_product_photos(product_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM product_photos WHERE product_id = %s ORDER BY sort, id"), (product_id,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def all_product_photos():
+    """Все дополнительные фото разом — витрине нужен один поход в базу, а не по одному на товар."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM product_photos ORDER BY product_id, sort, id")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def add_product_photo(product_id, file_id, thumb_id=""):
+    """Добавляет фото в галерею. Возвращает id записи или None, если места больше нет.
+
+    Ограничение — не формальность: каждая картинка едет покупателю по мобильному
+    интернету, и десяток фото превращает карточку в долгую загрузку."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COUNT(*) AS c, COALESCE(MAX(sort), 0) AS mx FROM product_photos WHERE product_id = %s"),
+                (product_id,))
+    row = cur.fetchone()
+    if int(row["c"]) >= MAX_EXTRA_PHOTOS:
+        conn.close()
+        return None
+    pid = _insert_id(cur, "INSERT INTO product_photos (product_id, file_id, thumb_id, sort) VALUES (%s, %s, %s, %s)",
+                     (product_id, file_id, thumb_id or "", int(row["mx"]) + 1))
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def delete_product_photo(photo_id):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM product_photos WHERE id = %s"), (photo_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 def photo_blob_stats():
@@ -2224,6 +2297,9 @@ def delete_product(product_id):
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("DELETE FROM products WHERE id = %s"), (product_id,))
+    # Галерея без товара никому не видна, но место занимает и мешает считать
+    # картинки — убираем вместе с товаром.
+    cur.execute(_q("DELETE FROM product_photos WHERE product_id = %s"), (product_id,))
     conn.commit()
     conn.close()
 

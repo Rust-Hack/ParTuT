@@ -254,7 +254,7 @@ _STOCK_KEYS = ("products", "stats")
 _WRITE_PATHS = {
     "/api/admin/product": (), "/api/admin/product/update": (),
     "/api/admin/product/variants": (), "/api/admin/product/delete": (),
-    "/api/admin/photo": (),
+    "/api/admin/photo": (), "/api/admin/photo/add": (), "/api/admin/photo/delete": (),
     "/api/admin/location": (), "/api/admin/location/delete": (),
     "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),
     "/api/admin/point": (), "/api/admin/point/update": (), "/api/admin/point/delete": (),
@@ -609,9 +609,22 @@ def _all_products_payload():
     except Exception as e:
         waiting = {}                      # счётчик — не повод ронять витрину
         print(f"Не удалось посчитать ожидающих: {e}")
+    gallery = {}
+    try:
+        for ph in db.all_product_photos():
+            gallery.setdefault(ph["product_id"], []).append(ph)
+    except Exception as e:
+        print(f"Не удалось прочитать галерею товаров: {e}")   # без галереи витрина живёт
     out = []
     for p in db.get_all_products():
+        # Главное фото всегда первое: покупатель видит ту же картинку, что и в каталоге.
+        photos = ([{"id": 0, "url": f"/api/photo?file_id={p['photo']}",
+                    "thumb": f"/api/photo?file_id={p['photo_thumb'] or p['photo']}"}] if p["photo"] else [])
+        for ph in gallery.get(p["id"], []):
+            photos.append({"id": ph["id"], "url": f"/api/photo?file_id={ph['file_id']}",
+                           "thumb": f"/api/photo?file_id={ph['thumb_id'] or ph['file_id']}"})
         out.append({
+            "photos": photos,
             "id": p["id"], "name": p["name"], "price": p["price"],
             "stock": p["stock"], "is_hit": p["is_hit"],
             "category": p["category"], "city": p["city"],
@@ -1691,6 +1704,52 @@ def api_admin_photo():
     db.update_field(pid, "photo", file_id)
     db.update_field(pid, "photo_thumb", thumb_id)
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/photo/add", methods=["POST"])
+def api_admin_photo_add():
+    """Добавить фото в галерею товара (главное фото при этом не меняется)."""
+    user = get_admin(request.form.get("initData", ""))
+    if not user:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        pid = int(request.form.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if not db.get_product(pid):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"ok": False, "error": "no_file"}), 400
+    if len(db.get_product_photos(pid)) >= db.MAX_EXTRA_PHOTOS:
+        # Проверяем ДО отправки в Telegram: иначе картинка уедет впустую.
+        return jsonify({"ok": False, "error": "too_many", "max": db.MAX_EXTRA_PHOTOS}), 400
+    try:
+        msg = tg.send_photo(int(user["id"]), file.read(),
+                            caption="🖼 Фото товара сохранено", disable_notification=True)
+        file_id, thumb_id = _pick_photo_sizes(msg.photo)
+    except Exception as e:
+        print(f"Не смог обработать фото товара: {e}")
+        return jsonify({"ok": False, "error": "send_failed"}), 500
+    photo_id = db.add_product_photo(pid, file_id, thumb_id)
+    if not photo_id:
+        return jsonify({"ok": False, "error": "too_many", "max": db.MAX_EXTRA_PHOTOS}), 400
+    return jsonify({"ok": True, "photo_id": photo_id})
+
+
+@app.route("/api/admin/photo/delete", methods=["POST"])
+def api_admin_photo_delete():
+    """Убрать фото из галереи. Главное фото (id 0) так не удаляется — его заменяют."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        photo_id = int(data.get("photo_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if photo_id <= 0:
+        return jsonify({"ok": False, "error": "main_photo"}), 400
+    return jsonify({"ok": True, "deleted": db.delete_product_photo(photo_id)})
 
 
 # ------------------- Заказы (управление в приложении) -------------------
