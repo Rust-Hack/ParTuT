@@ -1722,11 +1722,14 @@ def api_order():
     # и тот же код несколько раз одновременными заказами.
 
     # Уведомления (продавцам + клиенту) — в фоне, чтобы «Оформить» отвечал сразу.
-    # Шлём ВСЕГДА, а не только когда чек не нужен: заказ картой раньше ждал чека,
-    # и если клиент нажимал «оплачу позже» или просто закрывал приложение, продавец
-    # не узнавал о заказе никогда. Чек придёт следом отдельным сообщением.
-    # Повтор потерянного запроса: заказ уже был создан и продавец о нём знает.
-    # Второе уведомление означало бы для него второй заказ.
+    #
+    # Про НОВЫЙ заказ шлём всегда, не дожидаясь чека: заказ картой раньше ждал
+    # чека, и если клиент нажимал «оплачу позже» или просто закрывал приложение,
+    # продавец не узнавал о заказе никогда. Чек придёт следом отдельным
+    # сообщением.
+    #
+    # Единственное исключение — повтор потерянного запроса: заказ уже создан, и
+    # продавец о нём знает. Второе такое же сообщение он прочтёт как второй заказ.
     if not repeat:
         _bg(_notify_new_order, order_id, user_id)
 
@@ -3354,7 +3357,9 @@ def api_admin_raffle_photo():
 
 @app.route("/api/admin/raffle/draw", methods=["POST"])
 def api_admin_raffle_draw():
-    """Разыграть текущий розыгрыш сейчас и запустить новый."""
+    """Подвести итоги сейчас и завершить розыгрыш.
+
+    Нового не заводим: решать, идёт ли розыгрыш, — дело владельца."""
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
@@ -3388,10 +3393,19 @@ def api_admin_settings():
         return jsonify({"ok": False, "error": "forbidden"}), 403
     # Все настройки — одним запросом. По одному ключу за раз это было восемь
     # походов в базу подряд ради восьми строк из одной маленькой таблицы.
+    # Значения по умолчанию обязаны быть теми же, что у обычного чтения: на
+    # незаполненной настройке экран должен показывать то, чем магазин и живёт,
+    # а не пустоту. Пустое поле владелец сохранит — и сотрёт реквизиты
+    # по-настоящему.
     з = db.get_settings(
         ["payment_info", "confirm_minutes", "free_delivery_from", "remind_after_days",
          "remind_daily_cap", "coins_per_byn", "wheel_step", "referral_bonus",
-         "compensation_max"])
+         "compensation_max"],
+        {"payment_info": PAYMENT_INFO, "confirm_minutes": CONFIRM_MINUTES,
+         "free_delivery_from": 0, "remind_after_days": 21, "remind_daily_cap": 20,
+         "coins_per_byn": 1, "wheel_step": db.WHEEL_STEP_DEFAULT,
+         "referral_bonus": db.REFERRAL_BONUS,
+         "compensation_max": db.COMPENSATION_MAX_DEFAULT})
     return jsonify({"ok": True, "settings": {
         "payment_info": з["payment_info"] or "",
         "confirm_minutes": _num(з["confirm_minutes"], CONFIRM_MINUTES, целое=True),

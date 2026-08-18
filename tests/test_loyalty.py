@@ -96,6 +96,24 @@ def run():
     st = client.post("/api/admin/settings", json={"initData": "x"}).get_json()["settings"]
     c3("админке видны текущие значения", st["wheel_step"] == 50 and st["coins_per_byn"] == 2)
 
+    # Незаполненная настройка обязана показывать то, чем магазин и живёт, а не
+    # пустоту: пустое поле владелец сохранит — и сотрёт реквизиты по-настоящему.
+    # Экран собирает все настройки одним запросом, и на этом однажды потерялись
+    # значения по умолчанию.
+    import config
+    conn = db.connect(); cur = conn.cursor()
+    for ключ in ("payment_info", "confirm_minutes", "wheel_step", "referral_bonus",
+                 "coins_per_byn", "compensation_max"):
+        cur.execute(db._q("DELETE FROM settings WHERE key = %s"), (ключ,))
+    conn.commit(); conn.close()
+    st = client.post("/api/admin/settings", json={"initData": "x"}).get_json()["settings"]
+    c3("реквизиты берутся из настроек магазина", st["payment_info"] == config.PAYMENT_INFO)
+    c3("срок подтверждения не пустой", st["confirm_minutes"] > 0)
+    c3("шаг колеса не пустой", st["wheel_step"] > 0)
+    c3("бонус за друга не пустой", st["referral_bonus"] > 0)
+    c3("кэшбэк не пустой", st["coins_per_byn"] > 0)
+    c3("потолок компенсации не пустой", st["compensation_max"] > 0)
+
     # Границы: ноль в шаге колеса означал бы прокрут за каждую покупку.
     client.post("/api/admin/settings/update", json={"initData": "x", "wheel_step": 0})
     c3("нулевой шаг не принимается", db.wheel_step() >= 1)
