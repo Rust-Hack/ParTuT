@@ -1221,8 +1221,18 @@
       <label>🥈 Приз за 2 место</label><input id="raPrize2" placeholder="Жидкость">
       <label>🥉 Приз за 3 место (монеты)</label><input id="raPrize3" inputmode="numeric" placeholder="500">
       <label>Порог участия (Br за месяц)</label><input id="raThreshold" inputmode="decimal" placeholder="25">
+      <div id="raDaysRow"><label>Сколько дней идёт</label><input id="raDays" inputmode="numeric" placeholder="30"></div>
+      <div id="raPhotoRow">
+        <label>Фото разыгрываемого товара</label>
+        <div class="edphoto">
+          <img id="raPhotoPrev" alt="" style="display:none">
+          <input type="file" id="raPhoto" accept="image/*">
+        </div>
+        <div class="dnote" style="margin:6px 0 0">Фото можно добавить, когда розыгрыш начат.</div>
+      </div>
       <button class="bigbtn" id="raSave" style="margin-top:16px">Сохранить</button>
-      <button class="closebtn" id="raDraw" style="color:var(--danger)">🎲 Разыграть сейчас и начать новый</button>
+      <button class="bigbtn" id="raStart" style="margin-top:16px">Начать розыгрыш</button>
+      <button class="closebtn" id="raDraw" style="color:var(--danger)">🎲 Подвести итоги и завершить</button>
     </div>
   </div>
 
@@ -1853,6 +1863,7 @@
         if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
         stockAlerts = new Set(me.alerts || []);   // о чём уже просили сообщить
         remindersOn = me.reminders_on !== false;
+        raffleOn = me.raffle_on === true;         // нет розыгрыша — нет и вкладки
         renderNav();
         // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
         if (me.age_ok) loadCatalog().then(prefetchBonuses).then(openDeepLink); else $("ageView").classList.add("show");
@@ -2498,6 +2509,7 @@
 
     // ---------- Бонусы (vapecoins + рефералы) ----------
     let bonus = { coins: 0, referrals: 0, ref_link: "", referral_bonus: 50 };
+    let raffleOn = false;            // идёт ли розыгрыш — приходит из /api/me
     let bonusReady = false, wheelReady = false, slotReady = false;   // кэш: не перезапрашивать зря
     async function fetchBonus() {
       try {
@@ -2541,9 +2553,12 @@
         if (!bonusReady) $("tab-bonus").innerHTML = `<div class="bonuswrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
         await Promise.all(jobs);
       }
+      // Вкладку показываем, только когда розыгрыш идёт: «Розыгрыши» там, где
+      // ничего не разыгрывают, — обещание, которого магазин не давал.
+      if (!raffleOn && bonusTab === "raffle") bonusTab = "wheel";
       const seg = `<div class="bseg">
         <button data-bt="wheel" class="${bonusTab === 'wheel' ? 'on' : ''}">🎡 Игры</button>
-        <button data-bt="raffle" class="${bonusTab === 'raffle' ? 'on' : ''}">🏆 Розыгрыши</button>
+        ${raffleOn ? `<button data-bt="raffle" class="${bonusTab === 'raffle' ? 'on' : ''}">🏆 Розыгрыши</button>` : ""}
         <button data-bt="ref" class="${bonusTab === 'ref' ? 'on' : ''}">👥 Рефералы</button></div>`;
       let body;
       if (bonusTab === "raffle") {
@@ -2889,7 +2904,7 @@
     }
 
     // ----- Розыгрыши -----
-    let raffle = null, raffleReady = false;
+    let raffle = null, raffleDone = null, raffleReady = false;
     const maskId = (id) => "•••" + ("" + id).slice(-3);
     function raffleTimeLeft(ends) {
       if (!ends) return "—";
@@ -2902,11 +2917,42 @@
       try {
         const r = await fetch("/api/raffle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         const d = await r.json();
-        raffle = d.ok ? d.raffle : null; raffleReady = true;
+        raffle = d.ok ? d.raffle : null;
+        raffleDone = d.ok ? (d.finished || null) : null;   // итоги только что закончившегося
+        raffleReady = true;
       } catch (e) { raffle = null; }
     }
     function renderRaffle() {
-      if (!raffle) { if ($("raffleWrap")) $("raffleWrap").innerHTML = `<p style="color:var(--hint)">Розыгрыш недоступен.</p>`; return; }
+      if (!raffle) {
+        if (!$("raffleWrap")) return;
+        // Розыгрыш кончился — показываем, чем именно. Победителям бот написал
+        // лично, остальные участники иначе не узнают ничего.
+        if (raffleDone) {
+          const d = raffleDone;
+          const wins = (d.winners || []).length
+            ? d.winners.map(w => `<div class="statrow"><span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${esc(w.who)}</span><b>${esc(w.prize)}</b></div>`).join("")
+            : `<p style="color:var(--hint);font-size:14px;margin:0">Участников не набралось.</p>`;
+          // Участники — наравне с победителями: розыгрыш, где видно только
+          // троих счастливчиков, выглядит как розыгрыш без свидетелей.
+          const люди = (d.participants || []).length
+            ? `<div class="card-block" style="text-align:left">
+                 <div style="font-weight:800;margin-bottom:6px">👥 Участвовали · ${d.participants_count}</div>
+                 <div class="fltchips">${d.participants.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div></div>`
+            : "";
+          const фото = d.photo
+            ? `<img src="/api/photo?file_id=${encodeURIComponent(d.photo)}" alt="приз"
+                    style="width:100%;border-radius:14px;margin-bottom:12px">` : "";
+          $("raffleWrap").innerHTML = `<div class="card-block" style="text-align:left">
+            ${фото}
+            <div style="font-weight:800;font-size:17px;margin-bottom:4px">🏁 ${esc(d.title)} — итоги</div>
+            <div style="color:var(--hint);font-size:13px;margin-bottom:12px">Розыгрыш завершён ${whenRu(d.finished_at)}</div>
+            ${wins}
+            <p style="color:var(--hint);font-size:13px;margin:12px 0 0">Следующий розыгрыш объявим здесь же.</p></div>${люди}`;
+        } else {
+          $("raffleWrap").innerHTML = `<p style="color:var(--hint)">Сейчас розыгрыш не идёт.</p>`;
+        }
+        return;
+      }
       const r = raffle;
       const prizeRows = [
         ["🥇 1 место", r.prize1 || "—"], ["🥈 2 место", r.prize2 || "—"], ["🥉 3 место", `${r.prize3_coins} монет`],
@@ -2922,8 +2968,12 @@
       const wins = (r.last_winners || []).length
         ? r.last_winners.map(w => `<div class="statrow"><span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${maskId(w.user_id)}</span><b>${esc(w.prize)}</b></div>`).join("")
         : "";
+      const фотоПриза = r.photo
+        ? `<img src="/api/photo?file_id=${encodeURIComponent(r.photo)}" alt="приз"
+                style="width:100%;border-radius:14px;margin-bottom:12px">` : "";
       $("raffleWrap").innerHTML = `
         <div class="card-block" style="text-align:left">
+          ${фотоПриза}
           <div style="font-weight:800;font-size:17px;margin-bottom:4px">🏆 ${esc(r.title)}</div>
           <div style="color:var(--hint);font-size:13px;margin-bottom:12px">Участников: <b>${r.participants}</b> · до конца: <b>${raffleTimeLeft(r.ends_at)}</b></div>
           ${prizeRows}
@@ -4566,6 +4616,7 @@
     }
 
     // ----- Розыгрыш (админ) -----
+    let raffleRunning = false;
     $("mRaffle").onclick = openRaffleAdmin;
     $("raffleAdminClose").onclick = () => $("raffleAdminView").classList.remove("show");
     async function openRaffleAdmin() {
@@ -4575,10 +4626,27 @@
         const d = await r.json();
         if (!d.ok) return;
         const ra = d.raffle;
-        $("raTitle").value = ra.title || ""; $("raPrize1").value = ra.prize1 || "";
-        $("raPrize2").value = ra.prize2 || ""; $("raPrize3").value = ra.prize3_coins || 500;
-        $("raThreshold").value = ra.threshold || 25;
-        $("raffleAdminInfo").innerHTML = `Участников: <b>${ra.participants}</b> · до конца: ${raffleTimeLeft(ra.ends_at)}`;
+        // Розыгрыш идёт только тогда, когда его начали. Пока не начали —
+        // показываем заготовку и одну кнопку, а не настройки того, чего нет.
+        raffleRunning = !!ra;
+        $("raTitle").value = ra ? (ra.title || "") : "Розыгрыш месяца";
+        $("raPrize1").value = ra ? (ra.prize1 || "") : "Одноразка";
+        $("raPrize2").value = ra ? (ra.prize2 || "") : "Жидкость";
+        $("raPrize3").value = ra ? (ra.prize3_coins || 500) : 500;
+        $("raThreshold").value = ra ? (ra.threshold || 25) : 25;
+        $("raDays").value = 30;
+        $("raPhotoRow").style.display = raffleRunning ? "" : "none";
+        const прев = $("raPhotoPrev");
+        if (raffleRunning && ra.photo) { прев.src = `/api/photo?file_id=${encodeURIComponent(ra.photo)}`; прев.style.display = ""; }
+        else { прев.style.display = "none"; }
+        $("raPhoto").value = "";
+        $("raSave").style.display = raffleRunning ? "" : "none";
+        $("raDraw").style.display = raffleRunning ? "" : "none";
+        $("raStart").style.display = raffleRunning ? "none" : "";
+        $("raDaysRow").style.display = raffleRunning ? "none" : "";
+        $("raffleAdminInfo").innerHTML = raffleRunning
+          ? `Участников: <b>${ra.participants}</b> · до конца: ${raffleTimeLeft(ra.ends_at)}`
+          : `Сейчас розыгрыш не идёт — вкладка «Розыгрыши» у покупателей скрыта.`;
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
     $("raSave").onclick = async () => {
@@ -4592,15 +4660,43 @@
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("raSave").disabled = false; $("raSave").textContent = "Сохранить"; }
     };
+    $("raPhoto").onchange = async () => {
+      const f = $("raPhoto").files[0];
+      if (!f) return;
+      const прев = $("raPhotoPrev");
+      прев.src = URL.createObjectURL(f); прев.style.display = "";
+      const fd = new FormData();
+      fd.append("initData", initData); fd.append("file", f);
+      try {
+        const r = await fetch("/api/admin/raffle/photo", { method: "POST", body: fd });
+        const d = await r.json();
+        alertMsg(d.ok ? "Фото приза сохранено ✅"
+                      : (d.error === "no_raffle" ? "Сначала начните розыгрыш." : "Не удалось загрузить."));
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    };
+    $("raStart").onclick = async () => {
+      const body = { initData, title: $("raTitle").value, prize1: $("raPrize1").value,
+        prize2: $("raPrize2").value, prize3_coins: $("raPrize3").value,
+        threshold: $("raThreshold").value, days: $("raDays").value };
+      $("raStart").disabled = true; $("raStart").textContent = "Начинаю…";
+      try {
+        const r = await fetch("/api/admin/raffle/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (d.ok) { alertMsg("Розыгрыш начат ✅"); openRaffleAdmin(); }
+        else alertMsg(d.error === "already" ? "Розыгрыш уже идёт." : "Не удалось начать.");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("raStart").disabled = false; $("raStart").textContent = "Начать розыгрыш"; }
+    };
     $("raDraw").onclick = () => {
       const go = async () => {
         try {
           await fetch("/api/admin/raffle/draw", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
-          alertMsg("Розыгрыш проведён, запущен новый ✅"); openRaffleAdmin();
+          alertMsg("Итоги подведены, розыгрыш завершён ✅"); openRaffleAdmin();
         } catch (e) { alertMsg("Сеть недоступна."); }
       };
-      const ask = "Разыграть победителей сейчас и начать новый розыгрыш?";
-      confirmMsg(ask, go);
+      // Следующий розыгрыш начнётся тогда, когда владелец сам его начнёт —
+      // говорим об этом прямо, чтобы кнопка не оказалась неожиданной.
+      confirmMsg("Подвести итоги сейчас и завершить розыгрыш? Новый начнётся только когда вы его начнёте.", go);
     };
 
     // ----- Пользователи и рефералы (админ) -----

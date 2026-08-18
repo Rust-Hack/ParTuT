@@ -18,7 +18,7 @@ from _common import db, server, Checker
 LATE_COLUMNS = [("users", "username"), ("users", "first_name"), ("users", "no_reminders"),
                 ("users", "ref_activated"), ("products", "hidden"), ("reviews", "model_id"),
                 ("categories", "has_flavors"), ("orders", "promo_code"), ("orders", "phone"),
-                ("orders", "client_token")]
+                ("orders", "client_token"), ("raffles", "finished_at")]
 LATE_TABLES = ["admin_log"]
 
 UID = 9001

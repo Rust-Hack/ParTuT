@@ -451,6 +451,7 @@ def init_db():
     seed_category_specs()       # характеристики категорий, если их ещё нет
     models_seeded_from_products()   # разово собирает ассортимент из прежних товаров
     _ensure_review_columns()    # отзыв принадлежит модели — ПОСЛЕ того, как модели собраны
+    _ensure_raffle_columns()    # finished_at: когда розыгрыш реально подвели
     _ensure_raffle_uniques()    # один билет на человека, один активный розыгрыш
     _shift_history_to_shop_time()   # разово: старые записи были по UTC, см. ниже
     seed_locations()            # добавит стартовые точки, если таблица пустая
@@ -806,6 +807,36 @@ def _shift_history_to_shop_time():
     return сдвинуто
 
 
+def _ensure_raffle_columns():
+    """finished_at — когда розыгрыш реально подвели.
+
+    По ends_at этого не понять: владелец может завершить досрочно, и тогда срок
+    остаётся в будущем. А знать нужно, чтобы неделю после итогов показывать
+    участникам, кто выиграл: победителям бот пишет лично, остальные иначе не
+    узнают о розыгрыше ничего."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "raffles")
+    if "finished_at" not in cols:
+        cur.execute("ALTER TABLE raffles ADD COLUMN finished_at TEXT")
+    if "photo" not in cols:
+        # Фото разыгрываемого товара: «Одноразка» словами и она же на картинке —
+        # разные по силе обещания.
+        cur.execute("ALTER TABLE raffles ADD COLUMN photo TEXT")
+    conn.commit()
+    conn.close()
+
+
+def recent_finished_raffle():
+    """Последний завершённый розыгрыш — его итоги висят до следующего.
+
+    Убирать их по сроку нельзя: участник заходит в магазин не каждый день, а
+    узнать, чем кончилось дело, должен. Пока новый розыгрыш не начат, вкладка
+    показывает итоги прошлого — и это честнее пустой вкладки.
+    """
+    return get_last_finished_raffle()
+
+
 def _ensure_raffle_uniques():
     """Честность розыгрыша — правилом базы, а не проверкой в коде.
 
@@ -886,7 +917,7 @@ def create_raffle(title="Розыгрыш месяца", prize1="Однораз�
     return rid
 
 
-_RAFFLE_EDITABLE = {"title", "prize1", "prize2", "prize3_coins", "threshold", "ends_at"}
+_RAFFLE_EDITABLE = {"title", "prize1", "prize2", "prize3_coins", "threshold", "ends_at", "photo"}
 
 
 def update_raffle_field(raffle_id, field, value):
@@ -908,8 +939,8 @@ def claim_raffle_draw(raffle_id):
     призы заново."""
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("UPDATE raffles SET status = 'finished' WHERE id = %s AND status = 'active'"),
-                (raffle_id,))
+    cur.execute(_q("UPDATE raffles SET status = 'finished', finished_at = %s "
+                   "WHERE id = %s AND status = 'active'"), (_now_str(), raffle_id))
     won = cur.rowcount > 0
     conn.commit()
     conn.close()
@@ -3131,12 +3162,13 @@ def receipt_owner(file_id):
     return int(row["user_id"]) if row else None
 
 
-def is_product_photo(file_id):
-    """Это картинка товара (а не чек об оплате)?
+def is_shop_photo(file_id):
+    """Это картинка магазина (витрина), а не чек об оплате?
 
-    Фото товаров стоит хранить у себя: их немного и их смотрят все покупатели.
-    Чеки — наоборот, по штуке на заказ и смотрит их один продавец один раз,
-    поэтому в базу они не попадают, чтобы не забить бесплатное место."""
+    Картинки витрины стоит хранить у себя: их немного и их смотрят все
+    покупатели. Чеки — наоборот, по штуке на заказ, и смотрит их один продавец
+    один раз, поэтому в базу они не попадают, чтобы не забить бесплатное место.
+    """
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("SELECT 1 AS x FROM products WHERE photo = %s OR photo_thumb = %s LIMIT 1"),
@@ -3148,8 +3180,17 @@ def is_product_photo(file_id):
         cur.execute(_q("SELECT 1 AS x FROM product_photos WHERE file_id = %s OR thumb_id = %s LIMIT 1"),
                     (file_id, file_id))
         found = cur.fetchone() is not None
+    if not found:
+        # Фото приза в розыгрыше — тоже витрина: его смотрят все.
+        cur.execute(_q("SELECT 1 AS x FROM raffles WHERE photo = %s LIMIT 1"), (file_id,))
+        found = cur.fetchone() is not None
     conn.close()
     return found
+
+
+# Прежнее имя: функция говорила про товар, а картинки витрины бывают не только
+# у товаров. Оставлено, чтобы не ломать вызовы со стороны.
+is_product_photo = is_shop_photo
 
 
 # ---------- Отзывы ----------
@@ -3540,6 +3581,7 @@ def purge_orphan_photos(limit=200):
                AND file_id NOT IN (SELECT photo_thumb FROM products WHERE photo_thumb IS NOT NULL)
                AND file_id NOT IN (SELECT file_id FROM product_photos WHERE file_id IS NOT NULL)
                AND file_id NOT IN (SELECT thumb_id FROM product_photos WHERE thumb_id IS NOT NULL)
+               AND file_id NOT IN (SELECT photo FROM raffles WHERE photo IS NOT NULL)
              LIMIT %s)
     """), (cutoff, limit))
     gone = cur.rowcount

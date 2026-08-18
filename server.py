@@ -215,7 +215,9 @@ _OWNER_ONLY = (
     "/api/admin/photo",                        # фото товара и галерея модели
     # деньги покупателей
     "/api/admin/grant", "/api/admin/coins/", "/api/admin/wheel/",
-    "/api/admin/promo", "/api/admin/raffle/update", "/api/admin/raffle/draw",
+    # Весь розыгрыш целиком — правилом, а не перечислением: новая ручка
+    # («начать розыгрыш») однажды уже не попала бы в список.
+    "/api/admin/promo", "/api/admin/raffle/",
     # люди
     "/api/admin/users", "/api/admin/user/delete", "/api/admin/referral",
     "/api/admin/customer",          # история покупок и телефон — по всем точкам
@@ -666,6 +668,11 @@ def api_me():
                     "role": admin_role(uid),
                     "admin_city": admin_city(uid) if is_admin(uid) else "",
                     "reminders_on": reminders_on, "prefill": prefill,
+                    # Идёт ли розыгрыш. Приложение прячет по этому флагу целую
+                    # вкладку: показывать «Розыгрыши» там, где ничего не
+                    # разыгрывают, — обещание, которого магазин не давал.
+                    "raffle_on": (db.get_active_raffle() is not None
+                                  or db.recent_finished_raffle() is not None),
                     "my_point": my_point})
 
 
@@ -2289,46 +2296,46 @@ def api_slot_spin():
 # ------------------- Розыгрыши (раз в месяц) -------------------
 
 def _draw_raffle(raffle):
-    """Выбирает победителей 1-3 мест, начисляет монеты за 3 место, уведомляет, завершает.
+    """Итоги розыгрыша. Сама работа — в notifications: её зовёт и бот по ночам."""
+    return notifications.draw_raffle(tg, raffle)
 
-    Возвращает True, если розыгрыш провели именно мы. Право разыграть забирается
-    у базы: розыгрыш запускается лениво, тем, кто первым открыл вкладку после
-    срока, и в час пик таких «первых» несколько — каждый раздавал призы заново.
+
+def _close_expired_raffle():
+    """Если срок вышел — подвести итоги. Нового розыгрыша не заводим.
+
+    Раньше здесь был «ленивый планировщик»: не нашёл активного розыгрыша —
+    завёл новый. Из-за этого розыгрыш висел в приложении всегда и выключить его
+    было нельзя в принципе. Теперь розыгрыш идёт только тогда, когда владелец
+    его начал.
     """
-    if not db.claim_raffle_draw(raffle["id"]):
-        return False                      # уже разыграл кто-то другой
-    # Один человек — одно место. Ключ в базе не даст ему второй билет, но в
-    # старых розыгрышах дубли могли остаться, а забрать все три места нельзя.
-    uids = list(dict.fromkeys(db.get_raffle_user_ids(raffle["id"])))
-    random.shuffle(uids)
-    places = [(1, raffle["prize1"] or "Приз за 1 место", 0),
-              (2, raffle["prize2"] or "Приз за 2 место", 0),
-              (3, f"{raffle['prize3_coins']} монет", raffle["prize3_coins"])]
-    winners = []
-    for i, (place, prize, coins) in enumerate(places):
-        if i >= len(uids):
-            break
-        wid = uids[i]
-        winners.append({"place": place, "user_id": wid, "prize": prize})
-        if coins:
-            db.add_coins(wid, coins, "raffle")
-        _notify_client(wid, f"🏆 Вы заняли {place} место в розыгрыше! Приз: {prize}. "
-                            + ("Монеты начислены." if coins else "Продавец свяжется с вами."))
-    db.set_raffle_winners(raffle["id"], winners)
-    return True
+    return notifications.close_expired_raffle(tg)
 
 
-def _ensure_raffle():
-    """Ленивый планировщик: создаёт розыгрыш, если нет; разыгрывает и запускает новый, если срок вышел."""
-    r = db.get_active_raffle()
-    if not r:
-        db.create_raffle()
-        return
-    if r["ends_at"] and db._now_str() >= r["ends_at"]:
-        # Новый розыгрыш заводит тот, кто провёл прошлый: иначе на месте одного
-        # оставалась пачка активных.
-        if _draw_raffle(r):
-            db.create_raffle()
+def _mask_id(uid):
+    """Кто это был — не называя человека. Показывать полный id участникам
+    незачем: по нему пишут в личку."""
+    return "•••" + str(uid)[-3:]
+
+
+def _raffle_results(raffle):
+    """Итоги завершённого розыгрыша: кто выиграл и кто вообще участвовал.
+
+    Участники показываются наравне с победителями. Розыгрыш, в котором видно
+    только троих счастливчиков, выглядит как розыгрыш без свидетелей."""
+    try:
+        winners = json.loads(raffle["winners"]) if raffle["winners"] else []
+    except (TypeError, ValueError):
+        winners = []
+    выигравшие = {int(w.get("user_id") or 0) for w in winners}
+    участники = [int(u) for u in db.get_raffle_user_ids(raffle["id"])]
+    return {"title": raffle["title"] or "Розыгрыш",
+            "finished_at": raffle["finished_at"] or raffle["ends_at"],
+            "photo": raffle["photo"] or "",
+            "winners": [{"place": w.get("place"), "who": _mask_id(w.get("user_id")),
+                         "prize": w.get("prize") or ""} for w in winners],
+            # Победители уже названы выше — в списке участников их не повторяем.
+            "participants": [_mask_id(u) for u in участники if u not in выигравшие],
+            "participants_count": len(участники)}
 
 
 def _raffle_public_from_state(st):
@@ -2343,6 +2350,7 @@ def _raffle_public_from_state(st):
         "id": r["id"], "title": r["title"] or "Розыгрыш месяца",
         "prize1": r["prize1"] or "", "prize2": r["prize2"] or "", "prize3_coins": r["prize3_coins"],
         "ends_at": r["ends_at"], "threshold": threshold,
+        "photo": r["photo"] or "",
         "participants": st["participants"],
         "spent": spent, "remaining": round(max(0, threshold - spent), 2),
         "eligible": spent >= threshold, "entered": st["entered"],
@@ -2357,9 +2365,16 @@ def api_raffle():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    _ensure_raffle()
+    _close_expired_raffle()
     st = db.get_raffle_state(uid)      # всё за одно подключение
     if not st:
+        # Розыгрыш не идёт. Но если он только что закончился, покажем итоги:
+        # победителям бот написал лично, а остальные участники иначе не узнают
+        # о розыгрыше вообще ничего.
+        прошлый = db.recent_finished_raffle()
+        if прошлый:
+            return jsonify({"ok": True, "raffle": None,
+                            "finished": _raffle_results(прошлый)})
         return jsonify({"ok": False, "error": "no_raffle"}), 404
     return jsonify({"ok": True, "raffle": _raffle_public_from_state(st)})
 
@@ -2371,7 +2386,7 @@ def api_raffle_join():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    _ensure_raffle()
+    _close_expired_raffle()
     r = db.get_active_raffle()
     if not r:
         return jsonify({"ok": False, "error": "no_raffle"}), 404
@@ -3254,9 +3269,12 @@ def api_admin_raffle():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    _ensure_raffle()
+    _close_expired_raffle()
     r = db.get_active_raffle()
+    if not r:
+        return jsonify({"ok": True, "raffle": None})
     return jsonify({"ok": True, "raffle": {
+        "photo": r["photo"] or "",
         "id": r["id"], "title": r["title"] or "", "prize1": r["prize1"] or "", "prize2": r["prize2"] or "",
         "prize3_coins": r["prize3_coins"], "threshold": round(r["threshold"] or 0, 2),
         "ends_at": r["ends_at"], "participants": db.count_entries(r["id"]),
@@ -3268,8 +3286,10 @@ def api_admin_raffle_update():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    _ensure_raffle()
+    _close_expired_raffle()
     r = db.get_active_raffle()
+    if not r:
+        return jsonify({"ok": False, "error": "no_raffle"}), 404
     for field in ("title", "prize1", "prize2"):
         if field in data:
             db.update_raffle_field(r["id"], field, str(data[field]).strip())
@@ -3286,16 +3306,77 @@ def api_admin_raffle_update():
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/raffle/start", methods=["POST"])
+def api_admin_raffle_start():
+    """Начать розыгрыш. Пока владелец его не начал, розыгрыша нет вовсе.
+
+    Раньше приложение заводило розыгрыш само, как только предыдущий кончился, —
+    и вкладка «Розыгрыши» висела у покупателей всегда, даже когда магазин
+    ничего не разыгрывал."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    if db.get_active_raffle():
+        return jsonify({"ok": False, "error": "already"}), 409     # двух сразу не бывает
+    try:
+        days = int(data.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = min(365, max(1, days))
+    try:
+        prize3 = max(0, int(data.get("prize3_coins") or 500))
+    except (TypeError, ValueError):
+        prize3 = 500
+    try:
+        threshold = max(0.0, float(str(data.get("threshold") or 25).replace(",", ".")))
+    except (TypeError, ValueError):
+        threshold = 25.0
+    rid = db.create_raffle(
+        title=_text(data.get("title"), 100) or "Розыгрыш месяца",
+        prize1=_text(data.get("prize1"), 100) or "Одноразка",
+        prize2=_text(data.get("prize2"), 100) or "Жидкость",
+        prize3_coins=prize3, threshold=threshold, days=days)
+    return jsonify({"ok": True, "raffle_id": rid})
+
+
+@app.route("/api/admin/raffle/photo", methods=["POST"])
+def api_admin_raffle_photo():
+    """Фото разыгрываемого товара.
+
+    Картинка получает file_id тем же способом, что и фото товара: отправляем её
+    в чат владельцу тихо и забираем идентификатор. Второго способа хранить
+    картинки в магазине нет, и заводить его ради розыгрыша незачем."""
+    user = get_admin(request.form.get("initData", ""))
+    if not user:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    r = db.get_active_raffle()
+    if not r:
+        return jsonify({"ok": False, "error": "no_raffle"}), 404
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"ok": False, "error": "no_file"}), 400
+    try:
+        msg = tg.send_photo(int(user["id"]), file.read(),
+                            caption="🖼 Фото приза сохранено", disable_notification=True)
+        file_id, _thumb = _pick_photo_sizes(msg.photo)
+    except Exception as e:
+        print(f"Не смог обработать фото приза: {e}")
+        return jsonify({"ok": False, "error": "send_failed"}), 500
+    db.update_raffle_field(r["id"], "photo", file_id)
+    return jsonify({"ok": True, "photo": file_id})
+
+
 @app.route("/api/admin/raffle/draw", methods=["POST"])
 def api_admin_raffle_draw():
     """Разыграть текущий розыгрыш сейчас и запустить новый."""
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    _ensure_raffle()
     r = db.get_active_raffle()
-    if r and _draw_raffle(r):
-        db.create_raffle()
+    if not r:
+        return jsonify({"ok": False, "error": "no_raffle"}), 404
+    _draw_raffle(r)
+    # Нового не заводим: решать, идёт ли розыгрыш, — дело владельца.
     return jsonify({"ok": True})
 
 

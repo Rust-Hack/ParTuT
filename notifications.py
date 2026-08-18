@@ -8,6 +8,7 @@ notifications.py — отправка заказа продавцам город
 Функция принимает `bot` (экземпляр telebot) — тот, через который слать.
 """
 
+import random
 import json
 from telebot import types
 
@@ -120,6 +121,50 @@ def notify_compensation(bot, user_id, coins, order_id=None, reason=""):
         bot.send_message(user_id, text)
     except Exception as e:
         print(f"Не смог сообщить о компенсации клиенту {user_id}: {e}")
+
+
+def draw_raffle(bot, raffle):
+    """Подводит итоги розыгрыша: победители, призы, поздравления.
+
+    Живёт здесь, а не в сервере, потому что зовут отсюда двое: приложение (когда
+    кто-то открыл вкладку после срока) и ночные дела бота (когда не открыл
+    никто). Розыгрыш, который не подвели, — это призы, которых люди не увидели.
+
+    Возвращает True, если итоги подвели именно мы: право забирается у базы, в
+    час пик «первых» бывает несколько."""
+    if not db.claim_raffle_draw(raffle["id"]):
+        return False
+    # Один человек — одно место. Ключ в базе не даст ему второй билет, но в
+    # розыгрышах, начатых до него, дубли могли остаться.
+    uids = list(dict.fromkeys(db.get_raffle_user_ids(raffle["id"])))
+    random.shuffle(uids)
+    места = [(1, raffle["prize1"] or "Приз за 1 место", 0),
+             (2, raffle["prize2"] or "Приз за 2 место", 0),
+             (3, f"{raffle['prize3_coins']} монет", raffle["prize3_coins"])]
+    winners = []
+    for i, (место, приз, монеты) in enumerate(места):
+        if i >= len(uids):
+            break
+        wid = uids[i]
+        winners.append({"place": место, "user_id": wid, "prize": приз})
+        if монеты:
+            db.add_coins(wid, монеты, "raffle")
+        try:
+            bot.send_message(wid, f"🏆 Вы заняли {место} место в розыгрыше! Приз: {приз}. "
+                                  + ("Монеты начислены." if монеты else "Продавец свяжется с вами."))
+        except Exception as e:
+            print(f"Не смог поздравить победителя {wid}: {e}")
+    db.set_raffle_winners(raffle["id"], winners)
+    return True
+
+
+def close_expired_raffle(bot):
+    """Подводит итоги, если срок вышел. Нового розыгрыша НЕ заводит: он идёт
+    только тогда, когда владелец его начал."""
+    r = db.get_active_raffle()
+    if r and r["ends_at"] and db._now_str() >= r["ends_at"]:
+        return draw_raffle(bot, r)
+    return False
 
 
 def run_admin_request(bot, action, payload):

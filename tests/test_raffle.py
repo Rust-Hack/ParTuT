@@ -162,7 +162,7 @@ def run():
 
     состояния = _states()
     c4("розыгрыш проведён ровно один раз", состояния.get("finished") == 1)
-    c4("и на смену пришёл ровно один новый", состояния.get("active") == 1)
+    c4("нового вместо него не завелось", состояния.get("active", 0) == 0)
 
     winners = json.loads(db.get_last_finished_raffle()["winners"] or "[]")
     c4("победителей трое", len(winners) == 3)
@@ -177,12 +177,41 @@ def run():
     поздравления = [s for s in SENT if "место в розыгрыше" in str(s[1])]
     c4("каждому победителю написали по одному разу", len(поздравления) == 3)
 
-    # --- Прошлый розыгрыш виден в приложении ---
-    c5 = Checker("Итоги прошлого розыгрыша")
+    # --- Когда розыгрыша нет ---
+    # Раньше приложение заводило новый само, и вкладка «Розыгрыши» висела у
+    # покупателей всегда — даже когда магазин ничего не разыгрывал.
+    c5 = Checker("Розыгрыш кончился: итоги и тишина")
     as_user(UIDS[0], "смотрит")
-    st = client.post("/api/raffle", json={"initData": "x"}).get_json()["raffle"]
-    c5("прошлые победители показаны", len(st["last_winners"]) == 3)
-    c5("новый розыгрыш начат с чистого листа", st["participants"] == 0 and st["entered"] is False)
+    d = client.post("/api/raffle", json={"initData": "x"}).get_json()
+    c5("активного розыгрыша нет", d.get("raffle") is None)
+    # Победителям бот написал лично. Остальные участники иначе не узнают ничего,
+    # поэтому неделю после итогов показываем, чем всё кончилось.
+    итоги = d.get("finished") or {}
+    c5("победители показаны", len(итоги.get("winners") or []) == 3)
+    c5("и видно, когда завершился", bool(итоги.get("finished_at")))
+    # Розыгрыш, где видно только троих счастливчиков, выглядит как розыгрыш без
+    # свидетелей: участники должны быть видны наравне с победителями.
+    c5("участников посчитали всех", итоги.get("participants_count") == 4)
+    c5("не победившие участники показаны", len(итоги.get("participants") or []) == 1)
+    c5("победителей в списке участников не повторяем",
+       not (set(итоги.get("participants") or []) & {w["who"] for w in итоги["winners"]}))
+    c5("людей не называют полным id",
+       all(str(x).startswith("•••") for x in (итоги.get("participants") or []))
+       and all(str(w["who"]).startswith("•••") for w in итоги["winners"]))
+
+    me = client.post("/api/me", json={"initData": "x"}).get_json()
+    c5("вкладка остаётся — людям есть что посмотреть", me.get("raffle_on") is True)
+    r = client.post("/api/raffle/join", json={"initData": "x"})
+    c5("но участвовать уже не в чем", r.get_json().get("error") == "no_raffle")
+
+    # Итоги висят до следующего розыгрыша, а не неделю: участник заходит в
+    # магазин не каждый день, а узнать, чем кончилось дело, должен.
+    conn = db.connect(); cur = conn.cursor()
+    давно = (datetime.datetime.now() - datetime.timedelta(days=300)).strftime("%Y-%m-%d %H:%M")
+    cur.execute(db._q("UPDATE raffles SET finished_at = %s WHERE status = 'finished'"), (давно,))
+    conn.commit(); conn.close()
+    d = client.post("/api/raffle", json={"initData": "x"}).get_json()
+    c5("итоги не пропадают со временем", len((d.get("finished") or {}).get("winners") or []) == 3)
 
     # --- Права ---
     c6 = Checker("Кто правит розыгрыш")
@@ -195,6 +224,10 @@ def run():
     c6("и разыграть досрочно тоже", r.status_code == 403)
 
     as_admin()
+    # Править нечего, пока розыгрыш не начат, — сначала начинаем.
+    r = client.post("/api/admin/raffle/update", json={"initData": "x", "title": "Никакой"})
+    c6("пока розыгрыша нет, править нечего", r.status_code == 404)
+    client.post("/api/admin/raffle/start", json={"initData": "x", "days": 30})
     client.post("/api/admin/raffle/update",
                 json={"initData": "x", "title": "Августовский", "prize3_coins": 300, "threshold": 40})
     настройки = client.post("/api/admin/raffle", json={"initData": "x"}).get_json()["raffle"]
@@ -205,14 +238,80 @@ def run():
     настройки = client.post("/api/admin/raffle", json={"initData": "x"}).get_json()["raffle"]
     c6("отрицательный приз не принимается", настройки["prize3_coins"] >= 0)
 
+    c7 = Checker("Розыгрыш начинает и завершает владелец")
+    client.post("/api/admin/raffle/draw", json={"initData": "x"})    # закрываем тот, что правили
+    r = client.post("/api/admin/raffle/start", json={
+        "initData": "x", "title": "Сентябрьский", "prize1": "Под",
+        "prize2": "Жидкость", "prize3_coins": 400, "threshold": 30, "days": 14}).get_json()
+    c7("розыгрыш начат", r.get("ok") is True and _states().get("active") == 1)
+    активный = db.get_active_raffle()
+    c7("название взято из формы", активный["title"] == "Сентябрьский")
+    c7("срок взят из формы", активный["ends_at"] > активный["starts_at"])
+    r = client.post("/api/admin/raffle/start", json={"initData": "x"})
+    c7("двух розыгрышей сразу не бывает", r.status_code == 409)
+
+    as_user(UIDS[0], "смотрит")
+    me = client.post("/api/me", json={"initData": "x"}).get_json()
+    c7("покупателю вкладка снова видна", me.get("raffle_on") is True)
+    st = client.post("/api/raffle", json={"initData": "x"}).get_json()["raffle"]
+    # «Прошлые победители» — это итоги розыгрыша, закрытого прямо перед этим.
+    # В нём никто не участвовал, поэтому список пуст, и выдумывать победителей
+    # из позапрошлого розыгрыша приложение не должно.
+    c7("победителей прошлого розыгрыша не выдумано", st["last_winners"] == [])
+    c7("новый розыгрыш начат с чистого листа",
+       st["participants"] == 0 and st["entered"] is False)
+
+    as_admin()
     было = _states().get("finished", 0)
     client.post("/api/admin/raffle/draw", json={"initData": "x"})
-    c7 = Checker("Розыгрыш по кнопке владельца")
-    c7("прошлый закрыт", _states().get("finished", 0) == было + 1)
-    c7("и сразу начат следующий", _states().get("active") == 1)
+    c7("итоги подведены", _states().get("finished", 0) == было + 1)
+    c7("и новый сам собой не завёлся", _states().get("active", 0) == 0)
+    r = client.post("/api/admin/raffle/draw", json={"initData": "x"})
+    c7("завершать нечего — так и сказано", r.status_code == 404)
+
+    # --- Фото приза ---
+    # «Одноразка» словами и она же на картинке — разные по силе обещания.
+    c9 = Checker("Фото разыгрываемого товара")
+    client.post("/api/admin/raffle/start", json={"initData": "x", "days": 30})
+    активный = db.get_active_raffle()
+    db.update_raffle_field(активный["id"], "photo", "фото_приза_id")
+    as_user(UIDS[0], "смотрит")
+    st = client.post("/api/raffle", json={"initData": "x"}).get_json()["raffle"]
+    c9("покупатель видит фото приза", st.get("photo") == "фото_приза_id")
+    c9("картинка приза считается витриной, а не чеком",
+       db.is_shop_photo("фото_приза_id") is True)
+    # Ночная уборка не должна принять её за сироту: товара у неё нет.
+    db.save_photo_blob("фото_приза_id", "image/jpeg", b"x" * 10)
+    conn = db.connect(); cur = conn.cursor()
+    давно = (datetime.datetime.now() - datetime.timedelta(days=5)).strftime("%Y-%m-%d %H:%M")
+    cur.execute(db._q("UPDATE photo_blobs SET created_at = %s WHERE file_id = %s"),
+                (давно, "фото_приза_id"))
+    conn.commit(); conn.close()
+    db.purge_orphan_photos()
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("SELECT 1 AS x FROM photo_blobs WHERE file_id = %s"), ("фото_приза_id",))
+    цела = cur.fetchone() is not None
+    conn.close()
+    c9("ночная уборка фото приза не трогает", цела)
+
+    as_admin()
+    client.post("/api/admin/raffle/draw", json={"initData": "x"})
+    as_user(UIDS[0], "смотрит")
+    d = client.post("/api/raffle", json={"initData": "x"}).get_json()
+    c9("в итогах фото остаётся", (d.get("finished") or {}).get("photo") == "фото_приза_id")
+    as_admin()
+
+    # --- Продавец не распоряжается розыгрышем ---
+    c8 = Checker("Розыгрыш — дело владельца")
+    as_admin(uid=8905, username="продавец", role="staff", city="Туров")
+    for путь in ("/api/admin/raffle/start", "/api/admin/raffle/draw", "/api/admin/raffle/update"):
+        r = client.post(путь, json={"initData": "x", "prize3_coins": 5000})
+        c8(f"продавцу закрыто: {путь.split('/')[-1]}", r.status_code == 403)
+    c8("и розыгрыш он не завёл", _states().get("active", 0) == 0)
+    as_admin()
 
     _clean()
-    return c.fails + c2.fails + c3.fails + c31.fails + c4.fails + c5.fails + c6.fails + c7.fails
+    return c.fails + c2.fails + c3.fails + c31.fails + c4.fails + c5.fails + c6.fails + c7.fails + c8.fails + c9.fails
 
 
 if __name__ == "__main__":
