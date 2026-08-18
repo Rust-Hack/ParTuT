@@ -2617,6 +2617,17 @@ def save_photo_blob(file_id, content_type, data):
     conn.close()
 
 
+def receipt_owner(file_id):
+    """Чей это чек об оплате (user_id) или None. Нужен, чтобы картинку чека
+    видели только продавец и сам покупатель, а не любой, кому попала ссылка."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT user_id FROM orders WHERE receipt_file_id = %s LIMIT 1"), (file_id,))
+    row = cur.fetchone()
+    conn.close()
+    return int(row["user_id"]) if row else None
+
+
 def is_product_photo(file_id):
     """Это картинка товара (а не чек об оплате)?
 

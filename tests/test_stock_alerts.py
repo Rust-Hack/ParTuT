@@ -50,8 +50,14 @@ def run():
     # Продавцу видно, сколько ждут — ради этого счётчик и нужен. Кэш каталога
     # сбрасывается самой подпиской, руками его тут НЕ чистим: иначе тест не
     # заметит, если инвалидацию забудут, и продавец увидит старое число.
-    prod = next(p for p in client.get("/api/products").get_json() if p["id"] == pid)
+    as_admin()
+    prod = next(p for p in client.post("/api/admin/products", json={"initData": "x"}).get_json()["products"]
+                if p["id"] == pid)
     c("счётчик ожидающих виден сразу, без ожидания кэша", prod["waiting"] == 2)
+    # А покупателю это знать незачем: сколько человек ждут товар — наша кухня.
+    shopper = next(p for p in client.get("/api/products").get_json() if p["id"] == pid)
+    c("покупателю счётчик ожидающих не показываем", "waiting" not in shopper)
+    c("и закупочную цену тоже", "cost" not in shopper)
 
     # Витрина должна знать, что покупатель уже подписан.
     as_user(BUYER, "buyer")

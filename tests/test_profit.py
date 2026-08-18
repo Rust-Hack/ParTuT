@@ -43,8 +43,12 @@ def run():
     c("закупка сохранена", abs(float(db.get_product(pid)["cost"]) - 12.0) < 0.001)
 
     server._cache_bust()
-    prod = next(p for p in client.get("/api/products").get_json() if p["id"] == pid)
+    prod = next(p for p in client.post("/api/admin/products", json={"initData": "x"}).get_json()["products"]
+                if p["id"] == pid)
     c("админка видит закупку", abs(prod["cost"] - 12.0) < 0.001)
+    # А витрина — нет: по закупке читается наша наценка.
+    shopper = next(p for p in client.get("/api/products").get_json() if p["id"] == pid)
+    c("покупателю закупка не видна", "cost" not in shopper)
 
     # Закупку можно поправить в редакторе.
     client.post("/api/admin/product/update", json={"initData": "x", "id": pid, "field": "cost", "value": "13,5"})
@@ -89,10 +93,14 @@ def run():
     c("новая продажа считается по новой закупке", abs(s3["profit"] - 18.0) < 0.01)
 
     # --- Закупка не должна утекать покупателю ---
+    # Раньше здесь стояло обратное: закупка приходила всем, а витрина её просто
+    # не рисовала. Но /api/products открыт без входа — прочитать наценку мог кто
+    # угодно, не заходя в приложение. Теперь поле вырезает сервер.
     as_user(BUYER)
     me_prod = client.get("/api/products").get_json()
-    c("товар отдаётся с закупкой только админке (поле есть в общем ответе)",
-      "cost" in me_prod[0])   # общий кэш; витрина его просто не показывает
+    c("закупка покупателю не приходит", all("cost" not in p for p in me_prod))
+    c("и число ожидающих тоже", all("waiting" not in p for p in me_prod))
+    c("но цена и остаток на месте", "price" in me_prod[0] and "stock" in me_prod[0])
 
     _clean()
     return c.fails

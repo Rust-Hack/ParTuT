@@ -33,7 +33,7 @@ load_dotenv()
 # Общие настройки и справочники берём из config.py (их же использует server.py).
 from config import (
     BOT_TOKEN, WEBAPP_URL, CITIES,
-    ADMIN_IDS, SUPER_ADMIN_IDS, is_admin, is_super_admin,
+    ADMIN_IDS, SUPER_ADMIN_IDS, is_admin, is_super_admin, admin_city,
 )
 
 
@@ -330,11 +330,14 @@ def handle_admin_callback(call, chat_id, user_id, data):
 
     if data == "adm:list":
         bot.answer_callback_query(call.id)
-        show_admin_list(chat_id)
+        show_admin_list(chat_id, user_id)
         return
 
     if data.startswith("admcard:"):
         bot.answer_callback_query(call.id)
+        if not _my_product(user_id, int(parts[1])):
+            bot.send_message(chat_id, "Это товар другой точки.")
+            return
         show_product_card(chat_id, int(parts[1]))
         return
 
@@ -343,6 +346,9 @@ def handle_admin_callback(call, chat_id, user_id, data):
         product_id = int(parts[2])
         if field not in ("price", "stock"):
             bot.answer_callback_query(call.id, "Это правится в приложении")
+            return
+        if not _my_product(user_id, product_id):
+            bot.answer_callback_query(call.id, "Товар другой точки", show_alert=True)
             return
         admin_state[user_id] = {"action": "edit", "field": field, "product_id": product_id}
         prompts = {
@@ -355,14 +361,18 @@ def handle_admin_callback(call, chat_id, user_id, data):
 
     if data.startswith("admhit:"):
         product_id = int(parts[1])
+        if not _my_product(user_id, product_id):
+            bot.answer_callback_query(call.id, "Товар другой точки", show_alert=True)
+            return
         new_value = db.toggle_hit(product_id)
+        _log_bot(user_id, "product/update", f"id={product_id} · field=is_hit · value={new_value}")
         bot.answer_callback_query(call.id, "🔥 Теперь хит" if new_value else "Убрал из хитов")
         show_product_card(chat_id, product_id)
         return
 
     if data.startswith("admdel:"):
         product_id = int(parts[1])
-        product = db.get_product(product_id)
+        product = _my_product(user_id, product_id)
         bot.answer_callback_query(call.id)
         if not product:
             bot.send_message(chat_id, "Товар уже не найден.")
@@ -375,17 +385,44 @@ def handle_admin_callback(call, chat_id, user_id, data):
 
     if data.startswith("admdelyes:"):
         product_id = int(parts[1])
-        product = db.get_product(product_id)
+        product = _my_product(user_id, product_id)
+        if not product:
+            bot.answer_callback_query(call.id, "Товар другой точки", show_alert=True)
+            return
         db.delete_product(product_id)
-        name = product["name"] if product else "товар"
+        _log_bot(user_id, "product/delete", f"id={product_id} · name={product['name']}")
+        name = product["name"]
         bot.answer_callback_query(call.id, "Удалено")
         bot.send_message(chat_id, f"🗑 «{name}» удалён.")
-        show_admin_list(chat_id)
+        show_admin_list(chat_id, user_id)
         return
 
 
-def show_admin_list(chat_id):
-    products = db.get_all_products()
+def _my_product(user_id, product_id):
+    """Товар, если он на точке этого продавца. Иначе None.
+
+    В приложении границы точек проверяются на каждом действии, а чат про них
+    не знал вовсе: продавец Турова правил и удалял товары Минска через «⚡».
+    """
+    p = db.get_product(product_id)
+    if not p:
+        return None
+    scope = admin_city(user_id)
+    return p if (not scope or p["city"] == scope) else None
+
+
+def _log_bot(user_id, action, details):
+    """Правка из чата — такое же действие, как из приложения, и в журнале
+    обязана быть. Иначе достаточно открыть бота, чтобы менять цены без следа."""
+    try:
+        db.log_admin_action(user_id, f"id {user_id} (бот)", action, details)
+    except Exception as e:
+        print(f"Не записал действие бота в журнал: {e}")
+
+
+def show_admin_list(chat_id, user_id):
+    scope = admin_city(user_id)
+    products = [p for p in db.get_all_products() if not scope or p["city"] == scope]
     if not products:
         bot.send_message(chat_id, "Товаров пока нет — заведите их в приложении: "
                                   "📚 Ассортимент, затем 📥 завоз на точку.")
@@ -468,7 +505,14 @@ def handle_admin_input(chat_id, user_id, raw_text):
             bot.send_message(chat_id, "Это правится в приложении, в «Ассортименте».")
             return
 
+        # Проверяем ещё раз здесь: между нажатием кнопки и вводом числа товар
+        # мог переехать на другую точку, а состояние диалога живёт в памяти.
+        if not _my_product(user_id, product_id):
+            admin_state.pop(user_id, None)
+            bot.send_message(chat_id, "Это товар другой точки.")
+            return
         db.update_field(product_id, field, value)
+        _log_bot(user_id, "product/update", f"id={product_id} · field={field} · value={value}")
         admin_state.pop(user_id, None)
         bot.send_message(chat_id, "✅ Изменено.")
         show_product_card(chat_id, product_id)

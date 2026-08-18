@@ -75,7 +75,15 @@ WHEEL_SECTORS = [
 app = Flask(__name__, static_folder="webapp", static_url_path="")
 
 # DEV_MODE=1 — разрешить пользоваться из обычного браузера (без Telegram) для локальной проверки.
-DEV_MODE = os.environ.get("DEV_MODE") == "1"
+#
+# Он подставляет ВЛАДЕЛЬЦА любому, кто открыл страницу без подписи Telegram.
+# На боевом это означало бы админку без пароля для всего интернета: достаточно
+# один раз скопировать переменные с локальной машины на сервер. Поэтому боевая
+# база (DATABASE_URL) выключает DEV_MODE намертво, что бы ни стояло в env.
+_IS_PRODUCTION = bool(os.environ.get("DATABASE_URL", "").strip())
+DEV_MODE = os.environ.get("DEV_MODE") == "1" and not _IS_PRODUCTION
+if os.environ.get("DEV_MODE") == "1" and _IS_PRODUCTION:
+    print("DEV_MODE ИГНОРИРУЕТСЯ: подключена боевая база. Вход только через Telegram.")
 DEV_USER_ID = next(iter(ADMIN_IDS), 0)
 
 _file_path_cache = {}      # кэш путей к файлам Telegram (чтобы не звать get_file каждый раз)
@@ -139,6 +147,9 @@ def _bg(fn, *args, **kwargs):
 #  ПРОВЕРКА ПОДЛИННОСТИ (initData от Telegram)
 # ============================================================
 
+INIT_DATA_MAX_AGE = 24 * 3600      # сутки: дольше одной сессии приложения не живут
+
+
 def validate_init_data(init_data):
     if not init_data:
         return None
@@ -152,7 +163,16 @@ def validate_init_data(init_data):
     check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
     secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
     calc_hash = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
-    if calc_hash != received_hash:
+    if not hmac.compare_digest(calc_hash, received_hash):
+        return None
+    # Подпись верна вечно, поэтому одна утёкшая строка входа работала бы всегда:
+    # попала в чужой лог или на скриншот — и это постоянный ключ от аккаунта.
+    # Телеграм выдаёт её при каждом открытии приложения, так что суток хватает.
+    try:
+        issued = int(pairs.get("auth_date", 0))
+    except (TypeError, ValueError):
+        return None
+    if issued and time.time() - issued > INIT_DATA_MAX_AGE:
         return None
     try:
         return json.loads(pairs.get("user", "{}"))
@@ -199,6 +219,9 @@ _OWNER_ONLY = (
     # люди
     "/api/admin/users", "/api/admin/user/delete", "/api/admin/referral",
     "/api/admin/staff/", "/api/admin/log",
+    # заявки на подтверждение: решает их владелец. Маршруты и сами это проверяют,
+    # но пусть правило будет и здесь — в одном месте видно всё, что не продавцу.
+    "/api/admin/requests", "/api/admin/request/",
     # устройство магазина
     "/api/admin/location", "/api/admin/delivery", "/api/admin/point",
     "/api/admin/settings/update", "/api/admin/stats",
@@ -1087,12 +1110,24 @@ def _all_products_payload():
 @app.route("/api/products")
 def api_products():
     """Витрина покупателя. Снятое с продажи сюда не попадает — не полагаемся на
-    то, что каждый экран приложения не забудет его отфильтровать."""
+    то, что каждый экран приложения не забудет его отфильтровать.
+
+    Закупочная цена вырезается здесь же: она лежала в том же ответе, что и
+    витрина, и любой покупатель мог прочитать, почём мы берём товар."""
     city = request.args.get("city")
-    out = [p for p in _all_products_payload() if not p["hidden"]]
+    out = [_public_product(p) for p in _all_products_payload() if not p["hidden"]]
     if city:
         out = [p for p in out if p["city"] == city]
     return jsonify(out)
+
+
+# Что в товаре не для покупателя: закупка (наша маржа), число ждущих
+# поступления (наша кухня) и пометка «снят с витрины» (его тут и не будет).
+_ADMIN_ONLY_FIELDS = ("cost", "waiting", "hidden")
+
+
+def _public_product(p):
+    return {k: v for k, v in p.items() if k not in _ADMIN_ONLY_FIELDS}
 
 
 @app.route("/api/admin/products", methods=["POST"])
@@ -1106,11 +1141,59 @@ def api_admin_products():
     return jsonify({"ok": True, "products": out})
 
 
+RECEIPT_TOKEN_TTL = 6 * 3600       # ссылка на чек живёт полдня, не вечно
+
+
+def photo_token(file_id):
+    """Короткий пропуск к картинке чека. Выдаём его тому, кто уже доказал право
+    на заказ; в самой ссылке пропуск ничего не раскрывает и через полдня гаснет.
+
+    Класть в адрес картинки строку входа Telegram нельзя: адреса попадают в
+    логи сервера и историю браузера, а она — ключ от аккаунта на сутки."""
+    exp = int(time.time()) + RECEIPT_TOKEN_TTL
+    sig = hmac.new(BOT_TOKEN.encode(), f"{file_id}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{exp}.{sig}"
+
+
+def _token_ok(file_id, token):
+    try:
+        exp_s, sig = (token or "").split(".", 1)
+        exp = int(exp_s)
+    except (ValueError, AttributeError):
+        return False
+    if exp < time.time():
+        return False
+    want = hmac.new(BOT_TOKEN.encode(), f"{file_id}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+    return hmac.compare_digest(want, sig)
+
+
+def _may_see_photo(file_id, token=""):
+    """Картинки товаров открыты всем — это витрина. Всё остальное здесь —
+    чеки об оплате: к ним нужен пропуск.
+
+    Раньше по этой ссылке чек забирал кто угодно: адрес вида
+    /api/photo?file_id=… ничем не защищён, а живёт он вечно — достаточно,
+    чтобы он попал в чужой лог, историю браузера или на скриншот.
+    """
+    try:
+        if db.is_product_photo(file_id):
+            return True
+        owner = db.receipt_owner(file_id)
+    except Exception as e:
+        print(f"Не смог проверить права на фото {file_id}: {e}")
+        return True                     # база отвечает плохо — витрина важнее
+    if owner is None:
+        return True                     # ни товар, ни чек: старые картинки из чата
+    return _token_ok(file_id, token)
+
+
 @app.route("/api/photo")
 def api_photo():
     file_id = request.args.get("file_id", "")
     if not file_id:
         return Response("no file_id", status=404)
+    if not _may_see_photo(file_id, request.args.get("t", "")):
+        return Response("not found", status=404)
 
     # file_id намертво привязан к содержимому картинки: оно никогда не меняется.
     # Значит браузеру достаточно один раз сверить ETag — и не качать заново.
@@ -1574,7 +1657,7 @@ def api_my_orders():
     user = get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
-    orders = [_order_json(o) for o in db.get_orders_by_user(int(user["id"]))]
+    orders = [_order_json(o, data.get("initData", "")) for o in db.get_orders_by_user(int(user["id"]))]
     return jsonify({"ok": True, "orders": orders})
 
 
@@ -2352,7 +2435,9 @@ def _order_subtotal(o):
         return float(o["total"] or 0)
 
 
-def _order_json(o):
+def _order_json(o, init_data=""):
+    """Ссылка на чек выдаётся с коротким пропуском: без него картинку не отдадут.
+    Пропуск получает только тот, кому этот заказ и так показывают."""
     try:
         items = json.loads(o["items"])
     except (TypeError, ValueError):
@@ -2373,7 +2458,8 @@ def _order_json(o):
         "payment_method": (o["payment_method"] or ""),
         "comment": (o["comment"] or "") if "comment" in o.keys() else "",
         "phone": (o["phone"] or "") if "phone" in o.keys() else "",
-        "receipt_url": (f"/api/photo?file_id={o['receipt_file_id']}" if o["receipt_file_id"] else None),
+        "receipt_url": (f"/api/photo?file_id={o['receipt_file_id']}&t={photo_token(o['receipt_file_id'])}"
+                        if o["receipt_file_id"] else None),
         # Скидки — чтобы правка состава показывала ту же сумму, что посчитает сервер.
         "promo_discount": round(o["promo_discount"] or 0, 2) if "promo_discount" in o.keys() else 0,
         "coins_discount": round(int(o["coins_used"] or 0) * COIN_VALUE, 2) if "coins_used" in o.keys() else 0,
@@ -2388,7 +2474,7 @@ def api_admin_orders():
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     orders = [o for o in db.get_orders() if may_city(admin, o["city"])]
-    return jsonify({"ok": True, "orders": [_order_json(o) for o in orders]})
+    return jsonify({"ok": True, "orders": [_order_json(o, data.get("initData", "")) for o in orders]})
 
 
 @app.route("/api/admin/today", methods=["POST"])
@@ -2514,7 +2600,7 @@ def api_admin_order_items():
     lines = "\n".join(f"• {ch}" for ch in res)
     _bg(_notify_client, int(updated["user_id"]),
         f"Продавец изменил заказ #{oid}:\n{lines}\n\n💰 Итого: {updated['total']:.2f} Br")
-    return jsonify({"ok": True, "order": _order_json(updated), "changes": res})
+    return jsonify({"ok": True, "order": _order_json(updated, data.get("initData", "")), "changes": res})
 
 
 # ------------------- Статистика -------------------
