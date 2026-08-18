@@ -423,6 +423,7 @@ def init_db():
     _ensure_photo_columns()     # галерея у модели, а не у товара
     seed_category_specs()       # характеристики категорий, если их ещё нет
     models_seeded_from_products()   # разово собирает ассортимент из прежних товаров
+    _ensure_review_columns()    # отзыв принадлежит модели — ПОСЛЕ того, как модели собраны
     seed_locations()            # добавит стартовые точки, если таблица пустая
     seed_delivery()             # дефолтные способы получения для Минск/Туров
 
@@ -563,12 +564,18 @@ def _ensure_delivery_columns():
         cur.execute("ALTER TABLE delivery_methods ADD COLUMN needs_point INTEGER DEFAULT 0")
     conn.commit()
     conn.close()
-    _ensure_review_columns()
 
 
 def _ensure_review_columns():
     """Ответ продавца на отзыв. Спокойный ответ на тройку убеждает нового
-    покупателя сильнее, чем её отсутствие."""
+    покупателя сильнее, чем её отсутствие.
+
+    Плюс model_id: оценивают модель, а не наличие её на конкретной точке.
+    Пока отзыв висел на товаре, один и тот же Elf Bar в Минске и Турове копил
+    оценки раздельно — покупатель второй точки видел «отзывов пока нет» у
+    товара, у которого их дюжина. product_id остаётся: он говорит, где именно
+    человек покупал, и по нему же работают старые отзывы товаров без модели.
+    """
     conn = connect()
     cur = conn.cursor()
     cols = _table_columns(cur, "reviews")
@@ -576,6 +583,13 @@ def _ensure_review_columns():
         cur.execute("ALTER TABLE reviews ADD COLUMN reply TEXT")
     if "replied_at" not in cols:
         cur.execute("ALTER TABLE reviews ADD COLUMN replied_at TEXT")
+    if "model_id" not in cols:
+        cur.execute("ALTER TABLE reviews ADD COLUMN model_id INTEGER")
+    # Проставляем модель уже написанным отзывам — иначе они останутся видны
+    # только на той точке, где были оставлены.
+    cur.execute("""UPDATE reviews SET model_id =
+                     (SELECT p.model_id FROM products p WHERE p.id = reviews.product_id)
+                   WHERE model_id IS NULL""")
     conn.commit()
     conn.close()
 
@@ -2595,29 +2609,60 @@ def reviewable_products(user_id):
         conn.close()
         return []
     marks = ",".join(["%s"] * len(bought))
-    cur.execute(_q(f"SELECT product_id FROM reviews WHERE user_id = %s AND product_id IN ({marks})"),
-                (user_id, *bought.keys()))
-    already = {r["product_id"] for r in cur.fetchall()}
     # Названия берём из живого каталога: в старом заказе товар мог называться иначе.
-    cur.execute(_q(f"SELECT id, name FROM products WHERE id IN ({marks})"), tuple(bought.keys()))
-    names = {r["id"]: r["name"] for r in cur.fetchall()}
+    cur.execute(_q(f"SELECT id, name, model_id FROM products WHERE id IN ({marks})"), tuple(bought.keys()))
+    live = {r["id"]: (r["name"], r["model_id"]) for r in cur.fetchall()}
+    cur.execute(_q("SELECT product_id, model_id FROM reviews WHERE user_id = %s"), (user_id,))
+    rated_products, rated_models = set(), set()
+    for r in cur.fetchall():
+        rated_products.add(r["product_id"])
+        if r["model_id"]:
+            rated_models.add(r["model_id"])
     conn.close()
-    return [{"id": pid, "name": names.get(pid) or bought[pid]}
-            for pid in bought if pid not in already and pid in names]
+
+    out, seen_models = [], set()
+    for pid in bought:
+        if pid not in live:
+            continue
+        name, mid = live[pid]
+        # Оценивают модель: уже оценил её на другой точке — второй раз не предлагаем.
+        # И один и тот же товар с двух точек не показываем дважды в одном списке.
+        if mid and (mid in rated_models or mid in seen_models):
+            continue
+        if not mid and pid in rated_products:
+            continue
+        if mid:
+            seen_models.add(mid)
+        out.append({"id": pid, "name": name or bought[pid]})
+    return out
+
+
+def _model_of(cur, product_id):
+    """Модель товара или None (товар заведён до «Ассортимента»)."""
+    cur.execute(_q("SELECT model_id FROM products WHERE id = %s"), (product_id,))
+    row = cur.fetchone()
+    return row["model_id"] if row else None
 
 
 def add_review(product_id, user_id, rating, text="", username=""):
     """Сохраняет отзыв в статусе «на модерации». Возвращает id или None, если уже оценивал."""
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("SELECT 1 AS x FROM reviews WHERE user_id = %s AND product_id = %s LIMIT 1"),
-                (user_id, product_id))
+    mid = _model_of(cur, product_id)
+    # Один человек — один отзыв на модель. Иначе один и тот же покупатель
+    # оценил бы её отдельно в Минске и отдельно в Турове.
+    if mid:
+        cur.execute(_q("SELECT 1 AS x FROM reviews WHERE user_id = %s AND model_id = %s LIMIT 1"),
+                    (user_id, mid))
+    else:
+        cur.execute(_q("SELECT 1 AS x FROM reviews WHERE user_id = %s AND product_id = %s LIMIT 1"),
+                    (user_id, product_id))
     if cur.fetchone():
         conn.close()
-        return None                      # один человек — один отзыв на товар
-    rid = _insert_id(cur, "INSERT INTO reviews (product_id, user_id, username, rating, text, status, created_at) "
-                          "VALUES (%s, %s, %s, %s, %s, 'pending', %s)",
-                     (product_id, user_id, (username or "")[:64], int(rating),
+        return None
+    rid = _insert_id(cur, "INSERT INTO reviews (product_id, model_id, user_id, username, rating, text, status, created_at) "
+                          "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)",
+                     (product_id, mid, user_id, (username or "")[:64], int(rating),
                       (text or "").strip()[:REVIEW_MAX_TEXT], _now_str()))
     conn.commit()
     conn.close()
@@ -2625,10 +2670,19 @@ def add_review(product_id, user_id, rating, text="", username=""):
 
 
 def list_reviews(product_id, status="approved", limit=50):
+    """Отзывы о модели этого товара: на всех точках это одна и та же вещь.
+
+    Для товара без модели — как раньше, по самому товару."""
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("SELECT * FROM reviews WHERE product_id = %s AND status = %s ORDER BY id DESC LIMIT %s"),
-                (product_id, status, limit))
+    mid = _model_of(cur, product_id)
+    if mid:
+        cur.execute(_q("SELECT * FROM reviews WHERE model_id = %s AND status = %s ORDER BY id DESC LIMIT %s"),
+                    (mid, status, limit))
+    else:
+        cur.execute(_q("SELECT * FROM reviews WHERE product_id = %s AND model_id IS NULL "
+                       "AND status = %s ORDER BY id DESC LIMIT %s"),
+                    (product_id, status, limit))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
@@ -2651,8 +2705,11 @@ def admin_reviews(status="pending", limit=100):
     исчезал из его поля зрения навсегда, и убрать его было уже нельзя."""
     conn = connect()
     cur = conn.cursor()
-    sql = ("SELECT r.*, p.name AS product_name FROM reviews r "
-           "LEFT JOIN products p ON p.id = r.product_id ")
+    # Имя берём из модели, а не из товара: товар могли снять с точки, и тогда
+    # отзыв в очереди оказывался безымянным — модерировать вслепую нельзя.
+    sql = ("SELECT r.*, COALESCE(m.name, p.name) AS product_name FROM reviews r "
+           "LEFT JOIN products p ON p.id = r.product_id "
+           "LEFT JOIN models m ON m.id = r.model_id ")
     if status and status != "all":
         cur.execute(_q(sql + "WHERE r.status = %s ORDER BY r.id DESC LIMIT %s"), (status, limit))
     else:
@@ -2751,13 +2808,28 @@ def also_bought(top=5, scan=500, min_count=2):
 
 
 def product_ratings():
-    """{товар: {avg, count}} по опубликованным отзывам — одним запросом на всю витрину."""
+    """{товар: {avg, count}} по опубликованным отзывам — одним проходом на всю витрину.
+
+    Оценка принадлежит модели, поэтому одна и та же цифра стоит у товара на
+    каждой точке. Раньше витрина Турова показывала «нет отзывов» у модели,
+    которую в Минске оценили дюжину раз."""
     conn = connect()
     cur = conn.cursor()
-    cur.execute("SELECT product_id, COUNT(*) AS c, AVG(rating) AS a FROM reviews "
-                "WHERE status = 'approved' GROUP BY product_id")
-    out = {r["product_id"]: {"count": int(r["c"]), "avg": round(float(r["a"] or 0), 1)} for r in cur.fetchall()}
+    cur.execute("SELECT product_id, model_id, rating FROM reviews WHERE status = 'approved'")
+    by_model, by_product = {}, {}
+    for r in cur.fetchall():
+        bucket = by_model.setdefault(r["model_id"], []) if r["model_id"] \
+            else by_product.setdefault(r["product_id"], [])
+        bucket.append(int(r["rating"]))
+    cur.execute("SELECT id, model_id FROM products")
+    products = [(r["id"], r["model_id"]) for r in cur.fetchall()]
     conn.close()
+
+    out = {}
+    for pid, mid in products:
+        marks = by_model.get(mid) if mid else by_product.get(pid)
+        if marks:
+            out[pid] = {"count": len(marks), "avg": round(sum(marks) / len(marks), 1)}
     return out
 
 
@@ -2948,7 +3020,10 @@ def delete_product(product_id):
     # Галерея без товара никому не видна, но место занимает и мешает считать
     # картинки — убираем вместе с товаром.
     cur.execute(_q("DELETE FROM product_photos WHERE product_id = %s"), (product_id,))
-    cur.execute(_q("DELETE FROM reviews WHERE product_id = %s"), (product_id,))
+    # Отзывы о модели переживают снятие с точки: человек оценивал вещь, а не
+    # факт её наличия в Турове. Раньше товар уносил с собой чужие слова —
+    # вернул модель на точку через месяц, а отзывов уже нет.
+    cur.execute(_q("DELETE FROM reviews WHERE product_id = %s AND model_id IS NULL"), (product_id,))
     conn.commit()
     conn.close()
 

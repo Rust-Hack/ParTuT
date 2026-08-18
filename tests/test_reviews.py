@@ -19,6 +19,7 @@ def _clean():
     cur.execute("DELETE FROM reviews")
     cur.execute("DELETE FROM orders")
     cur.execute("DELETE FROM products")
+    cur.execute("DELETE FROM models")
     conn.commit(); conn.close()
     server._cache_bust()
 
@@ -179,12 +180,71 @@ def run():
       client.post("/api/admin/review/reply", json={"initData": "x", "id": rid2, "text": "я тут главный"}).status_code == 403)
     as_admin()
 
-    # --- Товар удалён — отзывы уходят с ним ---
+    # --- Товар без модели удалён: его отзывы уже никому не показать ---
     db.delete_product(pid)
     c2("висячих отзывов не осталось", db.list_reviews(pid, "approved") == [] and db.count_pending_reviews() == 0)
 
+    c4 = run_model_reviews()
+
     _clean()
-    return c.fails + c2.fails + c3.fails
+    return c.fails + c2.fails + c3.fails + c4
+
+
+def run_model_reviews():
+    """Оценивают вещь, а не её наличие в конкретном городе.
+
+    Пока отзыв висел на товаре, один и тот же Elf Bar в Минске и Турове копил
+    оценки раздельно: покупатель второй точки видел «отзывов пока нет» у
+    модели, которую в первой оценили дюжину раз. А снятие товара с точки
+    стирало чужие слова навсегда.
+    """
+    c = Checker("Отзыв принадлежит модели")
+    _clean()
+    as_admin()
+
+    mid = db.add_model("liquid", "Husky", brand="Husky")
+    minsk = db.add_product_from_model(mid, "Минск", 20.0, stock=5)
+    turov = db.add_product_from_model(mid, "Туров", 22.0, stock=5)
+
+    as_user(BUYER, username="vasya")
+    _buy(BUYER, minsk, "Husky")
+    rid = client.post("/api/review", json={"initData": "x", "product_id": minsk,
+                                           "rating": 5, "text": "Отличная"}).get_json()["id"]
+    as_admin()
+    client.post("/api/admin/review/decide", json={"initData": "x", "id": rid, "ok": True})
+
+    c("оценка видна на точке, где купили", _product(minsk)["rating"]["count"] == 1)
+    c("и на другой точке тоже", _product(turov)["rating"]["count"] == 1)
+    c("средняя одна и та же", _product(turov)["rating"]["avg"] == 5)
+    c("текст отзыва читается с обеих точек",
+      client.get(f"/api/reviews?product_id={turov}").get_json()["reviews"][0]["text"] == "Отличная")
+
+    # Тот же человек покупает ту же модель на второй точке.
+    as_user(BUYER, username="vasya")
+    _buy(BUYER, turov, "Husky")
+    can = client.post("/api/my-reviews", json={"initData": "x"}).get_json()["can"]
+    c("второй раз ту же модель оценить не предлагают", all(p["id"] != turov for p in can))
+    c("и попытка отклоняется",
+      client.post("/api/review", json={"initData": "x", "product_id": turov, "rating": 1}).status_code == 403)
+
+    # --- Снятие с точки не стирает отзывы ---
+    as_admin()
+    db.delete_product(minsk)
+    server._cache_bust()
+    c("отзыв пережил снятие товара с точки",
+      len(client.get(f"/api/reviews?product_id={turov}").get_json()["reviews"]) == 1)
+    c("и оценка на оставшейся точке цела", _product(turov)["rating"]["count"] == 1)
+    c("в очереди админа отзыв не потерял имя",
+      db.admin_reviews("all")[0]["product_name"] == "Husky")
+
+    # --- Разные модели не смешиваются ---
+    other = db.add_model("liquid", "Другая", brand="Husky")
+    op = db.add_product_from_model(other, "Минск", 15.0, stock=3)
+    server._cache_bust()
+    c("у чужой модели своя оценка", _product(op)["rating"] == {"avg": 0, "count": 0})
+
+    _clean()
+    return c.fails
 
 
 if __name__ == "__main__":
