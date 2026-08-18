@@ -1069,6 +1069,7 @@
       <div class="dnote" style="margin:8px 0 0">Человек узнаёт свой ID командой <b>/myid</b> боту — пусть пришлёт его вам.</div>
       <label>Точка продаж</label>
       <select id="stCity"></select>
+      <div class="dnote" style="margin:6px 0 0">Продавец видит и правит только свою точку: её заказы, склад и цены. Ассортимент, настройки, деньги и статистика — у владельцев. «Все точки» — тот же продавец, только по всем городам сразу.</div>
       <label>Подпись (для вас)</label>
       <input id="stNote" placeholder="@username или имя">
       <button class="bigbtn" id="stAdd" style="margin-top:14px">Выдать доступ</button>
@@ -1424,6 +1425,7 @@
       <button class="closebtn" style="width:auto;padding:8px 12px" id="ordersClose">Закрыть</button></div>
     <input id="ordersSearch" class="admsearch" placeholder="🔍 Поиск: № заказа, имя или id клиента" style="margin-bottom:10px">
     <div class="ochips" id="ordersFilter"></div>
+    <div class="ochips" id="ordersCityFilter"></div>
     <div id="ordersList"></div>
   </div>
 
@@ -4946,7 +4948,7 @@
     async function openStaff() {
       $("staffView").classList.add("show");
       $("stId").value = ""; $("stNote").value = "";
-      $("stCity").innerHTML = `<option value="">Все точки (полный доступ)</option>` +
+      $("stCity").innerHTML = `<option value="">Все точки</option>` +
         locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
       await loadStaff();
     }
@@ -4966,10 +4968,16 @@
       const rows = list.map(s => {
         // Без подписи заголовком служит сам ID — тогда во второй строке его
         // повторять незачем, там остаётся только точка.
-        const where = s.city ? esc(s.city) : "все точки";
+        // У владельца город НЕ ограничивает права — он только направляет
+        // уведомления о заказах. Без этой подписи выглядит как понижение.
+        const where = s.is_super
+          ? (s.city ? `весь магазин · заказы точки ${esc(s.city)}` : "весь магазин")
+          : (s.city ? `точка ${esc(s.city)}` : "все точки");
         const who = s.note ? esc(s.note) : `ID ${s.user_id}`;
         const sub = s.note ? `ID ${s.user_id} · ${where}` : where;
-        const tags = s.is_super ? `<span class="tagbadge">владелец · снять нельзя</span>` : "";
+        const tags = s.is_super
+          ? `<span class="tagbadge">владелец · снять нельзя</span>`
+          : `<span class="tagbadge">продавец</span>`;
         const del = s.can_remove ? `<button class="delx" data-stdel="${s.user_id}">Убрать</button>` : "";
         return `<div class="urow"><div><div><b>${who}</b></div>
           <small style="color:var(--hint)">${sub}</small>
@@ -5150,7 +5158,7 @@
     }
 
     // ============ Заказы (управление продавцом) ============
-    let adminOrders = [], ordersStatusFilter = "active", ordersSearch = "";
+    let adminOrders = [], ordersStatusFilter = "active", ordersSearch = "", ordersCityFilter = "all";
     const OSTATUS = {
       new:       { label: "Ждёт чек",            cls: "new" },
       paid:      { label: "Ждёт подтверждения",  cls: "paid" },
@@ -5183,9 +5191,20 @@
         `<button class="ochip ${ordersStatusFilter === k ? 'active' : ''}" data-of="${k}">${name}</button>`).join("");
       $("ordersFilter").querySelectorAll("[data-of]").forEach(b =>
         b.onclick = () => { ordersStatusFilter = b.dataset.of; renderOrdersFilter(); renderOrders(); });
+      // Владелец видит заказы всех точек — но сам обычно стоит на одной.
+      // Продавцу точки чипы не нужны: у него в списке и так только его город.
+      const cities = [...new Set(adminOrders.map(o => o.city))];
+      const box = $("ordersCityFilter");
+      if (!box) return;
+      if (cities.length < 2) { box.innerHTML = ""; return; }
+      box.innerHTML = [["all", "Все точки"], ...cities.map(c => [c, c])].map(([k, name]) =>
+        `<button class="ochip ${ordersCityFilter === k ? 'active' : ''}" data-ocity="${esc(k)}">${esc(name)}</button>`).join("");
+      box.querySelectorAll("[data-ocity]").forEach(b =>
+        b.onclick = () => { ordersCityFilter = b.dataset.ocity; renderOrdersFilter(); renderOrders(); });
     }
 
     function orderMatchesFilter(o) {
+      if (ordersCityFilter !== "all" && o.city !== ordersCityFilter) return false;
       const f = ordersStatusFilter;
       if (f === "all") return true;
       if (f === "active") return ["new", "paid", "confirmed"].includes(o.status);
