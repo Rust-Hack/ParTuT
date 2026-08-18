@@ -1503,6 +1503,36 @@ def _sold_out_message(gone, short):
     return (". ".join(parts) + ". " + tail) if parts else tail
 
 
+def _order_reply(order):
+    """Ответ по заказу, который уже создан: повтор оформления должен привести
+    человека ровно туда же — на экран оплаты или на «заказ принят»."""
+    coins_used = int(order["coins_used"] or 0)
+    discount = round(coins_used * COIN_VALUE, 2)
+    fee = float(order["delivery_fee"] or 0)
+    promo_off = float(order["promo_discount"] or 0)
+    total = float(order["total"] or 0)
+    # Обратный счёт от итога. Он неточен ровно в одном случае — когда скидка
+    # перекрыла стоимость товаров целиком и итог упёрся в ноль; там это число
+    # нужно только для показа.
+    subtotal = round(max(0.0, total - fee) + discount + promo_off, 2)
+    return {
+        "ok": True,
+        "order_id": int(order["id"]),
+        "total": total,
+        "subtotal": subtotal,
+        "fee": fee,
+        "coins_used": coins_used,
+        "discount": discount,
+        "delivery_method": order["delivery_method"] or "",
+        "delivery_address": order["delivery_address"] or "",
+        "payment_method": order["payment_method"] or "",
+        "needs_receipt": (order["payment_method"] == "card") and not order["receipt_file_id"],
+        "payment_info": _payment_info(),
+        "confirm_minutes": _confirm_minutes(),
+        "repeat": True,
+    }
+
+
 @app.route("/api/order", methods=["POST"])
 def api_order():
     data = request.get_json(force=True, silent=True) or {}
@@ -1512,6 +1542,15 @@ def api_order():
 
     user_id = int(user["id"])
     username = user.get("username") or user.get("first_name") or str(user_id)
+
+    # Тот же заказ, отправленный второй раз. Проверяем ДО всего остального:
+    # первая отправка уже сняла товар со склада, и обычная проверка наличия
+    # ответила бы «разобрали» на собственный же заказ человека.
+    client_token = _text(data.get("client_token"), 64)
+    if client_token:
+        prev = db.find_order_by_token(user_id, client_token)
+        if prev:
+            return jsonify(_order_reply(prev))
 
     # Разбираем корзину клиента (id + количество), чтобы одним запросом взять товары.
     raw_items = []
@@ -1660,12 +1699,12 @@ def api_order():
 
     # Заказ, монеты и склад — одной транзакцией (один commit вместо десятка).
     try:
-        order_id, coins_used, total = db.place_order(
+        order_id, coins_used, total, repeat = db.place_order(
             user_id, username, city, items, subtotal, fee, COIN_VALUE, spend,
             method["name"], address, payment,
             _text(data.get("comment")), phone,
             "new" if needs_receipt else "paid",
-            promo_code, promo_discount)
+            promo_code, promo_discount, client_token)
     except db.PromoGone as e:
         # Код разобрали, пока человек оформлял. Молча оформить без скидки нельзя:
         # он согласился на одну сумму, а заплатил бы другую.
@@ -1691,7 +1730,10 @@ def api_order():
     # Шлём ВСЕГДА, а не только когда чек не нужен: заказ картой раньше ждал чека,
     # и если клиент нажимал «оплачу позже» или просто закрывал приложение, продавец
     # не узнавал о заказе никогда. Чек придёт следом отдельным сообщением.
-    _bg(_notify_new_order, order_id, user_id)
+    # Повтор потерянного запроса: заказ уже был создан и продавец о нём знает.
+    # Второе уведомление означало бы для него второй заказ.
+    if not repeat:
+        _bg(_notify_new_order, order_id, user_id)
 
     return jsonify({
         "ok": True,

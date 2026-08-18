@@ -17,7 +17,8 @@ from _common import db, server, Checker
 # дообновление старой базы.
 LATE_COLUMNS = [("users", "username"), ("users", "first_name"), ("users", "no_reminders"),
                 ("users", "ref_activated"), ("products", "hidden"), ("reviews", "model_id"),
-                ("categories", "has_flavors"), ("orders", "promo_code"), ("orders", "phone")]
+                ("categories", "has_flavors"), ("orders", "promo_code"), ("orders", "phone"),
+                ("orders", "client_token")]
 LATE_TABLES = ["admin_log"]
 
 UID = 9001
@@ -82,6 +83,12 @@ def run():
     missing = [f"{t}.{col}" for t, col in LATE_COLUMNS if not _has_column(cur, t, col)]
     c2(f"все колонки вернулись{'' if not missing else ': нет ' + ', '.join(missing)}", not missing)
     c2("таблицы вернулись", all(_has_table(cur, t) for t in LATE_TABLES))
+
+    # Защита от двойного заказа держится на уникальном ключе, а не только на
+    # колонке: без ключа два одновременных запроса создадут два заказа, и
+    # заметно это будет только по жалобе покупателя.
+    cur.execute("SELECT 1 AS x FROM pg_indexes WHERE indexname = 'orders_client_token_uniq'")
+    c2("уникальный ключ против дублей заказа на месте", cur.fetchone() is not None)
 
     cur.execute("SELECT coins AS c FROM users WHERE user_id = %s", (UID,))
     row = cur.fetchone()

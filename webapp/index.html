@@ -3439,6 +3439,11 @@
       if ($("delSubmit")) $("delSubmit").onclick = doSubmitOrder;
     }
     let submitting = false;          // защита от второго нажатия, пока заказ оформляется
+    // Ключ попытки оформления. Кнопка блокируется, но это защита только внутри
+    // приложения: если ответ потеряется по дороге (метро, слабая связь), человек
+    // нажмёт снова — а заказ на сервере уже есть. По этому ключу сервер вернёт
+    // ТОТ ЖЕ заказ вместо второго. Живёт до успеха, потом сбрасывается.
+    let orderToken = "";
     async function doSubmitOrder() {
       if (submitting) return;
       const m = deliveryMethods[selMethod]; if (!m) return;
@@ -3450,12 +3455,13 @@
       // Окно НЕ закрываем сразу: пока ждём сервер, показываем это на кнопке,
       // иначе экран выглядит зависшим и хочется нажать ещё раз.
       submitting = true;
+      if (!orderToken) orderToken = "o" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
       const btn = $("delSubmit");
       const btnText = btn ? btn.textContent : "";
       if (btn) { btn.disabled = true; btn.textContent = "Оформляем…"; }
       try {
         const r = await fetch("/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-          initData, city, items, use_coins: useCoins,
+          initData, city, items, use_coins: useCoins, client_token: orderToken,
           delivery_method_id: m.id, delivery_address: selAddress.trim(),
           pickup_point_id: selPoint || undefined,
           promo_code: promoOff > 0 ? selPromo : undefined,
@@ -3487,6 +3493,7 @@
           alertMsg(errs[d.error] || "Ошибка оформления."); return;   // окно оставляем — можно поправить
         }
         closeOverlay($("deliveryOverlay"));
+        orderToken = "";                 // заказ есть — следующий будет новым
         currentOrder = d;
         if (d.coins_used) bonus.coins = Math.max(0, (bonus.coins || 0) - d.coins_used);
         useCoins = false;

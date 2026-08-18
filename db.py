@@ -642,6 +642,15 @@ def _ensure_order_columns():
         cur.execute("ALTER TABLE orders ADD COLUMN promo_code TEXT")    # каким кодом воспользовались
     if "promo_discount" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN promo_discount REAL DEFAULT 0")
+    if "client_token" not in cols:
+        # Ключ попытки оформления — против повторного заказа при потерянном ответе.
+        cur.execute("ALTER TABLE orders ADD COLUMN client_token TEXT")
+    # Последнее слово о дублях — за базой, а не за проверкой в коде: два запроса
+    # уходят одновременно, и оба успевают не найти прежний заказ. Ключ частичный:
+    # у всех прежних заказов client_token пуст, и мешать им он не должен.
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_client_token_uniq "
+                "ON orders (user_id, client_token) "
+                "WHERE client_token IS NOT NULL AND client_token <> ''")
     conn.commit()
     conn.close()
     _ensure_delivery_columns()
@@ -3582,9 +3591,32 @@ def _reserve_promo(cur, code, user_id):
             raise PromoGone("promo_used_up")
 
 
+# Сколько времени повтор оформления считается тем же самым заказом. Сутки — с
+# запасом: человек мог потерять связь, уйти в метро и вернуться к приложению.
+ORDER_TOKEN_HOURS = 24
+
+
+def find_order_by_token(user_id, token, hours=ORDER_TOKEN_HOURS):
+    """Заказ, оформленный этой же попыткой, или None.
+
+    Ключ ищется вместе с user_id: он приходит от клиента, и чужой заказ по нему
+    достаться не должен ни по ошибке, ни нарочно."""
+    if not token:
+        return None
+    cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM orders WHERE user_id = %s AND client_token = %s "
+                   "AND created_at >= %s ORDER BY id DESC LIMIT 1"),
+                (user_id, token, cutoff))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
 def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins_to_spend,
                 method_name, address, payment, comment, phone, status,
-                promo_code="", promo_discount=0.0):
+                promo_code="", promo_discount=0.0, client_token=""):
     """Создаёт заказ целиком за ОДНУ транзакцию: списывает монеты, вставляет заказ
     со всеми полями доставки, снимает остатки со склада (и по вкусам).
 
@@ -3592,8 +3624,15 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
     change_stock на каждую позицию + set_order_status — каждая со своим commit'ом.
     Теперь один commit: меньше поездок к базе и заказ не может «застрять» наполовину.
 
-    Возвращает (order_id, coins_used, total).
+    Возвращает (order_id, coins_used, total, повтор?). Последнее — правда, если
+    заказ уже был создан этой же попыткой и мы просто отдаём его снова.
     """
+    # Быстрый путь: человек нажал «Оформить», ответ не дошёл, он нажал снова.
+    if client_token:
+        prev = find_order_by_token(user_id, client_token)
+        if prev:
+            return int(prev["id"]), int(prev["coins_used"] or 0), float(prev["total"]), True
+
     created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
@@ -3624,12 +3663,13 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
             """INSERT INTO orders (user_id, username, city, items, total, pickup_time, status,
                                    created_at, coins_used, delivery_method, delivery_address,
                                    delivery_fee, payment_method, comment, phone,
-                                   promo_code, promo_discount)
-               VALUES (%s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                   promo_code, promo_discount, client_token)
+               VALUES (%s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (user_id, username, city, json.dumps(items, ensure_ascii=False), total, status,
              created_at, coins_used, method_name, address, float(fee or 0), payment,
              (comment or "").strip()[:500], (phone or "").strip()[:40],
-             (promo_code or "").strip().upper() or None, promo_off),
+             (promo_code or "").strip().upper() or None, promo_off,
+             (client_token or "").strip() or None),
         )
 
         # 3. Склад: у товаров со вкусами списываем вариант, у обычных — сам товар.
@@ -3661,13 +3701,20 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
     except Exception:
         conn.rollback()      # ничего не применилось: ни монеты, ни склад, ни заказ
         conn.close()
+        # Два одинаковых запроса ушли одновременно — так бывает при двойном
+        # нажатии на плохой связи. Уникальный ключ пропустил ровно один; второму
+        # отдаём тот же заказ, а не ошибку: человек оформлял один раз.
+        if client_token:
+            prev = find_order_by_token(user_id, client_token)
+            if prev:
+                return int(prev["id"]), int(prev["coins_used"] or 0), float(prev["total"]), True
         raise
     conn.close()
     # Списание монет за заказ — тоже движение, и в летописи ему место: иначе
     # «роздано» будет, а «на что потратили» — нет.
     if coins_used:
         log_coins(user_id, -coins_used, "order")
-    return order_id, coins_used, total
+    return order_id, coins_used, total, False
 
 
 def get_order(order_id):
