@@ -151,6 +151,24 @@ def run():
         c6("покупателя всё равно предупредили",
            any("компенсации" in str(x[1]) for x in SENT))
 
+        # --- Потолок виден и меняется в настройках ---
+        # Строка про потолок однажды уехала в экран бонусов ПОКУПАТЕЛЯ вместо
+        # настроек владельца: поле в настройках всегда пустовало, а число зря
+        # уходило всем клиентам. Ни один тест этого не заметил.
+        c65 = Checker("Потолок в настройках магазина")
+        as_admin(uid=ВЛАДЕЛЕЦ, username="хозяин", role="owner", city="")
+        st = client.post("/api/admin/settings", json={"initData": "x"}).get_json()["settings"]
+        c65("владелец видит текущий потолок", st.get("compensation_max") == 1000)
+        client.post("/api/admin/settings/update", json={"initData": "x", "compensation_max": 250})
+        st = client.post("/api/admin/settings", json={"initData": "x"}).get_json()["settings"]
+        c65("и может его изменить", st.get("compensation_max") == 250)
+        c65("настройка и правда применилась", db.compensation_max() == 250)
+
+        as_user(ПОКУПАТЕЛЬ, "покупатель")
+        b = client.post("/api/bonus", json={"initData": "x"}).get_json()
+        c65("покупателю потолок компенсаций не показывают", "compensation_max" not in b)
+        as_admin(uid=ПРОДАВЕЦ, username="продавец Турова", role="staff", city="Туров")
+
         # --- Ноль в настройке выключает компенсации ---
         c7 = Checker("Потолок ноль")
         db.set_setting("compensation_max", 0)
@@ -166,7 +184,8 @@ def run():
         as_admin()
         _clean()
 
-    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails + c7.fails
+    return (c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails
+            + c65.fails + c7.fails)
 
 
 if __name__ == "__main__":

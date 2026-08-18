@@ -824,20 +824,6 @@ def _ensure_raffle_columns():
     conn.close()
 
 
-def has_any_raffle():
-    """Был ли розыгрыш вообще. По этому флагу приложение показывает вкладку.
-
-    Отдельный вопрос, а не два запроса подряд: розыгрыш бывает либо идущим,
-    либо завершённым, значит «есть что показать» — это «есть хоть один».
-    А спрашивают об этом на каждом открытии приложения."""
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("SELECT 1 AS x FROM raffles LIMIT 1")
-    есть = cur.fetchone() is not None
-    conn.close()
-    return есть
-
-
 def recent_finished_raffle():
     """Последний завершённый розыгрыш — его итоги висят до следующего.
 
@@ -1469,20 +1455,84 @@ def is_age_ok(user_id):
     return bool(row and row["age_ok"] == 1)
 
 
-def ensure_user_get_age(user_id):
-    """Создаёт пользователя (если нет) и возвращает его 18+ — за одно подключение."""
+def get_me_bundle(user_id, limit=20):
+    """Всё, что нужно приложению при открытии, за ОДНО подключение.
+
+    Раньше эти же данные собирались девятью походами в базу через восемь
+    подключений: 18+, напоминания, телефон, точка — четыре отдельных чтения
+    ОДНОЙ И ТОЙ ЖЕ строки покупателя. Локально это незаметно, а база магазина
+    живёт по сети, и каждый поход — отдельный разговор с ней. Экран открытия
+    платит за это первым.
+
+    Тот же приём, что и в get_checkout_data: один поход за всем сразу.
+    """
     now = shop_now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     if USE_PG:
-        cur.execute("INSERT INTO users (user_id, created_at) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, now))
+        cur.execute("INSERT INTO users (user_id, created_at) VALUES (%s, %s) "
+                    "ON CONFLICT (user_id) DO NOTHING", (user_id, now))
     else:
-        cur.execute("INSERT OR IGNORE INTO users (user_id, created_at) VALUES (?, ?)", (user_id, now))
-    cur.execute(_q("SELECT age_ok FROM users WHERE user_id = %s"), (user_id,))
-    row = cur.fetchone()
+        cur.execute("INSERT OR IGNORE INTO users (user_id, created_at) VALUES (?, ?)",
+                    (user_id, now))
+
+    # Одна строка покупателя — одним чтением, а не четырьмя.
+    cur.execute(_q("SELECT age_ok, no_reminders, phone, pickup_point_id "
+                   "FROM users WHERE user_id = %s"), (user_id,))
+    u = cur.fetchone() or {}
+
+    cur.execute(_q("SELECT product_id FROM stock_alerts WHERE user_id = %s"), (user_id,))
+    alerts = [int(r["product_id"]) for r in cur.fetchall()]
+
+    cur.execute(_q("""SELECT delivery_method, delivery_address, phone
+                      FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT %s"""),
+                (user_id, limit))
+    заказы = cur.fetchall()
+
+    cur.execute("SELECT 1 AS x FROM raffles LIMIT 1")
+    raffle_on = cur.fetchone() is not None
+
     conn.commit()
     conn.close()
-    return bool(row and row["age_ok"] == 1)
+
+    # Телефон из настроек важнее: покупатель сам его туда вписал, а в старом
+    # заказе мог быть чужой или устаревший номер.
+    phone = (u["phone"] or "").strip() if u and u["phone"] else ""
+    addresses = {}
+    for r in заказы:                     # строки идут от новых к старым
+        if not phone and (r["phone"] or "").strip():
+            phone = r["phone"].strip()
+        method = (r["delivery_method"] or "").strip()
+        addr = (r["delivery_address"] or "").strip()
+        if method and addr and method not in addresses:
+            addresses[method] = addr
+
+    return {
+        "age_ok": bool(u and u["age_ok"] == 1),
+        "reminders_on": not bool(u and u["no_reminders"]),
+        "my_point": (int(u["pickup_point_id"]) if u and u["pickup_point_id"] else None),
+        "alerts": alerts,
+        "prefill": {"phone": phone, "addresses": addresses},
+        "raffle_on": raffle_on,
+    }
+
+
+def get_settings(keys, defaults=None):
+    """Несколько настроек одним запросом.
+
+    Экран настроек читал по одному ключу за раз — восемь походов в базу подряд
+    ради восьми строк из одной маленькой таблицы."""
+    keys = list(keys)
+    defaults = defaults or {}
+    if not keys:
+        return {}
+    conn = connect()
+    cur = conn.cursor()
+    marks = ",".join(["%s"] * len(keys))
+    cur.execute(_q(f"SELECT key, value FROM settings WHERE key IN ({marks})"), tuple(keys))
+    got = {r["key"]: r["value"] for r in cur.fetchall()}
+    conn.close()
+    return {k: (got[k] if got.get(k) is not None else defaults.get(k)) for k in keys}
 
 
 def set_age_ok(user_id):

@@ -626,7 +626,14 @@ def api_me():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    age_ok = db.ensure_user_get_age(uid)      # создать + узнать 18+ за одно подключение
+    # Всё, что нужно этому экрану, — одним походом в базу. Раньше их было девять
+    # через восемь подключений, и платил за это первый экран приложения.
+    try:
+        me = db.get_me_bundle(uid)
+    except Exception as e:
+        print(f"Не удалось собрать данные покупателя {uid}: {e}")
+        me = {"age_ok": False, "reminders_on": True, "my_point": None,
+              "alerts": [], "prefill": {"phone": "", "addresses": {}}, "raffle_on": False}
     # Запоминаем, как человека зовут. Telegram присылает имя при каждом открытии
     # приложения, а мы его нигде не сохраняли: в списке покупателей все, кто ещё
     # не сделал заказ, выглядели голым числом.
@@ -642,37 +649,18 @@ def api_me():
         except (TypeError, ValueError):
             print(f"[ref/miniapp] uid={uid} плохой start_param={start_param}")
 
-    try:
-        alerts = db.alerts_of_user(uid)   # чтобы витрина показала «вы уже ждёте»
-    except Exception as e:
-        alerts = []
-        print(f"Не удалось прочитать подписки покупателя {uid}: {e}")
-    try:
-        reminders_on = not db.get_no_reminders(uid)
-    except Exception as e:
-        reminders_on = True
-        print(f"Не удалось прочитать настройку напоминаний {uid}: {e}")
-    try:
-        prefill = db.delivery_prefill(uid)   # адрес и телефон из прошлых заказов
-    except Exception as e:
-        prefill = {"phone": "", "addresses": {}}
-        print(f"Не удалось собрать данные для подстановки {uid}: {e}")
-    try:
-        my_point = db.get_user_point(uid)
-    except Exception:
-        my_point = None
-    return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid),
-                    "is_super": is_super_admin(uid), "alerts": alerts,
+    return jsonify({"ok": True, "age_ok": me["age_ok"], "is_admin": is_admin(uid),
+                    "is_super": is_super_admin(uid), "alerts": me["alerts"],
                     # Роль и точка: приложение прячет по ним то, что сервер всё
                     # равно вернёт с 403. Пустой город у продавца — все точки.
                     "role": admin_role(uid),
                     "admin_city": admin_city(uid) if is_admin(uid) else "",
-                    "reminders_on": reminders_on, "prefill": prefill,
+                    "reminders_on": me["reminders_on"], "prefill": me["prefill"],
                     # Идёт ли розыгрыш. Приложение прячет по этому флагу целую
                     # вкладку: показывать «Розыгрыши» там, где ничего не
                     # разыгрывают, — обещание, которого магазин не давал.
-                    "raffle_on": db.has_any_raffle(),
-                    "my_point": my_point})
+                    "raffle_on": me["raffle_on"],
+                    "my_point": me["my_point"]})
 
 
 @app.route("/api/age", methods=["POST"])
@@ -1953,7 +1941,6 @@ def api_bonus():
                     "referrals_list": st["referrals_list"],
                     "ref_link": link,
                     "referral_bonus": db.referral_bonus(),
-        "compensation_max": db.compensation_max(),
                     "coin_value": COIN_VALUE})
 
 
@@ -3381,23 +3368,45 @@ def api_admin_raffle_draw():
 
 # ------------------- Настройки магазина -------------------
 
+def _num(value, default, целое=False):
+    """Число из настройки. Настройки хранятся строками, и мусор в них не должен
+    ронять целый экран — возвращаем то, что задумано по умолчанию."""
+    if value is None or value == "":
+        return default
+    try:
+        n = float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return default
+    return int(n) if целое else n
+
+
 @app.route("/api/admin/settings", methods=["POST"])
 def api_admin_settings():
     """Текущие настройки магазина для админ-панели."""
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
+    # Все настройки — одним запросом. По одному ключу за раз это было восемь
+    # походов в базу подряд ради восьми строк из одной маленькой таблицы.
+    з = db.get_settings(
+        ["payment_info", "confirm_minutes", "free_delivery_from", "remind_after_days",
+         "remind_daily_cap", "coins_per_byn", "wheel_step", "referral_bonus",
+         "compensation_max"])
     return jsonify({"ok": True, "settings": {
-        "payment_info": _payment_info(),
-        "confirm_minutes": _confirm_minutes(),
-        "free_delivery_from": db.get_setting("free_delivery_from", 0),
-        "remind_after_days": db.get_setting("remind_after_days", 21),
-        "remind_daily_cap": db.get_setting("remind_daily_cap", 20),
+        "payment_info": з["payment_info"] or "",
+        "confirm_minutes": _num(з["confirm_minutes"], CONFIRM_MINUTES, целое=True),
+        "free_delivery_from": _num(з["free_delivery_from"], 0),
+        "remind_after_days": _num(з["remind_after_days"], 21, целое=True),
+        "remind_daily_cap": _num(з["remind_daily_cap"], 20, целое=True),
         # Щедрость программы лояльности. Раньше эти числа жили в коде, и любая
         # правка требовала выкладки новой версии.
-        "coins_per_byn": db.coins_per_byn(),
-        "wheel_step": db.wheel_step(),
-        "referral_bonus": db.referral_bonus(),
+        "coins_per_byn": _num(з["coins_per_byn"], 1.0),
+        "wheel_step": _num(з["wheel_step"], db.WHEEL_STEP_DEFAULT),
+        "referral_bonus": _num(з["referral_bonus"], db.REFERRAL_BONUS, целое=True),
+        # Потолок компенсации: сколько монет продавец может начислить покупателю
+        # за раз. Раньше эта строка по ошибке стояла в экране бонусов покупателя,
+        # а здесь её не было вовсе — поле в настройках всегда пустовало.
+        "compensation_max": _num(з["compensation_max"], db.COMPENSATION_MAX_DEFAULT, целое=True),
         "coin_value": COIN_VALUE,          # только для показа: менять нельзя, см. ниже
     }})
 
