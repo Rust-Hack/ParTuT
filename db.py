@@ -3302,6 +3302,93 @@ def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
     return order
 
 
+ORDER_EDITABLE = ("new", "paid", "confirmed")     # до выдачи заказ ещё можно поправить
+
+
+def update_order_items(order_id, quantities, coin_value):
+    """Продавец меняет количества в заказе. Возвращает (order, changes) или (None, ошибка).
+
+    Раньше у продавца было три кнопки: подтвердить, выдать, отклонить. Клиент
+    просит «одну вместо двух» или «добавьте ещё» — и единственным ходом было
+    отклонить заказ целиком и просить оформить заново, потеряв и заказ, и время.
+
+    Считается одной транзакцией, как и оформление: остаток и сумма не должны
+    разъехаться, если что-то упадёт посередине.
+    """
+    conn = connect()
+    cur = conn.cursor()
+    try:
+        cur.execute(_q("SELECT * FROM orders WHERE id = %s"), (order_id,))
+        o = cur.fetchone()
+        if not o:
+            return None, "not_found"
+        if o["status"] not in ORDER_EDITABLE:
+            return None, "closed"           # выданный или отменённый не правим
+        try:
+            items = json.loads(o["items"])
+        except (TypeError, ValueError):
+            return None, "bad_items"
+
+        changes = []
+        for idx, want in quantities.items():
+            if not (0 <= idx < len(items)):
+                return None, "bad_index"
+            it = items[idx]
+            was, now = int(it.get("qty", 0)), max(0, int(want))
+            if now == was:
+                continue
+            delta = now - was
+            pid, flavor = it.get("id"), it.get("flavor")
+            if delta > 0:                   # добавить можно только то, что есть на полке
+                if flavor:
+                    cur.execute(_q("SELECT stock FROM product_variants WHERE product_id = %s AND flavor = %s"),
+                                (pid, flavor))
+                else:
+                    cur.execute(_q("SELECT stock FROM products WHERE id = %s"), (pid,))
+                row = cur.fetchone()
+                have = int(row["stock"]) if row else 0
+                if have < delta:
+                    return None, f"no_stock:{it.get('name', '')}:{have}"
+            if flavor:
+                cur.execute(_q(f"UPDATE product_variants SET stock = {GREATEST}(0, stock - %s) "
+                               "WHERE product_id = %s AND flavor = %s"), (delta, pid, flavor))
+                cur.execute(_q("""UPDATE products SET stock =
+                                  (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                                  WHERE id = %s"""), (pid, pid))
+            else:
+                cur.execute(_q(f"UPDATE products SET stock = {GREATEST}(0, stock - %s) WHERE id = %s"),
+                            (delta, pid))
+            name = it.get("name", "") + (f" · {flavor}" if flavor else "")
+            changes.append(f"{name}: {was} → {now}" if now else f"{name}: убрано")
+            it["qty"] = now
+
+        if not changes:
+            return None, "no_changes"
+        items = [it for it in items if int(it.get("qty", 0)) > 0]
+        if not items:
+            return None, "empty"            # пустой заказ — это отмена, а не правка
+
+        subtotal = sum(float(it.get("price", 0)) * int(it.get("qty", 0)) for it in items)
+        # Скидку монетами не трогаем: монеты уже списаны с баланса, и урезать её
+        # значило бы забрать их молча. Промокод ограничиваем новой суммой товаров,
+        # иначе после урезания заказа он ушёл бы в минус.
+        promo_off = round(min(float(o["promo_discount"] or 0), subtotal), 2)
+        discount = round(int(o["coins_used"] or 0) * coin_value, 2)
+        fee = float(o["delivery_fee"] or 0)
+        total = round(max(0.0, subtotal - discount - promo_off) + fee, 2)
+
+        cur.execute(_q("UPDATE orders SET items = %s, total = %s, promo_discount = %s WHERE id = %s"),
+                    (json.dumps(items, ensure_ascii=False), total, promo_off, order_id))
+        conn.commit()
+        cur.execute(_q("SELECT * FROM orders WHERE id = %s"), (order_id,))
+        return cur.fetchone(), changes
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def stale_new_orders(hours=24):
     """Карточные заказы, застрявшие в 'new' (чек не загружен) дольше `hours` — на авто-отмену."""
     cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")

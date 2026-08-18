@@ -338,6 +338,7 @@ _WRITE_PATHS = {
     "/api/order": _STOCK_KEYS,                  # меняют остаток на складе
     "/api/order/cancel": _STOCK_KEYS,
     "/api/admin/order/status": _STOCK_KEYS,
+    "/api/admin/order/items": _STOCK_KEYS,      # правка количеств двигает склад
     # Подписка «сообщить о поступлении» меняет счётчик ждущих в карточке товара:
     # без сброса продавец до полуминуты видел бы старое число.
     "/api/notify-me": ("products",),
@@ -2328,6 +2329,9 @@ def _order_json(o):
         "comment": (o["comment"] or "") if "comment" in o.keys() else "",
         "phone": (o["phone"] or "") if "phone" in o.keys() else "",
         "receipt_url": (f"/api/photo?file_id={o['receipt_file_id']}" if o["receipt_file_id"] else None),
+        # Скидки — чтобы правка состава показывала ту же сумму, что посчитает сервер.
+        "promo_discount": round(o["promo_discount"] or 0, 2) if "promo_discount" in o.keys() else 0,
+        "coins_discount": round(int(o["coins_used"] or 0) * COIN_VALUE, 2) if "coins_used" in o.keys() else 0,
     }
 
 
@@ -2385,11 +2389,69 @@ def api_admin_order_status():
     elif action == "reject":
         if not db.cancel_order(oid, OPEN):          # атомарно: canceled + возврат склада/монет
             return jsonify({"ok": False, "error": "closed"}), 409
-        _bg(_notify_client, client_id, f"К сожалению, заказ #{oid} отклонён продавцом. "
-                                       "Если это ошибка — напишите нам, разберёмся.")
+        _bg(_notify_client, client_id, _reject_text(oid, data.get("reason"), data.get("note")))
     else:
         return jsonify({"ok": False, "error": "bad_action"}), 400
     return jsonify({"ok": True})
+
+
+# Одно «заказ отклонён» на все случаи читалось одинаково и когда товара не
+# оказалось, и когда не подошёл чек. Человек не понимает, что делать дальше,
+# и либо уходит, либо пишет в чат — а продавец отвечает то же самое руками.
+REJECT_REASONS = {
+    "out": ("товара не оказалось в наличии",
+            "Простите — товар разобрали раньше, чем мы успели отложить ваш. "
+            "Монеты и оплата возвращены. Напишем, когда привезём снова."),
+    "receipt": ("чек не подошёл",
+                "Оплата по чеку не нашлась. Проверьте, что перевод прошёл, и оформите заказ снова "
+                "— или пришлите чек нам в чат, разберёмся вместе."),
+    "client": ("клиент передумал", "Заказ отменён по вашей просьбе. Ждём вас снова 🌿"),
+    "duplicate": ("дубль заказа", "Это был повторный заказ — оставили один. Второй отменён."),
+}
+
+
+def _reject_text(oid, reason, note):
+    """Что придёт покупателю. Причина — из списка, чтобы формулировку не
+    сочиняли заново каждый раз, но приписку продавца тоже передаём."""
+    head = f"Заказ #{oid} отклонён."
+    body = REJECT_REASONS.get(reason, (None, None))[1] \
+        or "Если это ошибка — напишите нам, разберёмся."
+    tail = (note or "").strip()[:200]
+    return "\n\n".join(x for x in (head, body, tail) if x)
+
+
+@app.route("/api/admin/order/items", methods=["POST"])
+def api_admin_order_items():
+    """Продавец правит количества в заказе: «осталась одна» или «добавьте ещё»."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        oid = int(data.get("id"))
+        quantities = {int(k): int(v) for k, v in (data.get("qty") or {}).items()}
+    except (TypeError, ValueError, AttributeError):
+        return jsonify({"ok": False, "error": "bad_data"}), 400
+    order = db.get_order(oid)
+    if not order:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    deny = deny_city(admin, order["city"])
+    if deny:
+        return deny
+
+    updated, res = db.update_order_items(oid, quantities, COIN_VALUE)
+    if not updated:
+        err = str(res)
+        if err.startswith("no_stock:"):
+            _, name, have = err.split(":", 2)
+            return jsonify({"ok": False, "error": "no_stock", "name": name, "have": int(have)}), 400
+        code = 409 if err in ("closed",) else 400
+        return jsonify({"ok": False, "error": err}), code
+
+    lines = "\n".join(f"• {ch}" for ch in res)
+    _bg(_notify_client, int(updated["user_id"]),
+        f"Продавец изменил заказ #{oid}:\n{lines}\n\n💰 Итого: {updated['total']:.2f} Br")
+    return jsonify({"ok": True, "order": _order_json(updated), "changes": res})
 
 
 # ------------------- Статистика -------------------

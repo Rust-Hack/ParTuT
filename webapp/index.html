@@ -1377,6 +1377,33 @@
   </div>
 
   <!-- Заказы (управление продавцом) -->
+  <!-- Правка состава заказа продавцом -->
+  <div class="view ontop" id="oeditView">
+    <div class="viewhead"><h2>✏️ Состав заказа</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="oeditClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <div id="oeditTitle" style="font-weight:800;font-size:16px"></div>
+      <p style="color:var(--hint);font-size:13px;margin:4px 0 12px;text-align:left">Убавить можно всегда, прибавить — если товар есть на полке. Остаток и сумма пересчитаются сами, покупателю уйдёт сообщение с новым составом.</p>
+      <div id="oeditItems"></div>
+      <div class="ototal" style="margin-top:12px"><span>Итого станет</span><span id="oeditTotal">—</span></div>
+      <button class="bigbtn" id="oeditSave" style="margin-top:14px">Сохранить состав</button>
+    </div>
+  </div>
+
+  <!-- Причина отказа -->
+  <div class="view ontop" id="orejView">
+    <div class="viewhead"><h2>✖️ Отклонить</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="orejClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <div id="orejTitle" style="font-weight:800"></div>
+      <p style="color:var(--hint);font-size:13px;margin:4px 0 10px;text-align:left">Покупатель получит причину, а не сухое «отклонён»: иначе он не понимает, что делать дальше, и либо уходит, либо пишет в чат — а отвечать всё равно вам.</p>
+      <div id="orejReasons"></div>
+      <label style="margin-top:12px">Приписка (необязательно)</label>
+      <input id="orejNote" placeholder="Например: привезём в четверг">
+      <button class="bigbtn" id="orejGo" style="margin-top:14px;background:var(--danger)">Отклонить и вернуть товар</button>
+    </div>
+  </div>
+
   <div class="view" id="ordersView">
     <div class="viewhead"><h2>📦 Заказы</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="ordersClose">Закрыть</button></div>
@@ -5093,6 +5120,10 @@
         if (o.status === "paid") acts = `<button class="ok" data-oact="confirm" data-oid="${o.id}">✅ Подтвердить</button><button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отклонить</button>`;
         else if (o.status === "confirmed") acts = `<button class="issue" data-oact="issued" data-oid="${o.id}">📦 Выдан</button><button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отклонить</button>`;
         else if (o.status === "new") acts = `<button class="rej" data-oact="reject" data-oid="${o.id}">✖️ Отменить</button>`;
+        // Правка возможна, пока заказ не выдан: «осталась одна» и «добавьте ещё»
+        // — обычное дело у прилавка, а раньше на это был один ответ: отклонить.
+        const edit = ["new", "paid", "confirmed"].includes(o.status)
+          ? `<button class="omsg" data-oedit="${o.id}">✏️ Изменить состав</button>` : "";
         return `<div class="ocard">
           <div class="ocard-top">
             <div><div class="ocard-id">Заказ #${o.id}</div>
@@ -5102,17 +5133,110 @@
           ${deliv}${contact}
           <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} Br</span></div></div>
           ${receipt}
-          <div class="oacts">${acts}<button class="omsg" data-omsg="${o.user_id}" data-owho="${esc(who)}">✍️ Написать</button></div>
+          <div class="oacts">${acts}<button class="omsg" data-omsg="${o.user_id}" data-owho="${esc(who)}">✍️ Написать</button>${edit}</div>
         </div>`;
       }).join("");
       $("ordersList").querySelectorAll("[data-oact]").forEach(b => b.onclick = () => orderAction(+b.dataset.oid, b.dataset.oact));
       $("ordersList").querySelectorAll("[data-omsg]").forEach(b => b.onclick = () => openAdminMsg(+b.dataset.omsg, b.dataset.owho));
+      $("ordersList").querySelectorAll("[data-oedit]").forEach(b => b.onclick = () => openOrderEdit(+b.dataset.oedit));
     }
 
+    // ----- Правка состава заказа -----
+    let oeditOrder = null, oeditQty = {};
+    $("oeditClose").onclick = () => $("oeditView").classList.remove("show");
+
+    function openOrderEdit(id) {
+      oeditOrder = adminOrders.find(o => o.id === id);
+      if (!oeditOrder) return;
+      oeditQty = {};
+      (oeditOrder.items || []).forEach((it, i) => { oeditQty[i] = +it.qty; });
+      $("oeditTitle").textContent = `Заказ #${id} · ${oeditOrder.city}`;
+      renderOrderEdit();
+      $("oeditView").classList.add("show");
+    }
+
+    function renderOrderEdit() {
+      const items = oeditOrder.items || [];
+      $("oeditItems").innerHTML = items.map((it, i) => {
+        const q = oeditQty[i];
+        return `<div class="admrow">
+          <div class="an">${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""}
+            <small>${(+it.price).toFixed(2)} Br за шт${q !== +it.qty ? ` · было ${it.qty}` : ""}</small></div>
+          <button class="iconbtn" data-oq="-1" data-i="${i}">−</button>
+          <b style="min-width:22px;text-align:center">${q}</b>
+          <button class="iconbtn" data-oq="1" data-i="${i}">+</button></div>`;
+      }).join("");
+      // Считаем ту же сумму, что и сервер: товары минус скидки плюс доставка.
+      const subtotal = items.reduce((s, it, i) => s + (+it.price) * oeditQty[i], 0);
+      const off = Math.min(oeditOrder.promo_discount || 0, subtotal) + (oeditOrder.coins_discount || 0);
+      const total = Math.max(0, subtotal - off) + (oeditOrder.delivery_fee || 0);
+      $("oeditTotal").textContent = total.toFixed(2) + " Br";
+      $("oeditItems").querySelectorAll("[data-oq]").forEach(b => b.onclick = () => {
+        const i = +b.dataset.i;
+        oeditQty[i] = Math.max(0, oeditQty[i] + (+b.dataset.oq));
+        renderOrderEdit();
+      });
+    }
+
+    $("oeditSave").onclick = async () => {
+      const changed = Object.keys(oeditQty).some(i => oeditQty[i] !== +oeditOrder.items[i].qty);
+      if (!changed) { alertMsg("Ничего не изменилось."); return; }
+      if (!Object.values(oeditQty).some(q => q > 0)) {
+        alertMsg("Пустой заказ — это отмена. Закройте окно и нажмите «Отклонить»."); return;
+      }
+      $("oeditSave").disabled = true;
+      try {
+        const r = await fetch("/api/admin/order/items", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData, id: oeditOrder.id, qty: oeditQty }) });
+        const d = await r.json();
+        if (!d.ok) {
+          alertMsg(d.error === "no_stock" ? `На полке только ${d.have} шт: ${d.name}`
+                 : d.error === "closed" ? "Заказ уже закрыт — правка невозможна."
+                 : "Не получилось изменить заказ.");
+          return;
+        }
+        $("oeditView").classList.remove("show");
+        await loadAdminOrders();
+        await refreshProducts();
+        toast("Состав изменён, покупателю отправлено");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("oeditSave").disabled = false; }
+    };
+
+    // ----- Отказ с причиной -----
+    const REJECT_REASONS = [
+      ["out", "Товара не оказалось"], ["receipt", "Чек не подошёл"],
+      ["client", "Клиент передумал"], ["duplicate", "Дубль заказа"], ["", "Без причины"],
+    ];
+    let orejId = null, orejReason = "out";
+    $("orejClose").onclick = () => $("orejView").classList.remove("show");
+
+    function openOrderReject(id) {
+      orejId = id; orejReason = "out";
+      $("orejTitle").textContent = `Заказ #${id}`;
+      $("orejNote").value = "";
+      renderRejectReasons();
+      $("orejView").classList.add("show");
+    }
+    function renderRejectReasons() {
+      $("orejReasons").innerHTML = REJECT_REASONS.map(([k, n]) =>
+        `<button class="opt ${orejReason === k ? 'active' : ''}" data-rr="${k}">${n}</button>`).join("");
+      $("orejReasons").querySelectorAll("[data-rr]").forEach(b =>
+        b.onclick = () => { orejReason = b.dataset.rr; renderRejectReasons(); });
+    }
+    $("orejGo").onclick = async () => {
+      try {
+        await fetch("/api/admin/order/status", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData, id: orejId, action: "reject", reason: orejReason, note: $("orejNote").value }) });
+        $("orejView").classList.remove("show");
+        await loadAdminOrders();
+        await refreshProducts();
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    };
+
     async function orderAction(id, action) {
-      const ask = action === "reject" ? "Отклонить заказ и вернуть товар на склад?"
-                : action === "issued" ? "Отметить заказ выданным?"
-                : "Подтвердить заказ?";
+      if (action === "reject") { openOrderReject(id); return; }
+      const ask = action === "issued" ? "Отметить заказ выданным?" : "Подтвердить заказ?";
       const go = async () => {
         try {
           await fetch("/api/admin/order/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, action }) });
