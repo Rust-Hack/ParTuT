@@ -19,7 +19,7 @@ import threading
 import time
 import traceback
 
-from config import SUPER_ADMIN_IDS
+from config import DEV_IDS
 
 # Как часто можно повторять сообщение об ОДНОЙ И ТОЙ ЖЕ ошибке.
 COOLDOWN = int(os.environ.get("ERROR_COOLDOWN", "600"))     # 10 минут
@@ -77,7 +77,9 @@ def report(tg, where, exc, extra=""):
             lines.append(tail[-600:])       # хвост следа: где именно оборвалось
 
         text = "\n".join(lines)
-        for admin_id in SUPER_ADMIN_IDS:
+        # Сбои — разработчику. Владельцу магазина трассировка ничего не говорит,
+        # а поток технических сообщений заглушает то, что ему правда важно.
+        for admin_id in DEV_IDS:
             try:
                 tg.send_message(admin_id, text)
             except Exception as e:

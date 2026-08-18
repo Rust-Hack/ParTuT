@@ -976,7 +976,7 @@
     <div class="viewhead"><h2>⭐ Отзывы</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="reviewsClose">‹ Назад</button></div>
     <div class="card-block">
-      <p style="color:var(--hint);font-size:13px;margin:0 0 10px;text-align:left">Отзыв виден покупателям только после публикации. Скрывайте спам и оскорбления, а не низкие оценки: магазин, где все отзывы на пять, доверия не вызывает. На честную тройку лучше ответить — ответ виден под отзывом.</p>
+      <p style="color:var(--hint);font-size:13px;margin:0 0 10px;text-align:left" id="revNote">Отзыв виден покупателям только после публикации. Скрывайте спам и оскорбления, а не низкие оценки: магазин, где все отзывы на пять, доверия не вызывает. На честную тройку лучше ответить — ответ виден под отзывом.</p>
       <div class="ochips" id="revFilter" style="margin-bottom:10px"></div>
       <div id="reviewsList"></div>
     </div>
@@ -3497,9 +3497,14 @@
     // магазин целиком — ассортимент, бренды, категории, настройки, деньги, —
     // сервер ему всё равно вернёт 403, и показывать эти строки значит обещать
     // то, чего не будет.
+    // Две разные вещи, которые раньше решались одним признаком: РОЛЬ (что тебе
+    // вообще можно) и ТОЧКА (с чем именно ты работаешь). Продавец всех точек
+    // имеет пустой город — но владельцем от этого не становится.
     const myScope = () => (me && me.admin_city) || "";
+    const isOwner = () => !!me && (me.role === "owner" || me.role === "dev");
+
     function applyAdminScope() {
-      const shopWide = !myScope();
+      const shopWide = isOwner();
       // Ассортимент продавцу нужен: оттуда он завозит модель на свою точку.
       // Заводить и править модели там он не сможет — это прячется внутри.
       ["mBrands", "mCats", "gShop", "mStats", "mReferrals", "mPromos", "mRaffle",
@@ -3507,7 +3512,8 @@
         const el = $(id); if (el) el.style.display = shopWide ? "" : "none";
       });
       const head = document.querySelector("#adminView .viewhead h2");
-      if (head) head.textContent = shopWide ? "🛠 Управление" : `🛠 Управление · ${myScope()}`;
+      if (head) head.textContent = shopWide ? "🛠 Управление"
+        : `🛠 Управление · ${myScope() || "все точки"}`;
     }
 
     // Заказы и остаток — то, ради чего сюда заходят. Без счётчиков в оба раздела
@@ -3542,7 +3548,7 @@
           lab: `выдано сегодня${t.issued_today ? ` · ${t.issued_today} ${plural(t.issued_today, "заказ", "заказа", "заказов")}` : ""}`,
           cls: "calm",
           // Продавцу точки статистика магазина закрыта — ведём его в свои выданные.
-          go: () => { if (myScope()) { ordersStatusFilter = "issued"; openOrders(); } else openStats(); } },
+          go: () => { if (isOwner()) openStats(); else { ordersStatusFilter = "issued"; openOrders(); } } },
         { n: need, lab: t.out_stock ? `надо завезти · ${t.out_stock} кончилось` : "надо завезти",
           cls: need ? "warn" : "calm", go: () => { admStockFilter = "need"; openProducts(); } },
       ];
@@ -3639,7 +3645,7 @@
       // Продавец точки приходит сюда за одним — завезти модель к себе. Описание
       // модели общее для всех точек, поэтому форму и правку ему не показываем:
       // сервер их всё равно не примет.
-      if ($("mdFormSect")) $("mdFormSect").style.display = myScope() ? "none" : "";
+      if ($("mdFormSect")) $("mdFormSect").style.display = isOwner() ? "" : "none";
       $("mdCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
       await Promise.all([fetchModels(), fetchBrands(), fetchFlavors()]);
       resetModelForm();
@@ -3763,7 +3769,7 @@
           // Снята везде — значит «больше не возим». Остаток и отзывы при этом целы.
           const allOff = mine.length && mine.every(p => p.hidden);
           const off = allOff ? ` · <span style="color:var(--hint)">снята с витрины</span>` : "";
-          const own = myScope() ? "" :
+          const own = !isOwner() ? "" :
             `<button class="iconbtn" data-mdhide="${m.id}" data-on="${allOff ? 1 : 0}"
                      title="${allOff ? 'Вернуть на витрину везде' : 'Снять с витрины на всех точках'}">${allOff ? '👁' : '🚫'}</button>
              <button class="iconbtn" data-mdedit="${m.id}">✏️</button>
@@ -4694,6 +4700,12 @@
 
     async function openReviewsAdmin() {
       $("reviewsView").classList.add("show");
+      // Продавец отвечает покупателю, но публикует и удаляет владелец: отзыв
+      // виден на всех точках. Пишем это прямо, чтобы отсутствие кнопок не
+      // выглядело поломкой.
+      const note = $("revNote");
+      if (note && !isOwner()) note.textContent =
+        "Здесь вы отвечаете покупателям. Спокойный ответ на тройку убеждает нового покупателя сильнее, чем её отсутствие. Публикует и скрывает отзывы владелец.";
       await loadPendingReviews();
     }
     function renderRevFilter() {
@@ -4733,10 +4745,10 @@
         ${revReplying === v.id ? `<textarea class="admsearch rrtext" style="min-height:70px;margin-top:8px" placeholder="Ответ покупателю">${esc(v.reply || "")}</textarea>
           <div style="display:flex;gap:8px"><button class="unrefx" data-rsave="${v.id}">Сохранить ответ</button><button class="unrefx" data-rcancel="1">Отмена</button></div>` : `
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-          ${v.status !== "approved" ? `<button class="unrefx" data-rok="${v.id}">Опубликовать</button>` : ""}
-          ${v.status !== "hidden" ? `<button class="unrefx" data-rno="${v.id}">Скрыть</button>` : ""}
+          ${isOwner() && v.status !== "approved" ? `<button class="unrefx" data-rok="${v.id}">Опубликовать</button>` : ""}
+          ${isOwner() && v.status !== "hidden" ? `<button class="unrefx" data-rno="${v.id}">Скрыть</button>` : ""}
           <button class="unrefx" data-rrep="${v.id}">${v.reply ? "Изменить ответ" : "Ответить"}</button>
-          <button class="delx" data-rdel="${v.id}">Удалить</button>
+          ${isOwner() ? `<button class="delx" data-rdel="${v.id}">Удалить</button>` : ""}
         </div>`}</div>`).join("");
       $("reviewsList").querySelectorAll("[data-rok]").forEach(b => b.onclick = () => decideReview(+b.dataset.rok, true));
       $("reviewsList").querySelectorAll("[data-rno]").forEach(b => b.onclick = () => decideReview(+b.dataset.rno, false));

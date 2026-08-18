@@ -36,8 +36,8 @@ import db
 import errors
 import notifications
 from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CITY_ADMINS,
-                   CONFIRM_MINUTES, is_admin, is_super_admin, admin_city, admins_for_city,
-                   all_admin_ids, CITIES)
+                   CONFIRM_MINUTES, is_admin, is_super_admin, is_dev, is_owner,
+                   admin_city, admin_role, admins_for_city, all_admin_ids, CITIES)
 
 db.init_db()
 config.seed_admins_from_env()   # разовый перенос админов из окружения в базу
@@ -176,7 +176,8 @@ def get_admin(init_data):
     user = get_user(init_data)
     if not user or not user.get("id") or not is_admin(int(user["id"])):
         return None
-    user = dict(user, city=admin_city(int(user["id"])))
+    uid = int(user["id"])
+    user = dict(user, city=admin_city(uid), role=admin_role(uid))
     g.admin = user
     return user
 
@@ -185,21 +186,37 @@ def _admin_display(admin):
     return admin.get("username") or admin.get("first_name") or str(admin.get("id"))
 
 
-# Что общее для всего магазина: правит витрину и деньги сразу на всех точках,
-# поэтому продавцу одного города там делать нечего. Проверяется централизованно
-# в before_request — иначе о ней забудут на следующем же эндпоинте.
+# Что меняет магазин целиком: витрину всех точек, деньги, права, настройки.
+# Продавцу там делать нечего — даже тому, кто ведёт все точки сразу. Проверка
+# централизованная: раскидать её по шестидесяти маршрутам значит забыть в одном.
 _OWNER_ONLY = (
+    # каталог — общий для всех точек
     "/api/admin/model", "/api/admin/brand", "/api/admin/category",
+    "/api/admin/photo",                        # фото товара и галерея модели
+    # деньги покупателей
+    "/api/admin/grant", "/api/admin/coins/", "/api/admin/wheel/",
+    "/api/admin/promo", "/api/admin/raffle/update", "/api/admin/raffle/draw",
+    # люди
+    "/api/admin/users", "/api/admin/user/delete", "/api/admin/referral",
+    "/api/admin/staff/", "/api/admin/log",
+    # устройство магазина
     "/api/admin/location", "/api/admin/delivery", "/api/admin/point",
-    "/api/admin/settings/update", "/api/admin/promo", "/api/admin/raffle/update",
-    "/api/admin/raffle/draw", "/api/admin/staff/", "/api/admin/stats",
-    "/api/admin/user/delete", "/api/admin/log",
+    "/api/admin/settings/update", "/api/admin/stats",
+    # Отзыв виден на всех точках, поэтому публиковать и удалять — владельцу.
+    # Ответить продавец может: это его разговор с покупателем.
+    "/api/admin/review/decide", "/api/admin/review/delete",
 )
-# Читать разрешаем всем админам: продавцу надо видеть ассортимент, реквизиты
-# и промокоды, чтобы отвечать покупателю, — просто не менять их. Статистики в
-# этом списке нет намеренно: она про деньги всего магазина.
+# Ровно этот путь, без вложенных: /api/admin/product заводит товар мимо
+# ассортимента (владельцу), а /api/admin/product/update — это цена на точке
+# (продавцу), и по префиксу их не различить.
+_OWNER_ONLY_EXACT = {"/api/admin/product"}
+# Читать разрешаем всем: продавцу надо видеть ассортимент, реквизиты и
+# промокоды, чтобы отвечать покупателю, — просто не менять их. Статистики
+# и журнала здесь нет намеренно: это деньги и надзор всего магазина.
 _OWNER_ONLY_READS = {"/api/admin/models", "/api/admin/staff", "/api/admin/promos",
                      "/api/admin/raffle", "/api/admin/settings"}
+# Техническое: про программу, а не про магазин.
+_DEV_ONLY = ("/api/admin/stats/reset",)
 
 
 @app.before_request
@@ -207,21 +224,26 @@ def _guard_owner_only():
     path = request.path
     if not path.startswith("/api/admin/") or path in _OWNER_ONLY_READS:
         return None
-    if not any(path.startswith(p) for p in _OWNER_ONLY):
+    dev_only = path in _DEV_ONLY
+    if not dev_only and path not in _OWNER_ONLY_EXACT \
+            and not any(path.startswith(p) for p in _OWNER_ONLY):
         return None
     data = request.get_json(force=True, silent=True) or {}
     admin = get_admin(data.get("initData") or request.form.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    if admin.get("city"):
+    if dev_only and admin.get("role") != "dev":
+        return jsonify({"ok": False, "error": "dev_only",
+                        "message": "Техническое действие — только у разработчика."}), 403
+    if admin.get("role") not in ("dev", "owner"):
         return jsonify({"ok": False, "error": "owner_only",
                         "message": "Это меняет магазин целиком — только у владельца."}), 403
     return None
 
 
 def may_city(admin, city):
-    """Продавец города работает только со своим городом. Пустой город у админа —
-    полный доступ (владелец или админ над всеми точками)."""
+    """Продавец точки работает со своей точкой. Пустой город — продавец всех
+    точек (и владелец, у которого точки нет по определению)."""
     scope = (admin or {}).get("city") or ""
     return not scope or scope == city
 
@@ -379,7 +401,7 @@ _ADMIN_READS = {
     "/api/admin/requests", "/api/admin/reviews", "/api/admin/users", "/api/admin/customer",
     "/api/admin/orders", "/api/admin/stats", "/api/admin/stock/moves", "/api/admin/promos",
     "/api/admin/staff", "/api/admin/raffle", "/api/admin/settings", "/api/admin/models",
-    "/api/admin/referrals", "/api/admin/log", "/api/admin/products",
+    "/api/admin/referrals", "/api/admin/log", "/api/admin/products", "/api/admin/today",
 }
 
 # Поля запроса, которые стоит сохранить в журнале. Остальные — либо секреты
@@ -559,8 +581,9 @@ def api_me():
         my_point = None
     return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid),
                     "is_super": is_super_admin(uid), "alerts": alerts,
-                    # Город продавца: пустой — доступ ко всему магазину. Приложение
-                    # по нему прячет то, что всё равно вернёт 403.
+                    # Роль и точка: приложение прячет по ним то, что сервер всё
+                    # равно вернёт с 403. Пустой город у продавца — все точки.
+                    "role": admin_role(uid),
                     "admin_city": admin_city(uid) if is_admin(uid) else "",
                     "reminders_on": reminders_on, "prefill": prefill,
                     "my_point": my_point})
@@ -2587,12 +2610,19 @@ def api_admin_stock_move():
 @app.route("/api/admin/stock/moves", methods=["POST"])
 def api_admin_stock_moves():
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         pid = int(data.get("id")) if data.get("id") else None
     except (TypeError, ValueError):
         pid = None
+    if pid:
+        # История чужой точки — тоже чужая: по ней видно завоз, списания и
+        # закупочные цены соседей.
+        deny = deny_product(admin, pid)
+        if deny:
+            return deny
     moves = db.get_stock_moves(pid, 60)
     return jsonify({"ok": True, "moves": moves, "reasons": db.STOCK_REASONS})
 

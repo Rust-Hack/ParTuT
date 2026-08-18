@@ -84,9 +84,13 @@ def as_user(uid, username=None, first_name=None):
     server.get_user = lambda init: {"id": uid, "username": username, "first_name": first_name}
 
 
-def as_admin(uid=100, username="seller"):
-    """Админ-эндпоинты будут считать запрос от этого админа."""
-    server.get_admin = lambda init: {"id": uid, "username": username}
+def as_admin(uid=100, username="owner", role="owner", city=""):
+    """Админ-эндпоинты будут считать запрос от этого админа.
+
+    По умолчанию — владелец: большинство тестов проверяют операции магазина.
+    Роль обязана быть в заглушке, иначе проверка прав увидит админа без роли
+    и откажет — а тест решит, что сломалась сама операция."""
+    server.get_admin = lambda init: {"id": uid, "username": username, "role": role, "city": city}
 
 
 def deny_admin():
