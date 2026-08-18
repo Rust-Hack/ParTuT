@@ -1903,7 +1903,7 @@ def api_bonus():
                     "next_percent": next_pct,
                     "referrals_list": st["referrals_list"],
                     "ref_link": link,
-                    "referral_bonus": db.REFERRAL_BONUS,
+                    "referral_bonus": db.referral_bonus(),
                     "coin_value": COIN_VALUE})
 
 
@@ -2221,7 +2221,7 @@ def _draw_raffle(raffle):
         wid = uids[i]
         winners.append({"place": place, "user_id": wid, "prize": prize})
         if coins:
-            db.add_coins(wid, coins)
+            db.add_coins(wid, coins, "raffle")
         _notify_client(wid, f"🏆 Вы заняли {place} место в розыгрыше! Приз: {prize}. "
                             + ("Монеты начислены." if coins else "Продавец свяжется с вами."))
     db.finish_raffle(raffle["id"], winners)
@@ -2749,8 +2749,10 @@ def api_admin_order_status():
         # но НЕ 'new' (неоплаченный картой) — иначе кэшбэк без оплаты.
         if not db.set_order_status_if(oid, "issued", ["paid", "confirmed"]):   # применится один раз
             return jsonify({"ok": False, "error": "closed"}), 409
-        db.add_coins(client_id, int(_order_subtotal(order)) * COINS_PER_BYN)   # кэшбэк с товаров (без доставки)
-        db.add_wheel_progress(client_id, _order_item_count(order))   # прогресс колеса
+        db.add_coins(client_id, int(_order_subtotal(order) * db.coins_per_byn()), "cashback")
+        # Прогресс колеса — от потраченного на ТОВАРЫ (без доставки), как и кэшбэк:
+        # платить призами за дорогу магазину незачем.
+        db.add_wheel_progress(client_id, _order_subtotal(order))
         _reward_referrer(client_id, order["total"])   # % и бонус пригласившему
         _bg(_notify_client, client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
@@ -2853,6 +2855,15 @@ def api_admin_stats():
     stats["products_total"] = len(products)
     stats["games"] = db.get_game_stats()
     stats["period"] = period
+    try:
+        # Во что обходится лояльность: сколько монет роздали и сколько из них
+        # вернулось скидками. Считаем по летописи движений, а не по балансам —
+        # потраченного на балансах уже нет, и раздача выглядела бы меньше.
+        stats["coins"] = db.coin_flow(days)
+        stats["coin_value"] = COIN_VALUE
+    except Exception as e:
+        stats["coins"] = {"granted": 0, "spent": 0, "by_reason": []}
+        print(f"Не удалось посчитать движение монет: {e}")
     try:
         stats["losses"] = db.stock_losses(days)      # во сколько обошлись списания
     except Exception as e:
@@ -3209,6 +3220,12 @@ def api_admin_settings():
         "free_delivery_from": db.get_setting("free_delivery_from", 0),
         "remind_after_days": db.get_setting("remind_after_days", 21),
         "remind_daily_cap": db.get_setting("remind_daily_cap", 20),
+        # Щедрость программы лояльности. Раньше эти числа жили в коде, и любая
+        # правка требовала выкладки новой версии.
+        "coins_per_byn": db.coins_per_byn(),
+        "wheel_step": db.wheel_step(),
+        "referral_bonus": db.referral_bonus(),
+        "coin_value": COIN_VALUE,          # только для показа: менять нельзя, см. ниже
     }})
 
 
@@ -3240,6 +3257,29 @@ def api_admin_settings_update():
         try:
             # 0 — законное значение: так напоминания выключаются целиком.
             db.set_setting("remind_daily_cap", max(0, int(data.get("remind_daily_cap"))))
+        except (TypeError, ValueError):
+            pass
+    # --- Щедрость программы лояльности ---
+    # Границы стоят не «на всякий случай»: 100 монет = 1 Br, и лишний ноль в
+    # кэшбэке превращает 1% в 10% на каждом заказе. Цену монеты (COIN_VALUE)
+    # намеренно НЕ отдаём в настройки: она задним числом меняет стоимость всех
+    # уже накопленных балансов, а это не настройка, а переоценка обязательств.
+    if "coins_per_byn" in data:
+        try:
+            db.set_setting("coins_per_byn", min(10.0, max(0.0, float(
+                str(data.get("coins_per_byn") or 0).replace(",", ".")))))
+        except (TypeError, ValueError):
+            pass
+    if "wheel_step" in data:
+        try:
+            # Ноль означал бы прокрут за каждую покупку — держим нижнюю границу.
+            db.set_setting("wheel_step", min(100000.0, max(1.0, float(
+                str(data.get("wheel_step") or 0).replace(",", ".")))))
+        except (TypeError, ValueError):
+            pass
+    if "referral_bonus" in data:
+        try:
+            db.set_setting("referral_bonus", min(100000, max(0, int(data.get("referral_bonus")))))
         except (TypeError, ValueError):
             pass
     return jsonify({"ok": True})

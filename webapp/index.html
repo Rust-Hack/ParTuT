@@ -1254,6 +1254,21 @@
       <input id="setRemindCap" inputmode="numeric" placeholder="20">
       <div class="dnote" style="margin:6px 0 0">Потолок бережёт от веерной рассылки: в первый день просроченными окажутся сразу все давние покупатели. <b>0 — выключить напоминания совсем.</b></div>
 
+      <div style="border-top:1px solid var(--line);margin:24px 0 0"></div>
+      <div class="dnote" style="margin:14px 0 0"><b>Щедрость программы.</b> Ниже — сколько магазин отдаёт покупателям. Подсказки считают, во что это обходится в процентах от заказа: лишний ноль здесь стоит дороже всего остального на этом экране.</div>
+
+      <label style="margin-top:14px">Кэшбэк: монет за каждый Br заказа</label>
+      <input id="setCashback" inputmode="decimal" placeholder="1">
+      <div class="dnote" id="setCashbackNote" style="margin:6px 0 0"></div>
+
+      <label style="margin-top:14px">Прокрут колеса за каждые, Br</label>
+      <input id="setWheelStep" inputmode="decimal" placeholder="100">
+      <div class="dnote" id="setWheelNote" style="margin:6px 0 0"></div>
+
+      <label style="margin-top:14px">Бонус за первый заказ приглашённого, монет</label>
+      <input id="setRefBonus" inputmode="numeric" placeholder="50">
+      <div class="dnote" id="setRefNote" style="margin:6px 0 0"></div>
+
       <button class="bigbtn" id="setSave" style="margin-top:16px">Сохранить</button>
     </div>
   </div>
@@ -2477,7 +2492,7 @@
       } catch (e) {}
     }
     let bonusTab = "wheel", gameMode = "wheel";
-    let wheel = { sectors: [], spins: 0, progress: 0, step: 5 };
+    let wheel = { sectors: [], spins: 0, progress: 0, step: 100 };   // шаг в Br, приходит с сервера
     let slot = { bets: [2], balance: 0, symbols: [], lines: [] };
     let slotBet = parseInt(localStorage.getItem("slotBet") || "2", 10) || 2;   // текущая ставка
     let slotHistory = [];   // последние результаты слота (сессия): >0 выигрыш, 0 промах
@@ -3044,11 +3059,11 @@
         <!-- Прогресс на карточке: само колесо висит прямо на стене и это уместно,
              а мелкий текст поверх кладки читать труднее, чем на белом. -->
         <div class="gamecard">
-          <div class="wheel-prog-top"><span>Прогресс до прокрута</span><span>${wheel.progress}/${wheel.step}</span></div>
+          <div class="wheel-prog-top"><span>Прогресс до прокрута</span><span>${wheel.progress}/${wheel.step} ${CUR}</span></div>
           <div class="wheel-bar"><i style="width:${pct}%"></i></div>
-          <div class="wheel-hint" id="wheelHint" style="margin-bottom:0">${canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} товаров до прокрута`}</div>
+          <div class="wheel-hint" id="wheelHint" style="margin-bottom:0">${canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} ${CUR} покупок до прокрута`}</div>
         </div>
-        <button class="bigbtn" id="spinBtn" ${canSpin ? "" : "disabled"}>${canSpin ? "Крутить 🎡" : "Накопите товаров для прокрута"}</button>
+        <button class="bigbtn" id="spinBtn" ${canSpin ? "" : "disabled"}>${canSpin ? "Крутить 🎡" : "Накопите покупок для прокрута"}</button>
         ${(me && me.is_admin) ? `<button class="closebtn" id="grantSpin" style="margin-top:8px">🔧 +3 прокрута (тест)</button>` : ""}`;
       const we = $("wheelEl");                                 // фон задаём из JS (url с кавычками)
       we.style.backgroundImage = wheelBgImage;
@@ -3062,7 +3077,7 @@
       $("wheelInfo").onclick = () => showInfo("🎡 Колесо Фортуны", `
         <p>Крутите колесо и выигрывайте монеты 🪙.</p>
         <ul style="margin:8px 0;padding-left:18px;color:var(--text)">
-          <li><b>1 прокрут</b> — за каждые <b>${wheel.step} купленных товаров</b> (после выдачи заказа).</li>
+          <li><b>1 прокрут</b> — за каждые <b>${wheel.step} ${CUR}</b> покупок (считается после выдачи заказа).</li>
           <li>Призы: от <b>100</b> до <b>1000</b> монет, сектор <b>SUPER</b> — 2000.</li>
           <li>Монеты тратятся скидкой в корзине (100 монет = 1 Br) и на слот «Облако Монет».</li>
         </ul>`);
@@ -3078,7 +3093,7 @@
     function refreshWheelInfo() {
       const canSpin = wheel.spins > 0;
       if ($("wheelHead")) $("wheelHead").textContent = `🪙 ${bonus.coins || 0} монет`;
-      if ($("wheelHint")) $("wheelHint").textContent = canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} товаров до прокрута`;
+      if ($("wheelHint")) $("wheelHint").textContent = canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} Br покупок до прокрута`;
       const btn = $("spinBtn");
       if (btn) { btn.disabled = !canSpin || spinning; btn.textContent = canSpin ? "Крутить 🎡" : "Накопите товаров для прокрута"; }
       if ($("wheelHub")) $("wheelHub").classList.toggle("ready", canSpin && !spinning);
@@ -4481,9 +4496,14 @@
         </div>
         <div class="stathead">🪙 Монеты лояльности <span class="stathint">клиенты копят и тратят скидкой · 100 монет = 1 Br</span></div>
         <div class="statlist">
+          ${(s.coins && (s.coins.granted || s.coins.spent)) ? `
+            <div class="statrow"><span>Роздано · ${pl}</span><b>${s.coins.granted} 🪙 · ${money(s.coins.granted * (s.coin_value || 0.01))}</b></div>
+            <div class="statrow"><span>Вернулось скидками и ставками · ${pl}</span><b>${s.coins.spent} 🪙 · ${money(s.coins.spent * (s.coin_value || 0.01))}</b></div>
+            ${s.coins.by_reason.map(r => `<div class="statrow"><span style="padding-left:12px;color:var(--hint)">${esc(r.label)}</span><b>${r.granted ? `+${r.granted}` : ""}${r.granted && r.spent ? " / " : ""}${r.spent ? `−${r.spent}` : ""} 🪙</b></div>`).join("")}` : ""}
           <div class="statrow"><span>Накоплено у всех клиентов</span><b>${s.coins_circulation} 🪙</b></div>
           <div class="statrow"><span>Если все потратят — скидок на</span><b style="color:var(--warn)">${money(s.coins_circulation / 100)}</b></div>
         </div>
+        ${(s.coins && s.coins.granted) ? `<div class="dnote" style="margin:-6px 0 14px">«Роздано» — сколько магазин начислил за период; «вернулось» — сколько из этого уже потрачено покупателями. Разница оседает на балансах и будет предъявлена скидкой позже.</div>` : ""}
         <div class="stathead">🎮 Игры на монеты <span class="stathint">колесо (бесплатно за покупки) и слот (за монеты)</span></div>
         <div class="statlist">${gamesRows(s.games || {})}</div>
         <div class="stathead">📦 Склад <span class="stathint">пополни, чтобы не терять продажи</span></div>
@@ -4845,13 +4865,43 @@
           $("setFreeFrom").value = d.settings.free_delivery_from ?? "";
           $("setRemindDays").value = d.settings.remind_after_days ?? "";
           $("setRemindCap").value = d.settings.remind_daily_cap ?? "";
+          $("setCashback").value = d.settings.coins_per_byn ?? "";
+          $("setWheelStep").value = d.settings.wheel_step ?? "";
+          $("setRefBonus").value = d.settings.referral_bonus ?? "";
+          coinValue = d.settings.coin_value || 0.01;
+          renderGenerosity();
         }
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
+
+    // Цифры лояльности абстрактны сами по себе: «1 монета за Br» ничего не
+    // говорит, а «это 1% с каждого заказа» — говорит. Считаем прямо под полем,
+    // пока владелец печатает.
+    let coinValue = 0.01;
+    const WHEEL_AVG_PRIZE = 343;      // средний приз колеса в монетах
+    function renderGenerosity() {
+      const cb = parseFloat(($("setCashback").value || "0").replace(",", ".")) || 0;
+      $("setCashbackNote").innerHTML =
+        `Это <b>${(cb * coinValue * 100).toFixed(1)}%</b> от суммы заказа. Начисляется после выдачи, с товаров без доставки.`;
+      const step = parseFloat(($("setWheelStep").value || "0").replace(",", ".")) || 0;
+      const wheelPct = step > 0 ? (WHEEL_AVG_PRIZE * coinValue / step * 100) : 0;
+      $("setWheelNote").innerHTML = step > 0
+        ? `Средний приз — около ${WHEEL_AVG_PRIZE} монет (${(WHEEL_AVG_PRIZE * coinValue).toFixed(2)} Br), значит колесо отдаёт примерно <b>${wheelPct.toFixed(1)}%</b> с заказа. Чем меньше шаг, тем щедрее.`
+        : `Укажите сумму: прокрут даётся за потраченные Br, а не за штуки.`;
+      const rb = parseInt($("setRefBonus").value || "0", 10) || 0;
+      $("setRefNote").innerHTML =
+        `Разово <b>${(rb * coinValue).toFixed(2)} Br</b> пригласившему — за первый заказ друга. Дальше он получает процент с каждого заказа.`;
+    }
+    ["setCashback", "setWheelStep", "setRefBonus"].forEach(id => {
+      const el = $(id);
+      if (el) el.oninput = renderGenerosity;
+    });
     $("setSave").onclick = async () => {
       const body = { initData, payment_info: $("setPay").value, confirm_minutes: $("setConfirm").value,
                      free_delivery_from: $("setFreeFrom").value,
-                     remind_after_days: $("setRemindDays").value, remind_daily_cap: $("setRemindCap").value };
+                     remind_after_days: $("setRemindDays").value, remind_daily_cap: $("setRemindCap").value,
+                     coins_per_byn: $("setCashback").value, wheel_step: $("setWheelStep").value,
+                     referral_bonus: $("setRefBonus").value };
       $("setSave").disabled = true; $("setSave").textContent = "Сохраняю…";
       try {
         const r = await fetch("/api/admin/settings/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

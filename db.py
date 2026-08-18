@@ -341,6 +341,19 @@ def init_db():
         )
     """)
 
+    # Движение монет: кому, сколько и за что. Баланс отвечает «сколько сейчас»,
+    # а владельцу нужно «сколько раздали за месяц и откуда» — по остаткам это не
+    # посчитать, часть монет уже потрачена.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS coin_log (
+            id         {ID_COL},
+            user_id    BIGINT,
+            delta      INTEGER,
+            reason     TEXT,
+            created_at TEXT
+        )
+    """)
+
     # Сами картинки (товары, чеки). Telegram хранит их по file_id, но качать оттуда
     # долго — два запроса на каждое фото. Скачиваем ОДИН раз и держим тут, чтобы
     # перезапуск сервера не заставлял качать всё заново.
@@ -557,6 +570,33 @@ def _ensure_user_columns():
                    WHERE username IS NULL OR username = ''""")
     conn.commit()
     conn.close()
+    _migrate_wheel_progress_to_money()
+
+
+def _migrate_wheel_progress_to_money():
+    """Разовый перенос прогресса колеса со штук на рубли.
+
+    Прокрут раньше давали за 5 купленных штук, теперь — за потраченную сумму.
+    Накопленное людьми терять нельзя, поэтому пересчитываем в той же доле:
+    3 штуки из 5 — это 60% пути, значит 60 Br из 100. Отметку о переносе держим
+    в настройках, иначе при каждом запуске прогресс умножался бы снова.
+    """
+    try:
+        if get_setting("wheel_progress_in_money"):
+            return
+        factor = int(WHEEL_STEP_DEFAULT / WHEEL_ITEMS_STEP_OLD)   # 100 Br / 5 штук = 20
+        conn = connect()
+        cur = conn.cursor()
+        cur.execute(_q("UPDATE users SET wheel_progress = COALESCE(wheel_progress, 0) * %s "
+                       "WHERE COALESCE(wheel_progress, 0) > 0"), (factor,))
+        moved = cur.rowcount
+        conn.commit()
+        conn.close()
+        set_setting("wheel_progress_in_money", "1")
+        if moved:
+            print(f"Прогресс колеса переведён со штук на рубли: {moved} покупателей")
+    except Exception as e:
+        print(f"Не удалось перенести прогресс колеса: {e}")
 
 
 def remember_user_name(user_id, username="", first_name=""):
@@ -1254,7 +1294,42 @@ def get_user_row(user_id):
     return row
 
 
-def add_coins(user_id, n):
+# За что двигались монеты. Нужен, чтобы владелец видел не «баланс у всех вырос»,
+# а откуда именно берётся раздача и сколько она стоит.
+COIN_REASONS = {
+    "cashback":  "Кэшбэк с заказов",
+    "wheel":     "Колесо фортуны",
+    "slot":      "Слот «Облако Монет»",
+    "referral":  "Реферальная программа",
+    "raffle":    "Розыгрыш",
+    "admin":     "Правка вручную",
+    "refund":    "Возврат при отмене",
+    "order":     "Оплата заказа монетами",
+    "other":     "Прочее",
+}
+
+
+def log_coins(user_id, delta, reason="other"):
+    """Запись в летопись монет. Без неё «роздано за месяц» пришлось бы угадывать
+    по остаткам на балансах, а это неверно: часть монет уже потрачена."""
+    if not delta:
+        return
+    try:
+        conn = connect()
+        cur = conn.cursor()
+        cur.execute(_q("INSERT INTO coin_log (user_id, delta, reason, created_at) "
+                       "VALUES (%s, %s, %s, %s)"),
+                    (user_id, int(delta), reason if reason in COIN_REASONS else "other",
+                     _now_str()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        # Летопись — это отчётность, а не работа магазина: если запись не удалась,
+        # монеты всё равно должны начислиться.
+        print(f"Не удалось записать движение монет ({user_id}, {delta}, {reason}): {e}")
+
+
+def add_coins(user_id, n, reason="other"):
     """Меняет баланс на n (может быть отрицательным), не опускаясь ниже нуля."""
     ensure_user(user_id)
     conn = connect()
@@ -1263,6 +1338,7 @@ def add_coins(user_id, n):
                 (int(n), user_id))
     conn.commit()
     conn.close()
+    log_coins(user_id, n, reason)
 
 
 def get_coins(user_id):
@@ -1308,7 +1384,25 @@ def count_referrals(user_id):
 
 # --- Рефералы 2.0: активация, проценты, заработок ---
 
-REFERRAL_BONUS = 50                       # монет пригласившему за ПЕРВЫЙ заказ друга
+REFERRAL_BONUS = 50                       # монет пригласившему за ПЕРВЫЙ заказ друга (по умолчанию)
+
+
+def referral_bonus():
+    """Бонус за первый заказ друга. Владелец меняет его в настройках магазина."""
+    try:
+        v = int(float(get_setting("referral_bonus", REFERRAL_BONUS)))
+        return max(0, v)
+    except (TypeError, ValueError):
+        return REFERRAL_BONUS
+
+
+def coins_per_byn():
+    """Сколько монет начисляем за каждый Br выданного заказа (кэшбэк)."""
+    try:
+        v = float(get_setting("coins_per_byn", 1))
+        return max(0.0, v)
+    except (TypeError, ValueError):
+        return 1.0
 REFERRAL_TIERS = [(15, 5), (10, 4), (5, 3), (0, 2)]   # (мин. активных, процент)
 
 
@@ -1386,16 +1480,17 @@ def reward_referrer_for_order(buyer_id, order_total):
     first = not row["ref_activated"]
     earned = 0
     if pct_coins > 0:
-        add_coins(ref, pct_coins)
+        add_coins(ref, pct_coins, "referral")
         earned += pct_coins
     if first:
         set_ref_activated(buyer_id)
-        add_coins(ref, REFERRAL_BONUS)
-        earned += REFERRAL_BONUS
+        bonus = referral_bonus()
+        add_coins(ref, bonus, "referral")
+        earned += bonus
     if earned > 0:
         add_ref_earned(ref, earned)
     return {"referrer": ref, "percent": percent, "pct_coins": pct_coins,
-            "first": first, "bonus": REFERRAL_BONUS if first else 0, "earned": earned}
+            "first": first, "bonus": (referral_bonus() if first else 0), "earned": earned}
 
 
 def set_ref_activated(user_id):
@@ -1685,11 +1780,11 @@ def list_admin_requests(status="pending", limit=50):
 def execute_admin_request(action, payload):
     """Выполняет одобренную операцию. Возвращает dict-результат."""
     if action == "coins_adjust":
-        t = int(payload["user_id"]); add_coins(t, int(payload["delta"]))
+        t = int(payload["user_id"]); add_coins(t, int(payload["delta"]), "admin")
         return {"coins": get_coins(t)}
     if action == "grant":
         t = int(payload["user_id"]); ensure_user(t)
-        if int(payload.get("coins", 0)): add_coins(t, int(payload["coins"]))
+        if int(payload.get("coins", 0)): add_coins(t, int(payload["coins"]), "admin")
         if int(payload.get("spins", 0)): add_spins(t, int(payload["spins"]))
         return {"coins": get_coins(t), "spins": get_wheel(t)["spins"]}
     if action == "user_delete":
@@ -1704,7 +1799,21 @@ def execute_admin_request(action, payload):
     return {}
 
 
-WHEEL_STEP = 5   # сколько купленных товаров нужно на один прокрут колеса
+# Прокрут даётся за ПОТРАЧЕННЫЕ рубли, а не за штуки. Раньше считались штуки, и
+# раздача выходила тем щедрее, чем дешевле корзина: пять одноразок по 8 Br и пять
+# подов по 30 Br приносили один и тот же средний приз — 8.6% от заказа против
+# 2.3%. Магазин больше всего доплачивал тем, кто меньше всех тратит.
+WHEEL_STEP_DEFAULT = 100      # Br на один прокрут
+WHEEL_ITEMS_STEP_OLD = 5      # сколько штук требовалось раньше — нужно для переноса
+
+
+def wheel_step():
+    """Шаг колеса в Br. Владелец меняет его в настройках магазина."""
+    try:
+        v = float(get_setting("wheel_step", WHEEL_STEP_DEFAULT))
+        return v if v > 0 else WHEEL_STEP_DEFAULT
+    except (TypeError, ValueError):
+        return WHEEL_STEP_DEFAULT
 
 
 def get_wheel(user_id):
@@ -1712,18 +1821,22 @@ def get_wheel(user_id):
     return {
         "spins": (row["wheel_spins"] if row and row["wheel_spins"] else 0),
         "progress": (row["wheel_progress"] if row and row["wheel_progress"] else 0),
-        "step": WHEEL_STEP,
+        "step": wheel_step(),
     }
 
 
-def add_wheel_progress(user_id, n):
-    """Копит прогресс за купленные товары; каждые WHEEL_STEP превращает в прокрут."""
+def add_wheel_progress(user_id, amount):
+    """Копит прогресс на сумму заказа; каждый полный шаг превращается в прокрут."""
     ensure_user(user_id)
+    # Колонка целочисленная, поэтому копим целые рубли: копейки отбрасываются
+    # (меньше рубля с заказа при шаге в сотню — доли процента, зато не нужно
+    # менять тип колонки на живой базе).
+    step = int(wheel_step())
     row = get_user_row(user_id)
-    prog = (row["wheel_progress"] or 0) + int(n)
+    prog = (row["wheel_progress"] or 0) + int(amount or 0)
     spins = (row["wheel_spins"] or 0)
-    while prog >= WHEEL_STEP:
-        prog -= WHEEL_STEP
+    while prog >= step:
+        prog -= step
         spins += 1
     conn = connect()
     cur = conn.cursor()
@@ -1770,6 +1883,8 @@ def do_wheel_spin(user_id, prize_coins):
         row = cur.fetchone()
         conn.commit()
         conn.close()
+        if row:
+            log_coins(user_id, prize_coins, "wheel")
         return (row["coins"], row["wheel_spins"]) if row else None
     # SQLite. Условие — В САМОМ UPDATE, как и в ветке Postgres: раньше здесь
     # сначала читали остаток прокрутов, потом писали, и пять одновременных
@@ -1786,6 +1901,7 @@ def do_wheel_spin(user_id, prize_coins):
     cur.execute("SELECT COALESCE(coins,0) AS c, COALESCE(wheel_spins,0) AS s FROM users WHERE user_id = ?", (user_id,))
     r = cur.fetchone()
     conn.close()
+    log_coins(user_id, prize_coins, "wheel")
     return (r["c"], r["s"]) if r else None
 
 
@@ -1801,6 +1917,9 @@ def do_slot_spin(user_id, cost, prize_coins):
         row = cur.fetchone()
         conn.commit()
         conn.close()
+        if row:
+            log_coins(user_id, -cost, "slot")
+            log_coins(user_id, prize_coins, "slot")
         return row["coins"] if row else None
     # Та же история, что и у колеса: проверка баланса живёт внутри UPDATE,
     # иначе одновременные ставки списываются с устаревшего остатка.
@@ -1815,6 +1934,8 @@ def do_slot_spin(user_id, cost, prize_coins):
     cur.execute("SELECT COALESCE(coins,0) AS c FROM users WHERE user_id = ?", (user_id,))
     r = cur.fetchone()
     conn.close()
+    log_coins(user_id, -cost, "slot")
+    log_coins(user_id, prize_coins, "slot")
     return r["c"] if r else None
 
 
@@ -2595,6 +2716,34 @@ def clear_stock_alerts(product_id):
     cur.execute(_q("DELETE FROM stock_alerts WHERE product_id = %s"), (product_id,))
     conn.commit()
     conn.close()
+
+
+def coin_flow(days=None):
+    """Сколько монет роздано и списано за период, с разбивкой по причинам.
+
+    Считается по летописи, а не по балансам: розданное и уже потраченное на
+    балансах не видно вовсе, и раздача выглядела бы меньше, чем есть.
+    """
+    conn = connect()
+    cur = conn.cursor()
+    where, params = "", ()
+    if days:
+        cutoff = (datetime.datetime.now() - datetime.timedelta(days=int(days))).strftime("%Y-%m-%d %H:%M")
+        where, params = "WHERE created_at >= %s", (cutoff,)
+    cur.execute(_q(f"SELECT reason AS r, "
+                   f"COALESCE(SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END), 0) AS plus, "
+                   f"COALESCE(SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END), 0) AS minus "
+                   f"FROM coin_log {where} GROUP BY reason"), params)
+    rows = cur.fetchall()
+    conn.close()
+    granted = sum(int(r["plus"]) for r in rows)
+    spent = sum(int(r["minus"]) for r in rows)
+    by_reason = sorted(
+        ({"reason": r["r"] or "other",
+          "label": COIN_REASONS.get(r["r"] or "other", "Прочее"),
+          "granted": int(r["plus"]), "spent": int(r["minus"])} for r in rows),
+        key=lambda x: -(x["granted"] + x["spent"]))
+    return {"granted": granted, "spent": spent, "by_reason": by_reason}
 
 
 def stock_alert_counts():
@@ -3431,6 +3580,10 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
         conn.close()
         raise
     conn.close()
+    # Списание монет за заказ — тоже движение, и в летописи ему место: иначе
+    # «роздано» будет, а «на что потратили» — нет.
+    if coins_used:
+        log_coins(user_id, -coins_used, "order")
     return order_id, coins_used, total
 
 
@@ -3541,7 +3694,7 @@ def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
         return None
     restore_order_stock(order)
     if order["coins_used"]:
-        add_coins(order["user_id"], order["coins_used"])
+        add_coins(order["user_id"], order["coins_used"], "refund")
     return order
 
 
