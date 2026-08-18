@@ -2315,16 +2315,16 @@ def _raffle_results(raffle):
         winners = json.loads(raffle["winners"]) if raffle["winners"] else []
     except (TypeError, ValueError):
         winners = []
-    выигравшие = {int(w.get("user_id") or 0) for w in winners}
-    участники = [int(u) for u in db.get_raffle_user_ids(raffle["id"])]
+    winner_ids = {int(w.get("user_id") or 0) for w in winners}
+    entrants = [int(u) for u in db.get_raffle_user_ids(raffle["id"])]
     return {"title": raffle["title"] or "Розыгрыш",
             "finished_at": raffle["finished_at"] or raffle["ends_at"],
             "photo": raffle["photo"] or "",
             "winners": [{"place": w.get("place"), "who": _mask_id(w.get("user_id")),
                          "prize": w.get("prize") or ""} for w in winners],
             # Победители уже названы выше — в списке участников их не повторяем.
-            "participants": [_mask_id(u) for u in участники if u not in выигравшие],
-            "participants_count": len(участники)}
+            "participants": [_mask_id(u) for u in entrants if u not in winner_ids],
+            "participants_count": len(entrants)}
 
 
 def _raffle_public_from_state(st):
@@ -2360,10 +2360,10 @@ def api_raffle():
         # Розыгрыш не идёт. Но если он только что закончился, покажем итоги:
         # победителям бот написал лично, а остальные участники иначе не узнают
         # о розыгрыше вообще ничего.
-        прошлый = db.recent_finished_raffle()
-        if прошлый:
+        finished_raffle = db.recent_finished_raffle()
+        if finished_raffle:
             return jsonify({"ok": True, "raffle": None,
-                            "finished": _raffle_results(прошлый)})
+                            "finished": _raffle_results(finished_raffle)})
         return jsonify({"ok": False, "error": "no_raffle"}), 404
     return jsonify({"ok": True, "raffle": _raffle_public_from_state(st)})
 
@@ -3373,7 +3373,7 @@ def api_admin_raffle_draw():
 
 # ------------------- Настройки магазина -------------------
 
-def _num(value, default, целое=False):
+def _num(value, default, as_int=False):
     """Число из настройки. Настройки хранятся строками, и мусор в них не должен
     ронять целый экран — возвращаем то, что задумано по умолчанию."""
     if value is None or value == "":
@@ -3382,7 +3382,7 @@ def _num(value, default, целое=False):
         n = float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
-    return int(n) if целое else n
+    return int(n) if as_int else n
 
 
 @app.route("/api/admin/settings", methods=["POST"])
@@ -3397,7 +3397,7 @@ def api_admin_settings():
     # незаполненной настройке экран должен показывать то, чем магазин и живёт,
     # а не пустоту. Пустое поле владелец сохранит — и сотрёт реквизиты
     # по-настоящему.
-    з = db.get_settings(
+    opts = db.get_settings(
         ["payment_info", "confirm_minutes", "free_delivery_from", "remind_after_days",
          "remind_daily_cap", "coins_per_byn", "wheel_step", "referral_bonus",
          "compensation_max"],
@@ -3407,20 +3407,20 @@ def api_admin_settings():
          "referral_bonus": db.REFERRAL_BONUS,
          "compensation_max": db.COMPENSATION_MAX_DEFAULT})
     return jsonify({"ok": True, "settings": {
-        "payment_info": з["payment_info"] or "",
-        "confirm_minutes": _num(з["confirm_minutes"], CONFIRM_MINUTES, целое=True),
-        "free_delivery_from": _num(з["free_delivery_from"], 0),
-        "remind_after_days": _num(з["remind_after_days"], 21, целое=True),
-        "remind_daily_cap": _num(з["remind_daily_cap"], 20, целое=True),
+        "payment_info": opts["payment_info"] or "",
+        "confirm_minutes": _num(opts["confirm_minutes"], CONFIRM_MINUTES, as_int=True),
+        "free_delivery_from": _num(opts["free_delivery_from"], 0),
+        "remind_after_days": _num(opts["remind_after_days"], 21, as_int=True),
+        "remind_daily_cap": _num(opts["remind_daily_cap"], 20, as_int=True),
         # Щедрость программы лояльности. Раньше эти числа жили в коде, и любая
         # правка требовала выкладки новой версии.
-        "coins_per_byn": _num(з["coins_per_byn"], 1.0),
-        "wheel_step": _num(з["wheel_step"], db.WHEEL_STEP_DEFAULT),
-        "referral_bonus": _num(з["referral_bonus"], db.REFERRAL_BONUS, целое=True),
+        "coins_per_byn": _num(opts["coins_per_byn"], 1.0),
+        "wheel_step": _num(opts["wheel_step"], db.WHEEL_STEP_DEFAULT),
+        "referral_bonus": _num(opts["referral_bonus"], db.REFERRAL_BONUS, as_int=True),
         # Потолок компенсации: сколько монет продавец может начислить покупателю
         # за раз. Раньше эта строка по ошибке стояла в экране бонусов покупателя,
         # а здесь её не было вовсе — поле в настройках всегда пустовало.
-        "compensation_max": _num(з["compensation_max"], db.COMPENSATION_MAX_DEFAULT, целое=True),
+        "compensation_max": _num(opts["compensation_max"], db.COMPENSATION_MAX_DEFAULT, as_int=True),
         "coin_value": COIN_VALUE,          # только для показа: менять нельзя, см. ниже
     }})
 

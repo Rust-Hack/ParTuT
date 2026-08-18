@@ -761,14 +761,14 @@ def _shift_history_to_shop_time():
     # уже новым кодом, и трогать его нельзя. Это важно, если новый код успел
     # поработать до того, как дошли руки до истории: без границы свежие заказы
     # уехали бы на три часа вперёд.
-    граница = (shop_now() - datetime.timedelta(hours=SHOP_TZ_OFFSET)).strftime("%Y-%m-%d %H:%M")
-    сейчас = shop_now().strftime("%Y-%m-%d %H:%M")
+    cutoff = (shop_now() - datetime.timedelta(hours=SHOP_TZ_OFFSET)).strftime("%Y-%m-%d %H:%M")
+    now_at = shop_now().strftime("%Y-%m-%d %H:%M")
     # Времена в будущем (срок окончания розыгрыша) старым кодом тоже записаны, и
     # граница «отстаёт на три часа» про них ничего не говорит. Пропускаем ровно
     # то окно, где старое от нового не отличить: последние SHOP_TZ_OFFSET часов.
     conn = connect()
     cur = conn.cursor()
-    сдвинуто = 0
+    shifted = 0
     try:
         for table in _all_table_names(cur):
             if table == "settings":          # там даты-отметки, а не время событий
@@ -783,17 +783,17 @@ def _shift_history_to_shop_time():
                                 + make_interval(hours => %s), 'YYYY-MM-DD HH24:MI')
                             WHERE "{col}" ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}} [0-9]{{2}}:[0-9]{{2}}'
                               AND ("{col}" <= %s OR "{col}" > %s)""",
-                        (SHOP_TZ_OFFSET, граница, сейчас))
+                        (SHOP_TZ_OFFSET, cutoff, now_at))
                 else:
                     cur.execute(
                         f"""UPDATE {table} SET "{col}" = strftime('%Y-%m-%d %H:%M',
                                 datetime(substr("{col}", 1, 16), '+{SHOP_TZ_OFFSET} hours'))
                             WHERE "{col}" GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]*'
-                              AND ("{col}" <= ? OR "{col}" > ?)""", (граница, сейчас))
-                сдвинуто += max(0, cur.rowcount)
+                              AND ("{col}" <= ? OR "{col}" > ?)""", (cutoff, now_at))
+                shifted += max(0, cur.rowcount)
         conn.commit()
-        if сдвинуто:
-            print(f"История переведена на время магазина: записей {сдвинуто}")
+        if shifted:
+            print(f"История переведена на время магазина: записей {shifted}")
     except Exception as e:
         conn.rollback()
         # Не сдвинуть историю — неприятно, но терпимо: магазин работает дальше.
@@ -801,7 +801,7 @@ def _shift_history_to_shop_time():
         set_setting(_TZ_SHIFT_MARK, "")
         print(f"Не смог перевести историю на время магазина: {e}")
     conn.close()
-    return сдвинуто
+    return shifted
 
 
 def _ensure_raffle_columns():
@@ -1487,7 +1487,7 @@ def get_me_bundle(user_id, limit=20):
     cur.execute(_q("""SELECT delivery_method, delivery_address, phone
                       FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT %s"""),
                 (user_id, limit))
-    заказы = cur.fetchall()
+    past_orders = cur.fetchall()
 
     cur.execute("SELECT 1 AS x FROM raffles LIMIT 1")
     raffle_on = cur.fetchone() is not None
@@ -1499,7 +1499,7 @@ def get_me_bundle(user_id, limit=20):
     # заказе мог быть чужой или устаревший номер.
     phone = (u["phone"] or "").strip() if u and u["phone"] else ""
     addresses = {}
-    for r in заказы:                     # строки идут от новых к старым
+    for r in past_orders:                # строки идут от новых к старым
         if not phone and (r["phone"] or "").strip():
             phone = r["phone"].strip()
         method = (r["delivery_method"] or "").strip()

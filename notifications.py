@@ -113,9 +113,9 @@ def notify_compensation(bot, user_id, coins, order_id=None, reason=""):
     Молча менять человеку баланс нельзя: компенсация имеет смысл только если о
     ней узнали. Зовётся из обоих мест, где заявка может выполниться — из
     приложения и из чата."""
-    за_заказ = f" по заказу #{order_id}" if order_id else ""
-    почему = f"\nПричина: {reason}" if reason else ""
-    text = (f"🎁 Вам начислено {int(coins)} 🪙 в качестве компенсации{за_заказ}.{почему}\n"
+    about_order = f" по заказу #{order_id}" if order_id else ""
+    why = f"\nПричина: {reason}" if reason else ""
+    text = (f"🎁 Вам начислено {int(coins)} 🪙 в качестве компенсации{about_order}.{why}\n"
             "Монетами можно оплатить часть следующего заказа.")
     try:
         bot.send_message(user_id, text)
@@ -138,20 +138,20 @@ def draw_raffle(bot, raffle):
     # розыгрышах, начатых до него, дубли могли остаться.
     uids = list(dict.fromkeys(db.get_raffle_user_ids(raffle["id"])))
     random.shuffle(uids)
-    места = [(1, raffle["prize1"] or "Приз за 1 место", 0),
+    places = [(1, raffle["prize1"] or "Приз за 1 место", 0),
              (2, raffle["prize2"] or "Приз за 2 место", 0),
              (3, f"{raffle['prize3_coins']} монет", raffle["prize3_coins"])]
     winners = []
-    for i, (место, приз, монеты) in enumerate(места):
+    for i, (place, prize, coins) in enumerate(places):
         if i >= len(uids):
             break
         wid = uids[i]
-        winners.append({"place": место, "user_id": wid, "prize": приз})
-        if монеты:
-            db.add_coins(wid, монеты, "raffle")
+        winners.append({"place": place, "user_id": wid, "prize": prize})
+        if coins:
+            db.add_coins(wid, coins, "raffle")
         try:
-            bot.send_message(wid, f"🏆 Вы заняли {место} место в розыгрыше! Приз: {приз}. "
-                                  + ("Монеты начислены." if монеты else "Продавец свяжется с вами."))
+            bot.send_message(wid, f"🏆 Вы заняли {place} место в розыгрыше! Приз: {prize}. "
+                                  + ("Монеты начислены." if coins else "Продавец свяжется с вами."))
         except Exception as e:
             print(f"Не смог поздравить победителя {wid}: {e}")
     db.set_raffle_winners(raffle["id"], winners)

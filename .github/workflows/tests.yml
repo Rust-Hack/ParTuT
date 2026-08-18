@@ -1,0 +1,60 @@
+# Автопрогон тестов. Раньше проверки существовали, но запускал их человек —
+# а значит однажды не запустил бы. Теперь они идут сами на каждый пуш, в тех же
+# четырёх сочетаниях, что и вручную: две базы × два часовых пояса.
+#
+# Почему именно эти четыре. Магазин работает на Postgres, а тесты по умолчанию
+# на SQLite: диалекты расходятся, и целый класс ошибок вторая база не видит.
+# Сервер живёт по UTC, магазин — по Минску, и на этом расхождении заказ,
+# сделанный в час ночи, однажды записывался вчерашним.
+name: Тесты
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  проверки:
+    name: ${{ matrix.база }} · пояс ${{ matrix.пояс }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # падение одного сочетания не должно скрывать остальные
+      matrix:
+        база: [sqlite, postgres]
+        пояс: [UTC, Europe/Minsk]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: partut
+          POSTGRES_PASSWORD: partut
+          POSTGRES_DB: partut
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Поставить зависимости
+        run: pip install -r requirements.txt
+
+      - name: Прогнать проверки
+        env:
+          # Телеграм в тестах подменён заглушками, наружу ничего не уходит.
+          # Токен нужен только чтобы приложение вообще поднялось.
+          BOT_TOKEN: "000000:CI-DUMMY-NO-SEND"
+          ADMIN_IDS: "100"
+          TZ: ${{ matrix.пояс }}
+          TEST_DATABASE_URL: ${{ matrix.база == 'postgres' && 'postgresql://partut:partut@127.0.0.1:5432/partut' || '' }}
+        run: python tests/run_all.py

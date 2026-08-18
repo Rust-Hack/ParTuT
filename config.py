@@ -15,7 +15,14 @@ import db
 
 load_dotenv()
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
+# Без токена бот не существует, поэтому падаем сразу — но по-человечески.
+# Голый KeyError ничего не объясняет тому, кто впервые поднимает магазин.
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+if not BOT_TOKEN:
+    raise SystemExit(
+        "Не задан BOT_TOKEN — без него бот не запустится.\n"
+        "Локально: впишите его в файл .env рядом с кодом (BOT_TOKEN=...).\n"
+        "На Render: Settings → Environment → добавьте переменную BOT_TOKEN.")
 
 # Публичный адрес, по которому открывается Mini App (появится после деплоя).
 # Пока пусто — кнопка Mini App просто не показывается.
