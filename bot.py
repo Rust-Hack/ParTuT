@@ -569,7 +569,38 @@ CANCEL_UNPAID_HOURS = 24   # авто-отмена карточных заказ
 # Сводка дня владельцу: во сколько (час) и часовой пояс (сервер Render — UTC, Минск = UTC+3).
 SUMMARY_HOUR = int(os.environ.get("SUMMARY_HOUR", "21"))
 SUMMARY_TZ_OFFSET = int(os.environ.get("SUMMARY_TZ_OFFSET", "3"))
-_last_summary_date = None   # дата последней отправленной сводки (в памяти процесса)
+
+# --- Ночные задачи: сводка, копия базы, напоминания ---
+# Все три случаются раз в сутки, и отметку о выполнении надо держать В БАЗЕ, а
+# не в памяти процесса. На Render сервис поднимается заново при каждом деплое и
+# после простоя — с отметкой в памяти «раз в сутки» превращается в «после
+# каждого запуска». Копию так уже слало владельцу по три раза подряд; у
+# напоминаний покупателям цена выше — каждый перезапуск отправлял НОВУЮ порцию
+# по суточному потолку, а за такую рассылку Telegram отбирает покупателей
+# блокировкой навсегда.
+_SUMMARY_MARK = "last_summary_date"
+_BACKUP_MARK = "last_backup_date"
+_REPEAT_MARK = "last_repeat_date"
+
+
+def _local_now():
+    """Минское время: сервер Render живёт по UTC."""
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=SUMMARY_TZ_OFFSET)
+
+
+def _claim_daily(mark_key, hour):
+    """Пора ли делать ночную задачу. Забирает право на сегодня: второй вызов за
+    те же сутки вернёт False — в том числе после перезапуска сервиса.
+
+    Право забирается ДО работы, а не после. Если Telegram в этот момент
+    недоступен, задача пропустит день — и это лучше, чем попытка каждую минуту
+    до утра."""
+    local = _local_now()
+    if local.hour < hour:
+        return False
+    # Отметка занимается одним действием: два экземпляра сервиса при деплое
+    # живут бок о бок, и «прочитать, потом записать» пропустило бы обоих.
+    return db.claim_setting(mark_key, local.date().isoformat())
 
 
 def _daily_summary_text():
@@ -589,11 +620,8 @@ def _daily_summary_text():
 
 def _maybe_send_daily_summary():
     """Раз в сутки, после SUMMARY_HOUR по минскому времени, шлём сводку супер-админам."""
-    global _last_summary_date
-    local = datetime.datetime.utcnow() + datetime.timedelta(hours=SUMMARY_TZ_OFFSET)
-    if local.hour < SUMMARY_HOUR or _last_summary_date == local.date():
+    if not _claim_daily(_SUMMARY_MARK, SUMMARY_HOUR):
         return
-    _last_summary_date = local.date()
     try:
         text = _daily_summary_text()
     except Exception as e:
@@ -608,10 +636,6 @@ def _maybe_send_daily_summary():
 # базе. Копию храним там, где её точно не потеряют и за неё не надо платить —
 # в личке владельца в Telegram. Раз в сутки, ночью, когда никто не покупает.
 BACKUP_HOUR = int(os.environ.get("BACKUP_HOUR", "4"))
-# Дату последней копии держим В БАЗЕ, а не в памяти процесса: на Render сервис
-# перезапускается при каждом деплое и после простоя, и «раз в сутки» превращалось
-# в «после каждого запуска» — владельцу падало по три копии подряд.
-_BACKUP_MARK = "last_backup_date"
 
 
 def _backup_bytes():
@@ -643,12 +667,18 @@ def _send_backup(chat_ids, note=""):
 
 def _maybe_send_backup():
     """Раз в сутки после BACKUP_HOUR по минскому времени."""
-    local = datetime.datetime.utcnow() + datetime.timedelta(hours=SUMMARY_TZ_OFFSET)
-    today = local.date().isoformat()
-    if local.hour < BACKUP_HOUR or db.get_setting(_BACKUP_MARK) == today:
+    if not _claim_daily(_BACKUP_MARK, BACKUP_HOUR):
         return
-    db.set_setting(_BACKUP_MARK, today)   # ставим ДО отправки: неудача не должна
-    _send_backup(SUPER_ADMIN_IDS)         # заставить бота слать копию каждую минуту
+    err = _send_backup(SUPER_ADMIN_IDS)
+    if err:
+        # День уже занят, второй попытки сегодня не будет — и молчать об этом
+        # нельзя. Магазин без копии живёт спокойно ровно до первой потери базы,
+        # а узнать, что копий больше нет, было бы неоткуда. Владельцу — словами
+        # и с выходом, разработчику — подробности.
+        for admin_id in SUPER_ADMIN_IDS:
+            _safe_send(admin_id, f"⚠️ Резервная копия за сегодня не ушла: {err}.\n"
+                                 "Снимите её вручную командой /backup.")
+        errors.report(bot, "резервная копия", RuntimeError(err))
 
 
 # --- Напоминание покупателю: «пора пополнить» ---
@@ -657,7 +687,6 @@ def _maybe_send_backup():
 # рычаг, но и самый опасный: назойливость Телеграм наказывает блокировками,
 # а заблокировавшего покупателя вернуть нельзя ничем. Отсюда три ограничения:
 # срок, суточный потолок и возможность отписаться.
-_last_repeat_date = None
 
 
 def _repeat_settings():
@@ -683,15 +712,15 @@ REPEAT_TEXT = (
 
 
 def _maybe_send_repeat_reminders():
-    """Раз в сутки, в тот же тихий час, что и резервная копия."""
-    global _last_repeat_date
-    local = datetime.datetime.utcnow() + datetime.timedelta(hours=SUMMARY_TZ_OFFSET)
-    if local.hour < BACKUP_HOUR or _last_repeat_date == local.date():
-        return
-    _last_repeat_date = local.date()
+    """Раз в сутки, в тот же тихий час, что и резервная копия.
 
+    «Раз в сутки» тут — не про аккуратность, а про потолок: он и есть вся
+    защита от веерной рассылки, и каждый лишний прогон за день пробивает его
+    на целую порцию."""
     days, cap = _repeat_settings()
     if cap == 0:                       # 0 в настройках = напоминания выключены
+        return
+    if not _claim_daily(_REPEAT_MARK, BACKUP_HOUR):
         return
     sent = 0
     for row in db.customers_to_remind(days, cap):
@@ -731,22 +760,41 @@ def _expire_unpaid_orders():
     return done
 
 
-def _reminder_loop():
-    """Раз в минуту: напоминает продавцам о заказах, ждущих одобрения (раз в 10 мин на заказ),
-    и авто-отменяет брошенные карточные заказы без чека (спустя CANCEL_UNPAID_HOURS)."""
-    while True:
+def _remind_sellers():
+    """Продавцу — про заказы, которые ждут его решения. Раз в 10 минут на заказ."""
+    for order in db.orders_needing_reminder(10):
+        notifications.remind_sellers(bot, order)
+
+
+# Всё, что магазин делает сам, без нажатия кнопки. Каждый шаг выполняется
+# ОТДЕЛЬНО и в своей защите: раньше они стояли под одним try, и поломка в
+# первом же шаге отменяла все следующие — включая ночную копию базы. Тихо, без
+# единой строчки о том, что копий больше нет.
+_BACKGROUND_STEPS = [
+    ("напоминания продавцам", _remind_sellers),
+    ("авто-отмена неоплаченных", _expire_unpaid_orders),
+    ("сводка дня", _maybe_send_daily_summary),
+    ("резервная копия", _maybe_send_backup),
+    ("напоминания покупателям", _maybe_send_repeat_reminders),
+]
+
+
+def _background_tick():
+    """Один оборот фоновых дел. Вынесен из вечного цикла, чтобы его можно было
+    вызвать из теста: цикл со sleep не проверить никак."""
+    for name, step in _BACKGROUND_STEPS:
         try:
-            for order in db.orders_needing_reminder(10):
-                notifications.remind_sellers(bot, order)
-            _expire_unpaid_orders()
-            _maybe_send_daily_summary()
-            _maybe_send_backup()
-            _maybe_send_repeat_reminders()
+            step()
         except Exception as e:
-            # Этот цикл шлёт напоминания, отменяет брошенные заказы и делает
-            # резервную копию. Если он сломается тихо, не работать будет всё
-            # сразу — и узнать об этом было бы неоткуда.
-            errors.report(bot, "фоновый цикл заказов", e)
+            # Про поломку надо узнать от бота, а не случайно: логи Render
+            # никто не читает. Одинаковые ошибки не спамят — errors копит их.
+            errors.report(bot, f"фоновые дела: {name}", e)
+
+
+def _reminder_loop():
+    """Раз в минуту прокручивает фоновые дела магазина."""
+    while True:
+        _background_tick()
         time.sleep(60)
 
 

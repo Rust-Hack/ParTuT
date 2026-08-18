@@ -2186,6 +2186,35 @@ def set_setting(key, value):
     conn.close()
 
 
+def claim_setting(key, value):
+    """Занять отметку «сделано»: записать value, только если там было другое.
+    True получает ровно один вызвавший, остальные — False.
+
+    Нужно там, где по отметке решают, слать ли сообщения живым людям. Прочитать,
+    а потом записать — это два действия, и между ними влезает второй экземпляр
+    сервиса: Render при деплое некоторое время держит старый и новый вместе, и
+    оба успевают увидеть «сегодня ещё не делали». Условие внутри UPDATE такой
+    щели не оставляет — базa разрешает спор сама.
+    """
+    conn = connect()
+    cur = conn.cursor()
+    # UPDATE'у нужна строка, за которую можно зацепиться.
+    if USE_PG:
+        cur.execute("INSERT INTO settings (key, value) VALUES (%s, '') "
+                    "ON CONFLICT (key) DO NOTHING", (key,))
+    else:
+        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '')", (key,))
+    # COALESCE обязателен: сравнение с NULL не истинно и не ложно, и строка со
+    # значением NULL не совпала бы никогда — отметку не удалось бы занять вовсе.
+    cur.execute(_q("UPDATE settings SET value = %s "
+                   "WHERE key = %s AND COALESCE(value, '') <> %s"),
+                (str(value), key, str(value)))
+    won = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return won
+
+
 # ---------- Движение склада ----------
 
 # Причины движения. Приход прибавляет, остальное списывает.

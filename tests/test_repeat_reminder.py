@@ -81,7 +81,7 @@ def run():
     _order_days_ago(9201, 40)
     db.set_setting("remind_after_days", 21)
     db.set_setting("remind_daily_cap", 1)         # проверяем, что потолок соблюдается
-    botmod._last_repeat_date = None
+    db.set_setting(botmod._REPEAT_MARK, "")   # «новые сутки»: отметка живёт в базе
     reset_sent()
 
     real_hour, botmod.BACKUP_HOUR = botmod.BACKUP_HOUR, 0    # чтобы сработало сейчас
@@ -98,7 +98,7 @@ def run():
 
         # Потолок 0 = напоминания выключены совсем.
         db.set_setting("remind_daily_cap", 0)
-        botmod._last_repeat_date = None
+        db.set_setting(botmod._REPEAT_MARK, "")   # «новые сутки»: отметка живёт в базе
         reset_sent()
         botmod._maybe_send_repeat_reminders()
         c2("ноль в настройке выключает рассылку", not SENT)
@@ -106,7 +106,7 @@ def run():
         # Помечаем ДО отправки: заблокировавший бота не должен получать попытку
         # каждый день до конца времён.
         db.set_setting("remind_daily_cap", 5)
-        botmod._last_repeat_date = None
+        db.set_setting(botmod._REPEAT_MARK, "")   # «новые сутки»: отметка живёт в базе
         _clean()
         _order_days_ago(9300, 40)
         real_send = botmod.bot.send_message
@@ -121,6 +121,7 @@ def run():
         botmod.BACKUP_HOUR = real_hour
         db.set_setting("remind_daily_cap", 20)
         db.set_setting("remind_after_days", 21)
+        db.set_setting(botmod._REPEAT_MARK, "")   # не оставляем отметку следующим тестам
 
     # --- Отписка из приложения ---
     c3 = Checker("Отписка в приложении")
