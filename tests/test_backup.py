@@ -168,7 +168,6 @@ def run_daily_once():
     """
     import datetime
     import bot as botmod
-    from _common import SENT, reset_sent
 
     c = Checker("Копия раз в сутки")
     db.set_setting(botmod._BACKUP_MARK, "")

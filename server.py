@@ -29,15 +29,13 @@ from urllib.parse import parse_qsl
 
 import requests
 import telebot
-from flask import Flask, g, jsonify, request, Response, send_from_directory
+from flask import Flask, g, jsonify, request, Response
 
 import config
 import db
 import errors
 import notifications
-from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CITY_ADMINS,
-                   CONFIRM_MINUTES, is_admin, is_super_admin, is_dev, is_owner,
-                   admin_city, admin_role, admins_for_city, all_admin_ids, CITIES)
+from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, admin_city, admin_role, admins_for_city, all_admin_ids, CITIES)
 
 db.init_db()
 config.seed_admins_from_env()   # разовый перенос админов из окружения в базу
@@ -2192,6 +2190,11 @@ SLOT_LINES = [
     [[2, 0], [1, 1], [2, 2]],   # крышка ∧ (низ-слева → центр → низ-справа)
 ]
 SLOT_LINE_NAMES = ["Верхний ряд", "Центр", "Нижний ряд", "Диагональ ↘", "Диагональ ↙", "Галочка ∨", "Крышка ∧"]
+# Названия и сами линии идут парами. Разойдись они в длине — лишняя линия молча
+# пропала бы с экрана правил, а игрок выигрывал бы по линии, о которой ему не
+# сказали. Лучше не запуститься, чем играть по необъявленным правилам.
+assert len(SLOT_LINE_NAMES) == len(SLOT_LINES), \
+    f"названий линий {len(SLOT_LINE_NAMES)}, а самих линий {len(SLOT_LINES)}"
 
 
 def _line_vals(grid, line):

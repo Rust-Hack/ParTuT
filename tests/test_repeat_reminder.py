@@ -6,7 +6,7 @@
 """
 import datetime
 
-from _common import db, client, server, Checker, as_user, SENT, reset_sent
+from _common import db, client, Checker, as_user, SENT, reset_sent
 
 import bot as botmod
 

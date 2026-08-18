@@ -11,7 +11,6 @@
 Владелец подтверждает из чата — там же, где узнаёт о заказах. Значит и путь из
 чата должен доводить дело до конца: начислить и сказать об этом покупателю.
 """
-import json
 import types
 
 from _common import (db, client, server, Checker, as_user, as_admin, deny_admin,

@@ -12,7 +12,7 @@
 """
 import threading
 
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
 
 UID = 8551
 

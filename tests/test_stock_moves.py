@@ -4,7 +4,7 @@
 делось» ответа не было. Теперь у каждого изменения есть причина, автор и дата,
 а списание считается деньгами по закупочной цене.
 """
-from _common import db, client, server, Checker, as_admin, as_user, deny_admin
+from _common import db, client, server, Checker, as_admin, deny_admin
 
 
 def _clean():

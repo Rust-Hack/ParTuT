@@ -3,7 +3,7 @@
 Главное, что проверяем: владельца (супер-админа) нельзя лишить доступа из
 приложения, а обычный админ не может выписать права ни себе, ни другому.
 """
-from _common import db, client, server, Checker, as_user
+from _common import db, client, Checker, as_user
 
 
 SUPER = 716030279          # зашит в config.SUPER_ADMIN_IDS

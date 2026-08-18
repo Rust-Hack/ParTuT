@@ -18,6 +18,21 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Линтер отдельной работой: он проверяет код, а не поведение, и знать про базу
+  # или часовой пояс ему незачем. Отдельно — ещё и потому, что падает он за
+  # секунды, а не за минуту, и видно сразу, что именно не так.
+  lint:
+    name: Линтер
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - name: Проверить код
+        run: ruff check .
+
   checks:
     name: ${{ matrix.db }} · пояс ${{ matrix.tz }}
     runs-on: ubuntu-latest

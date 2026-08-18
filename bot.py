@@ -12,7 +12,6 @@ bot.py — тонкая оболочка вокруг Mini App.
 Покупок и управления заказами в самом чате нет — только приложение.
 """
 
-import datetime
 import html
 import json
 import os
@@ -33,7 +32,7 @@ load_dotenv()
 # Общие настройки и справочники берём из config.py (их же использует server.py).
 from config import (
     BOT_TOKEN, WEBAPP_URL, CITIES,
-    ADMIN_IDS, SUPER_ADMIN_IDS, is_admin, is_super_admin, admin_city,
+    SUPER_ADMIN_IDS, is_admin, is_super_admin, admin_city,
 )
 
 
@@ -607,7 +606,7 @@ def _claim_daily(mark_key, hour):
 def _daily_summary_text():
     """Короткая сводка по бизнесу за день для владельца."""
     s = db.get_business_stats(1)
-    lines = [f"📅 <b>Итоги за день</b>",
+    lines = ["📅 <b>Итоги за день</b>",
              f"💰 Выручка (выдано): <b>{s['revenue']:.2f} Br</b>",
              f"✅ Выдано заказов: {s['orders']}",
              f"🧾 Средний чек: {s['avg_check']:.2f} Br",
