@@ -15,6 +15,11 @@ services:
         sync: false
       - key: ADMIN_IDS
         sync: false
+      # Владелец магазина: ему видны «Журнал действий», «Доступ продавцов» и
+      # запросы на подтверждение операций с монетами. Без этой переменной
+      # владельцем считается только зашитый в код id.
+      - key: SUPER_ADMIN_IDS
+        sync: false
       - key: WEBAPP_URL
         sync: false
       - key: ADMIN_MINSK
