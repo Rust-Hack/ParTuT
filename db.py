@@ -1390,6 +1390,7 @@ COIN_REASONS = {
     "referral":  "Реферальная программа",
     "raffle":    "Розыгрыш",
     "admin":     "Правка вручную",
+    "compensation": "Компенсация покупателю",
     "refund":    "Возврат при отмене",
     "order":     "Оплата заказа монетами",
     "other":     "Прочее",
@@ -1818,6 +1819,19 @@ def delete_user(user_id):
 
 # --- Заявки на подтверждение супер-админом (чувствительные операции обычных админов) ---
 
+COMPENSATION_MAX_DEFAULT = 1000     # монет за раз (при 1 монета = 0.01 Br это 10 Br)
+
+
+def compensation_max():
+    """Потолок одной компенсации. Продавец не должен раздать состояние опечаткой,
+    а владелец не должен ради изменения потолка ходить к разработчику."""
+    try:
+        v = int(get_setting("compensation_max", COMPENSATION_MAX_DEFAULT))
+        return max(0, v)
+    except (TypeError, ValueError):
+        return COMPENSATION_MAX_DEFAULT
+
+
 def create_admin_request(requester_id, requester_name, action, payload, summary):
     """Создаёт заявку в статусе pending. Возвращает её id."""
     created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1874,6 +1888,14 @@ def execute_admin_request(action, payload):
         if int(payload.get("coins", 0)): add_coins(t, int(payload["coins"]), "admin")
         if int(payload.get("spins", 0)): add_spins(t, int(payload["spins"]))
         return {"coins": get_coins(t), "spins": get_wheel(t)["spins"]}
+    if action == "compensate":
+        # Компенсация — отдельная причина, а не «правка вручную»: владельцу важно
+        # видеть в летописи монет, сколько ушло на извинения перед покупателями.
+        t = int(payload["user_id"])
+        ensure_user(t)
+        add_coins(t, int(payload["coins"]), "compensation")
+        return {"coins": get_coins(t), "user_id": t,
+                "order_id": payload.get("order_id"), "granted": int(payload["coins"])}
     if action == "user_delete":
         return {"deleted": delete_user(int(payload["user_id"]))}
     if action == "referral_unlink":

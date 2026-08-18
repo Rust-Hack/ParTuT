@@ -950,6 +950,17 @@
       <button class="closebtn" id="msgClose">Закрыть</button></div>
   </div>
 
+  <!-- Компенсация покупателю монетами (по заказу) -->
+  <div class="overlay" id="compOverlay">
+    <div class="sheet"><h2>🎁 Компенсация</h2>
+      <p style="color:var(--hint);font-size:13px;margin:0 0 10px" id="compTo"></p>
+      <input id="compCoins" class="admsearch" type="number" inputmode="numeric" min="1" placeholder="Сколько монет">
+      <div style="color:var(--hint);font-size:12px;margin:6px 0 10px" id="compHint"></div>
+      <input id="compReason" class="admsearch" placeholder="За что (увидит владелец и покупатель)">
+      <button class="bigbtn" id="compSend" style="margin-top:12px">Начислить</button>
+      <button class="closebtn" id="compClose">Закрыть</button></div>
+  </div>
+
   <!-- Правила игры (колесо / слот) -->
   <div class="overlay" id="infoOverlay">
     <div class="sheet"><h2 id="infoTitle">Правила</h2>
@@ -1268,6 +1279,10 @@
       <label style="margin-top:14px">Бонус за первый заказ приглашённого, монет</label>
       <input id="setRefBonus" inputmode="numeric" placeholder="50">
       <div class="dnote" id="setRefNote" style="margin:6px 0 0"></div>
+
+      <label style="margin-top:14px">Компенсация продавцом за раз, монет</label>
+      <input id="setCompMax" inputmode="numeric" placeholder="1000">
+      <div class="dnote" id="setCompNote" style="margin:6px 0 0"></div>
 
       <button class="bigbtn" id="setSave" style="margin-top:16px">Сохранить</button>
     </div>
@@ -4639,6 +4654,38 @@
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("msgSend").disabled = false; $("msgSend").textContent = "Отправить"; }
     };
+    // ----- Компенсация покупателю -----
+    // Единственное денежное действие продавца, и то с подтверждением владельца:
+    // разбитый под или задержка — это к продавцу, а не к владельцу в личку.
+    let _compOrderId = null;
+    function openCompensation(orderId, who) {
+      _compOrderId = orderId;
+      $("compTo").textContent = `Заказ #${orderId} · ${who || ""}`;
+      $("compCoins").value = ""; $("compReason").value = "";
+      $("compHint").textContent = "";
+      $("compOverlay").classList.add("show");
+    }
+    $("compClose").onclick = () => closeOverlay($("compOverlay"));
+    // Монеты — не деньги на вид: показываем, во что это обходится магазину.
+    $("compCoins").oninput = () => {
+      const n = +$("compCoins").value || 0;
+      $("compHint").textContent = n > 0 ? `Это ${(n * 0.01).toFixed(2)} Br скидки в следующем заказе` : "";
+    };
+    $("compSend").onclick = async () => {
+      const coins = +$("compCoins").value || 0;
+      if (coins < 1) { alertMsg("Укажите, сколько монет начислить."); return; }
+      $("compSend").disabled = true; $("compSend").textContent = "Отправляю…";
+      try {
+        const r = await fetch("/api/admin/order/compensate", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData, order_id: _compOrderId, coins, reason: $("compReason").value.trim() }) });
+        const d = await r.json();
+        if (d.ok && d.pending) { closeOverlay($("compOverlay")); alertMsg("Отправлено владельцу на подтверждение ⏳"); }
+        else if (d.ok) { closeOverlay($("compOverlay")); alertMsg("Монеты начислены покупателю ✅"); }
+        else alertMsg(d.message || (d.error === "other_city" ? "Это заказ другой точки." : "Не удалось."));
+      } catch (e) { alertMsg("Сеть недоступна."); }
+      finally { $("compSend").disabled = false; $("compSend").textContent = "Начислить"; }
+    };
+
     // «5 покупки» выдаёт машину с головой. Русский счёт: 1 покупка, 2 покупки, 5 покупок.
     function plural(n, one, few, many) {
       const d = Math.abs(n) % 10, dd = Math.abs(n) % 100;
@@ -4875,6 +4922,7 @@
           $("setCashback").value = d.settings.coins_per_byn ?? "";
           $("setWheelStep").value = d.settings.wheel_step ?? "";
           $("setRefBonus").value = d.settings.referral_bonus ?? "";
+          $("setCompMax").value = d.settings.compensation_max ?? "";
           coinValue = d.settings.coin_value || 0.01;
           renderGenerosity();
         }
@@ -4898,8 +4946,12 @@
       const rb = parseInt($("setRefBonus").value || "0", 10) || 0;
       $("setRefNote").innerHTML =
         `Разово <b>${(rb * coinValue).toFixed(2)} Br</b> пригласившему — за первый заказ друга. Дальше он получает процент с каждого заказа.`;
+      const cm = parseInt($("setCompMax").value || "0", 10) || 0;
+      $("setCompNote").innerHTML = cm > 0
+        ? `До <b>${(cm * coinValue).toFixed(2)} Br</b> за раз. Продавец начисляет их покупателю по заказу (разбитый под, задержка), но только с вашего подтверждения в боте.`
+        : `Ноль — продавцы не могут начислять компенсации совсем.`;
     }
-    ["setCashback", "setWheelStep", "setRefBonus"].forEach(id => {
+    ["setCashback", "setWheelStep", "setRefBonus", "setCompMax"].forEach(id => {
       const el = $(id);
       if (el) el.oninput = renderGenerosity;
     });
@@ -4908,7 +4960,8 @@
                      free_delivery_from: $("setFreeFrom").value,
                      remind_after_days: $("setRemindDays").value, remind_daily_cap: $("setRemindCap").value,
                      coins_per_byn: $("setCashback").value, wheel_step: $("setWheelStep").value,
-                     referral_bonus: $("setRefBonus").value };
+                     referral_bonus: $("setRefBonus").value,
+                     compensation_max: $("setCompMax").value };
       $("setSave").disabled = true; $("setSave").textContent = "Сохраняю…";
       try {
         const r = await fetch("/api/admin/settings/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -5579,12 +5632,13 @@
           ${deliv}${contact}
           <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} Br</span></div></div>
           ${receipt}
-          <div class="oacts">${acts}<button class="omsg" data-omsg="${o.user_id}" data-owho="${esc(who)}">✍️ Написать</button>${edit}</div>
+          <div class="oacts">${acts}<button class="omsg" data-omsg="${o.user_id}" data-owho="${esc(who)}">✍️ Написать</button>${edit}<button class="omsg" data-ocomp="${o.id}" data-owho="${esc(who)}">🎁 Компенсация</button></div>
         </div>`;
       }).join("");
       $("ordersList").querySelectorAll("[data-oact]").forEach(b => b.onclick = () => orderAction(+b.dataset.oid, b.dataset.oact));
       $("ordersList").querySelectorAll("[data-omsg]").forEach(b => b.onclick = () => openAdminMsg(+b.dataset.omsg, b.dataset.owho));
       $("ordersList").querySelectorAll("[data-oedit]").forEach(b => b.onclick = () => openOrderEdit(+b.dataset.oedit));
+      $("ordersList").querySelectorAll("[data-ocomp]").forEach(b => b.onclick = () => openCompensation(+b.dataset.ocomp, b.dataset.owho));
     }
 
     // ----- Правка состава заказа -----

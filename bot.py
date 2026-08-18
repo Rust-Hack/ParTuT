@@ -277,7 +277,7 @@ def handle_approval(call, user_id, data):
             bot.answer_callback_query(call.id, "Уже обработано", show_alert=True)
             return
         try:
-            db.execute_admin_request(req["action"], json.loads(req["payload"]))
+            notifications.run_admin_request(bot, req["action"], json.loads(req["payload"]))
         except Exception as e:
             print(f"Ошибка выполнения заявки #{rid}: {e}")
         bot.answer_callback_query(call.id, "Разрешено ✅")

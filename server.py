@@ -312,7 +312,8 @@ def _notify_supers_request(rid, admin, summary):
 def _gate(admin, action, payload, summary):
     """Супер-админ — выполняет сразу; обычный админ — создаёт заявку на подтверждение."""
     if is_super_admin(int(admin["id"])):
-        return jsonify({"ok": True, "pending": False, "result": db.execute_admin_request(action, payload)})
+        return jsonify({"ok": True, "pending": False,
+                        "result": notifications.run_admin_request(tg, action, payload)})
     rid = db.create_admin_request(int(admin["id"]), _admin_display(admin), action, payload, summary)
     _notify_supers_request(rid, admin, summary)
     return jsonify({"ok": True, "pending": True, "request_id": rid})
@@ -351,7 +352,7 @@ def api_admin_request_decide():
         return jsonify({"ok": False, "error": "already"}), 409     # уже обработана
     if approve:
         try:
-            db.execute_admin_request(req["action"], json.loads(req["payload"]))
+            notifications.run_admin_request(tg, req["action"], json.loads(req["payload"]))
         except Exception as e:
             print(f"Ошибка выполнения заявки #{rid}: {e}")
         _notify_client(req["requester_id"], f"✅ Ваш запрос одобрен:\n{req['summary']}")
@@ -1946,6 +1947,7 @@ def api_bonus():
                     "referrals_list": st["referrals_list"],
                     "ref_link": link,
                     "referral_bonus": db.referral_bonus(),
+        "compensation_max": db.compensation_max(),
                     "coin_value": COIN_VALUE})
 
 
@@ -2002,6 +2004,43 @@ def api_admin_grant():
         parts.append(f"{'убрать' if spins < 0 else 'начислить'} {abs(spins)} прокрутов")
     summary = f"Пользователю id {target}: " + (", ".join(parts) if parts else "—")
     return _gate(admin, "grant", {"user_id": target, "coins": coins, "spins": spins}, summary)
+
+
+@app.route("/api/admin/order/compensate", methods=["POST"])
+def api_admin_order_compensate():
+    """Компенсация покупателю монетами по конкретному заказу.
+
+    Единственное денежное действие, доступное продавцу, — и то через
+    подтверждение владельца. Привязка к заказу не формальность: из него берутся
+    и покупатель, и точка, поэтому продавец Турова не начислит ничего
+    покупателю Минска, а владелец в заявке видит, о каком заказе речь.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        oid = int(data.get("order_id"))
+        coins = int(data.get("coins"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+    order = db.get_order(oid)
+    if not order:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    denied = deny_city(admin, order["city"])
+    if denied:
+        return denied
+    cap = db.compensation_max()
+    if coins < 1 or coins > cap:
+        return jsonify({"ok": False, "error": "bad_amount",
+                        "message": f"Компенсация — от 1 до {cap} 🪙 за раз."}), 400
+    reason = _text(data.get("reason"), 200)
+    target = int(order["user_id"])
+    summary = (f"Компенсация {coins} 🪙 покупателю id {target} по заказу #{oid}"
+               + (f"\nПричина: {reason}" if reason else ""))
+    return _gate(admin, "compensate",
+                 {"user_id": target, "coins": coins, "order_id": oid, "reason": reason},
+                 summary)
 
 
 @app.route("/api/admin/referrals", methods=["POST"])
@@ -3334,6 +3373,12 @@ def api_admin_settings_update():
     if "referral_bonus" in data:
         try:
             db.set_setting("referral_bonus", min(100000, max(0, int(data.get("referral_bonus")))))
+        except (TypeError, ValueError):
+            pass
+    if "compensation_max" in data:
+        try:
+            # Ноль допустим и означает «продавцам компенсации запрещены».
+            db.set_setting("compensation_max", min(100000, max(0, int(data.get("compensation_max")))))
         except (TypeError, ValueError):
             pass
     return jsonify({"ok": True})

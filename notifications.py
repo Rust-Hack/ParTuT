@@ -106,6 +106,35 @@ def notify_receipt(bot, order_id):
             print(f"Не смог отправить чек по заказу #{order_id} админу {admin_id}: {e}")
 
 
+def notify_compensation(bot, user_id, coins, order_id=None, reason=""):
+    """Покупателю — что ему начислили монеты и за что.
+
+    Молча менять человеку баланс нельзя: компенсация имеет смысл только если о
+    ней узнали. Зовётся из обоих мест, где заявка может выполниться — из
+    приложения и из чата."""
+    за_заказ = f" по заказу #{order_id}" if order_id else ""
+    почему = f"\nПричина: {reason}" if reason else ""
+    text = (f"🎁 Вам начислено {int(coins)} 🪙 в качестве компенсации{за_заказ}.{почему}\n"
+            "Монетами можно оплатить часть следующего заказа.")
+    try:
+        bot.send_message(user_id, text)
+    except Exception as e:
+        print(f"Не смог сообщить о компенсации клиенту {user_id}: {e}")
+
+
+def run_admin_request(bot, action, payload):
+    """Выполнить одобренное действие и сказать о нём тому, кого оно касается.
+
+    Заявку могут одобрить из двух мест — из приложения и кнопкой в чате. Если
+    писать покупателю в каждом из них по отдельности, однажды напишут только в
+    одном, и человек получит монеты молча."""
+    result = db.execute_admin_request(action, payload)
+    if action == "compensate" and result.get("granted"):
+        notify_compensation(bot, result["user_id"], result["granted"],
+                            payload.get("order_id"), payload.get("reason", ""))
+    return result
+
+
 def remind_sellers(bot, order):
     """Короткое повторное напоминание продавцу, что заказ ещё не обработан."""
     method = order["delivery_method"] or ""
