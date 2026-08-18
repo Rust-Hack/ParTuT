@@ -698,8 +698,29 @@ def _ensure_review_columns():
 
 # ---------- Розыгрыши ----------
 
+# Магазин живёт по минскому времени, а сервер Render — по UTC, и часового пояса
+# в его настройках нет. Пока время брали у сервера, заказ, сделанный в час ночи,
+# записывался вчерашним и на три часа раньше: покупатель видел в приложении не
+# то время, когда заказывал, а сутки магазина начинались в три часа ночи вместо
+# полуночи — «Сегодня» у продавца до трёх показывал вчерашнюю выручку.
+#
+# SUMMARY_TZ_OFFSET оставлен как запасное имя: он уже мог быть выставлен в
+# настройках сервиса, и молча поменять смысл этой настройки нельзя.
+SHOP_TZ_OFFSET = int(os.environ.get("SHOP_TZ_OFFSET",
+                                    os.environ.get("SUMMARY_TZ_OFFSET", "3")))
+
+
+def shop_now():
+    """Сейчас по времени магазина.
+
+    Единственный источник «сейчас» во всей базе: время записи и границы суток
+    обязаны считаться одинаково, иначе заказ попадает в один день, а ищут его в
+    другом."""
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=SHOP_TZ_OFFSET)
+
+
 def _now_str():
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    return shop_now().strftime("%Y-%m-%d %H:%M")
 
 
 def _ensure_raffle_uniques():
@@ -757,7 +778,7 @@ def get_last_finished_raffle():
 
 def create_raffle(title="Розыгрыш месяца", prize1="Одноразка", prize2="Жидкость",
                   prize3_coins=500, threshold=25, days=30):
-    now = datetime.datetime.now()
+    now = shop_now()
     ends = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
@@ -1325,7 +1346,7 @@ def is_age_ok(user_id):
 
 def ensure_user_get_age(user_id):
     """Создаёт пользователя (если нет) и возвращает его 18+ — за одно подключение."""
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = shop_now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     if USE_PG:
@@ -1361,7 +1382,7 @@ def set_age_ok(user_id):
 
 def ensure_user(user_id):
     """Создаёт строку пользователя, если её ещё нет (с датой первого захода)."""
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = shop_now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     if USE_PG:
@@ -1506,7 +1527,7 @@ def get_bonus_stats(user_id):
     conn = connect()
     cur = conn.cursor()
     # создать пользователя при первом заходе
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = shop_now().strftime("%Y-%m-%d %H:%M")
     if USE_PG:
         cur.execute("INSERT INTO users (user_id, created_at) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, now))
     else:
@@ -1749,7 +1770,7 @@ def customer_card(user_id, limit=30):
     days_since = None
     if last_buy:
         try:
-            days_since = (datetime.datetime.now() - datetime.datetime.strptime(last_buy[:16], "%Y-%m-%d %H:%M")).days
+            days_since = (shop_now() - datetime.datetime.strptime(last_buy[:16], "%Y-%m-%d %H:%M")).days
         except ValueError:
             days_since = None
 
@@ -1834,7 +1855,7 @@ def compensation_max():
 
 def create_admin_request(requester_id, requester_name, action, payload, summary):
     """Создаёт заявку в статусе pending. Возвращает её id."""
-    created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    created = shop_now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     rid = _insert_id(cur,
@@ -2130,7 +2151,7 @@ def get_business_stats(days=None):
     """Сводная бизнес-аналитика за период (days=None → всё время). Считается в SQL.
     Возвращает выручку, заказы, средний чек, воронку статусов, по городам, по дням,
     топ товаров, метрики пользователей и монеты в обороте."""
-    now = datetime.datetime.now()
+    now = shop_now()
     cutoff = (now - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00") if days else None
     conn = connect()
     cur = conn.cursor()
@@ -2406,7 +2427,7 @@ def stock_losses(days=None):
     движения. Это настоящие деньги, и владелец должен их видеть."""
     conn = connect()
     cur = conn.cursor()
-    cutoff = ((datetime.datetime.now() - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00")
+    cutoff = ((shop_now() - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00")
               if days else None)
     sql = """SELECT reason, SUM(-delta) AS qty,
                     SUM(-delta * COALESCE(NULLIF(cost, 0), 0)) AS money
@@ -2665,7 +2686,7 @@ def customers_to_remind(days, limit, cooldown_days=None):
     превратится в веерную рассылку, за которую Telegram наказывает.
     """
     cooldown_days = days if cooldown_days is None else cooldown_days
-    now = datetime.datetime.now()
+    now = shop_now()
     due_before = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
     quiet_before = (now - datetime.timedelta(days=cooldown_days)).strftime("%Y-%m-%d %H:%M")
 
@@ -2866,7 +2887,7 @@ def coin_flow(days=None):
     cur = conn.cursor()
     where, params = "", ()
     if days:
-        cutoff = (datetime.datetime.now() - datetime.timedelta(days=int(days))).strftime("%Y-%m-%d %H:%M")
+        cutoff = (shop_now() - datetime.timedelta(days=int(days))).strftime("%Y-%m-%d %H:%M")
         where, params = "WHERE created_at >= %s", (cutoff,)
     cur.execute(_q(f"SELECT reason AS r, "
                    f"COALESCE(SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END), 0) AS plus, "
@@ -3397,7 +3418,7 @@ COIN_LOG_KEEP_DAYS = 400
 
 def trim_coin_log(days=COIN_LOG_KEEP_DAYS):
     """Убирает движения монет старше срока. Возвращает, сколько убрано."""
-    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+    cutoff = (shop_now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("DELETE FROM coin_log WHERE created_at < %s"), (cutoff,))
@@ -3423,7 +3444,7 @@ def purge_orphan_photos(limit=200):
     """
     # Сутки форы: картинка появляется в базе следом за товаром, и уборка не
     # должна успеть между этими двумя действиями.
-    cutoff = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+    cutoff = (shop_now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     # NOT IN и NULL несовместимы: один NULL в списке — и условие не выполнится
@@ -3575,7 +3596,7 @@ def change_stock(product_id, delta):
 
 def create_order(user_id, username, city, items, total, pickup_time):
     """Создаёт заказ и возвращает его id. items -> строка JSON."""
-    created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    created_at = shop_now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     order_id = _insert_id(
@@ -3703,7 +3724,7 @@ def find_order_by_token(user_id, token, hours=ORDER_TOKEN_HOURS):
     достаться не должен ни по ошибке, ни нарочно."""
     if not token:
         return None
-    cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
+    cutoff = (shop_now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("SELECT * FROM orders WHERE user_id = %s AND client_token = %s "
@@ -3733,7 +3754,7 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
         if prev:
             return int(prev["id"]), int(prev["coins_used"] or 0), float(prev["total"]), True
 
-    created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    created_at = shop_now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     try:
@@ -3846,7 +3867,7 @@ def seller_today(city=None):
     два экрана с одинаковой подписью и разными числами хуже, чем небольшая
     неточность в редком случае «заказали вчера, забрали сегодня».
     """
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    today = shop_now().strftime("%Y-%m-%d")
     where_city = " AND city = %s" if city else ""
     args_city = (city,) if city else ()
     conn = connect()
@@ -4017,7 +4038,7 @@ def update_order_items(order_id, quantities, coin_value):
 
 def stale_new_orders(hours=24):
     """Карточные заказы, застрявшие в 'new' (чек не загружен) дольше `hours` — на авто-отмену."""
-    cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
+    cutoff = (shop_now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("SELECT * FROM orders WHERE status = 'new' AND created_at <= %s"), (cutoff,))
@@ -4028,7 +4049,7 @@ def stale_new_orders(hours=24):
 
 def touch_order_reminded(order_id):
     """Отмечает, что по заказу только что отправлено уведомление/напоминание продавцу."""
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = shop_now().strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("UPDATE orders SET reminded_at = %s WHERE id = %s"), (now, order_id))
@@ -4039,7 +4060,7 @@ def touch_order_reminded(order_id):
 def orders_needing_reminder(minutes=10):
     """Заказы, ждущие ОДОБРЕНИЯ продавца (status='paid'), по которым напоминание
     не отправлялось дольше `minutes`. Напоминаем до одобрения (потом продавец сам ведёт заказ)."""
-    cutoff = (datetime.datetime.now() - datetime.timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M")
+    cutoff = (shop_now() - datetime.timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("SELECT * FROM orders WHERE status = 'paid' "

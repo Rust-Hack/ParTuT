@@ -568,7 +568,7 @@ CANCEL_UNPAID_HOURS = 24   # авто-отмена карточных заказ
 
 # Сводка дня владельцу: во сколько (час) и часовой пояс (сервер Render — UTC, Минск = UTC+3).
 SUMMARY_HOUR = int(os.environ.get("SUMMARY_HOUR", "21"))
-SUMMARY_TZ_OFFSET = int(os.environ.get("SUMMARY_TZ_OFFSET", "3"))
+SUMMARY_TZ_OFFSET = db.SHOP_TZ_OFFSET       # то же смещение, что у базы
 
 # --- Ночные задачи: сводка, копия базы, напоминания ---
 # Все три случаются раз в сутки, и отметку о выполнении надо держать В БАЗЕ, а
@@ -584,8 +584,9 @@ _REPEAT_MARK = "last_repeat_date"
 
 
 def _local_now():
-    """Минское время: сервер Render живёт по UTC."""
-    return datetime.datetime.utcnow() + datetime.timedelta(hours=SUMMARY_TZ_OFFSET)
+    """Время магазина. Берём его там же, где база, — двух разных «сейчас» в
+    одном магазине быть не должно."""
+    return db.shop_now()
 
 
 def _claim_daily(mark_key, hour):
@@ -642,7 +643,7 @@ def _backup_bytes():
     """Сжатый JSON со всем содержимым базы + имя файла."""
     import gzip
     payload = json.dumps(db.export_tables(), ensure_ascii=False, default=str).encode("utf-8")
-    stamp = datetime.datetime.utcnow().strftime("%Y-%m-%d_%H%M")
+    stamp = db.shop_now().strftime("%Y-%m-%d_%H%M")   # имя файла — по времени магазина
     return gzip.compress(payload), f"partut-{stamp}.json.gz"
 
 
