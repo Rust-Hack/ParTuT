@@ -42,6 +42,11 @@
         var tgApp = window.Telegram && window.Telegram.WebApp;
         var initData = (tgApp && tgApp.initData) || "";
         var sp = (tgApp && tgApp.initDataUnsafe && tgApp.initDataUnsafe.start_param) || "";
+        // Подпись Telegram заполняет при загрузке своего скрипта, до ready().
+        // Но если её вдруг нет, спрашивать «кто ты» рано НЕЛЬЗЯ: сервер ответит
+        // «откройте магазин из бота», и приложение покажет это вместо витрины.
+        // Тогда просто молчим — основной код спросит сам, как и раньше.
+        if (!initData) return;
         window.__boot.me = fetch("/api/me", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ initData: initData, start_param: sp })
@@ -3500,7 +3505,13 @@
       for (const r of payReqRows(d.payment_info)) {
         html.push(r.copy ? row(r.label, r.value, r.copy) : `<div class="rline">${esc(r.text)}</div>`);
       }
-      html.push(`<div class="rline" style="color:var(--hint);font-size:13px">Нажмите на номер — он скопируется.</div>`);
+      // Реквизитов может не оказаться (магазин их не заполнил или ответ не дошёл).
+      // Пустой экран оплаты хуже честной строчки: человек не поймёт, куда платить.
+      if (!payReqRows(d.payment_info).some(r => r.copy)) {
+        html.push(`<div class="rline" style="color:var(--hint);font-size:13px">Реквизиты не загрузились. Напишите в поддержку — пришлём их в чат.</div>`);
+      } else {
+        html.push(`<div class="rline" style="color:var(--hint);font-size:13px">Нажмите на номер — он скопируется.</div>`);
+      }
       $("payReq").innerHTML = html.join("");
       $("payReq").querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
         const ok = await copyText(b.dataset.copy);
@@ -5231,6 +5242,7 @@
     // ----- Мои заказы (история + повтор) -----
     let myOrders = [];
     let payInfoText = "";          // реквизиты магазина — приходят вместе со списком заказов
+    let payConfirmMin = 15;        // за сколько обычно подтверждают (из настроек магазина)
     $("myOrdersClose").onclick = () => $("myOrdersView").classList.remove("show");
     async function openMyOrders() {
       $("myOrdersView").classList.add("show");
@@ -5240,6 +5252,7 @@
         const d = await r.json();
         myOrders = d.orders || [];
         if (d.payment_info) payInfoText = d.payment_info;   // чтобы показать реквизиты повторно
+        if (d.confirm_minutes) payConfirmMin = d.confirm_minutes;
       } catch (e) { myOrders = []; }
       await loadReviewables();      // «оцените покупку» показываем сразу, а не вторым экраном
       renderMyOrders();
@@ -5332,7 +5345,7 @@
       // было негде. Теперь возвращаем тот же экран оплаты, с реквизитами.
       $("myOrdersList").querySelectorAll("[data-pay]").forEach(b => b.onclick = () => {
         const o = myOrders[+b.dataset.pay];
-        currentOrder = { order_id: o.id, confirm_minutes: 15 };
+        currentOrder = { order_id: o.id, confirm_minutes: payConfirmMin };
         $("payTitle").textContent = `Оплата заказа #${o.id}`;
         renderPayReq({ total: +o.total, payment_info: payInfoText });
         $("payView").classList.add("show");

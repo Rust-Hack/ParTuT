@@ -706,6 +706,31 @@ def _maybe_send_repeat_reminders():
         print(f"Напоминаний о повторной покупке отправлено: {sent}")
 
 
+def _expire_unpaid_orders():
+    """Отменить брошенные заказы картой и сказать об этом обеим сторонам.
+
+    Отдельной функцией, а не строчками внутри вечного цикла: цикл не вызвать из
+    теста, и любая правка здесь проверялась бы только на живом магазине.
+    Возвращает номера отменённых заказов."""
+    done = []
+    for order in db.stale_new_orders(CANCEL_UNPAID_HOURS):
+        o = db.cancel_order(order["id"], ["new"])   # вернёт склад/монеты
+        if not o:
+            continue                                # успели оплатить или отменить
+        done.append(o["id"])
+        _safe_send(o["user_id"], f"⏳ Заказ #{o['id']} отменён — чек не был загружен. "
+                                 "Товар вернулся в наличие, монеты возвращены. Оформите заново, если нужно.")
+        # Продавец узнаёт о заказе картой сразу, ещё до чека, — значит обязан
+        # узнать и о том, что заказ отменился сам. Иначе у него в чате навсегда
+        # остаётся «новый заказ», которого больше нет, и он держит под него
+        # товар или звонит покупателю зря.
+        for admin_id in config.admins_for_city(o["city"]):
+            _safe_send(admin_id, f"⏳ Заказ #{o['id']} отменён автоматически — "
+                                 f"чек не загружен за {CANCEL_UNPAID_HOURS} ч. "
+                                 "Товар вернулся на склад.")
+    return done
+
+
 def _reminder_loop():
     """Раз в минуту: напоминает продавцам о заказах, ждущих одобрения (раз в 10 мин на заказ),
     и авто-отменяет брошенные карточные заказы без чека (спустя CANCEL_UNPAID_HOURS)."""
@@ -713,11 +738,7 @@ def _reminder_loop():
         try:
             for order in db.orders_needing_reminder(10):
                 notifications.remind_sellers(bot, order)
-            for order in db.stale_new_orders(CANCEL_UNPAID_HOURS):
-                o = db.cancel_order(order["id"], ["new"])   # вернёт склад/монеты
-                if o:
-                    _safe_send(o["user_id"], f"⏳ Заказ #{o['id']} отменён — чек не был загружен. "
-                                             "Товар вернулся в наличие, монеты возвращены. Оформите заново, если нужно.")
+            _expire_unpaid_orders()
             _maybe_send_daily_summary()
             _maybe_send_backup()
             _maybe_send_repeat_reminders()

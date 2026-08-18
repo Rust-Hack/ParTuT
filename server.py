@@ -585,23 +585,23 @@ def _index_payload():
 @app.route("/")
 def index():
     entry = _index_payload()
-    etag = entry["etag"]
+    use_gzip = "gzip" in request.headers.get("Accept-Encoding", "")
+    # Метка версии своя для сжатого и несжатого: тела разные, и одна метка на
+    # оба — шанс получить от прокси не тот вариант, который просили.
+    etag = entry["etag"][:-1] + '-gz"' if use_gzip else entry["etag"]
+
     # Приложение целиком качалось при каждом открытии — сотня килобайт по мобильной
     # сети только ради того, чтобы получить ровно тот же файл. Теперь браузер
     # присылает ETag, и, пока версия не сменилась, ответ — пустой 304.
     if request.headers.get("If-None-Match") == etag:
         resp = Response(status=304)
-        resp.headers["ETag"] = etag
-        resp.headers["Cache-Control"] = "no-cache"
-        return resp
-
-    use_gzip = "gzip" in request.headers.get("Accept-Encoding", "")
-    resp = Response(entry["gz"] if use_gzip else entry["raw"],
-                    content_type="text/html; charset=utf-8")
-    if use_gzip:
-        resp.headers["Content-Encoding"] = "gzip"
-        resp.headers["Vary"] = "Accept-Encoding"
+    else:
+        resp = Response(entry["gz"] if use_gzip else entry["raw"],
+                        content_type="text/html; charset=utf-8")
+        if use_gzip:
+            resp.headers["Content-Encoding"] = "gzip"
     resp.headers["Cache-Control"] = "no-cache"    # всегда сверяемся: после деплоя нужна свежая
+    resp.headers["Vary"] = "Accept-Encoding"
     resp.headers["ETag"] = etag
     return resp
 
@@ -952,13 +952,18 @@ def _json_etag(payload):
     менялись» здесь значит буквально это — отдать устаревшее нельзя.
     """
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    etag = '"%s"' % hashlib.md5(body.encode("utf-8")).hexdigest()
+    # Метка версии зависит и от сжатия: ниже ответ может уйти gzip'ом, и одна
+    # метка на два разных тела — это шанс однажды получить от прокси не тот
+    # вариант, который просили.
+    gz = "gzip" in request.headers.get("Accept-Encoding", "")
+    etag = '"%s%s"' % (hashlib.md5(body.encode("utf-8")).hexdigest(), "-gz" if gz else "")
     if request.headers.get("If-None-Match") == etag:
         resp = Response(status=304)
     else:
         resp = Response(body, content_type="application/json")
     resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Vary"] = "Accept-Encoding"
     return resp
 
 
@@ -1799,7 +1804,8 @@ def api_my_orders():
     orders = [_order_json(o, data.get("initData", "")) for o in db.get_orders_by_user(int(user["id"]))]
     # Реквизиты нужны и здесь: кто выбрал «оплачу позже», возвращается сюда, а
     # номер счёта видел один раз на экране оформления и больше нигде.
-    return jsonify({"ok": True, "orders": orders, "payment_info": _payment_info()})
+    return jsonify({"ok": True, "orders": orders, "payment_info": _payment_info(),
+                    "confirm_minutes": _confirm_minutes()})
 
 
 @app.route("/api/bonus", methods=["POST"])
