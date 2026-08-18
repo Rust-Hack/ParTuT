@@ -471,6 +471,11 @@ def _ensure_product_columns():
     # прибыль, и решения о закупке принимаются вслепую.
     if "cost" not in cols:
         cur.execute("ALTER TABLE products ADD COLUMN cost REAL DEFAULT 0")
+    # Снят с витрины. Удалить было единственным способом убрать товар из
+    # продажи — а удаление уносит и остаток, и историю. Теперь «больше не
+    # продаём» и «этого не было» — разные действия.
+    if "hidden" not in cols:
+        cur.execute("ALTER TABLE products ADD COLUMN hidden INTEGER DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -3041,7 +3046,20 @@ def add_product(city, category, name, price, stock, is_hit=0, description="",
 
 # Какие колонки разрешено менять (защита: имя колонки нельзя подставить параметром).
 _EDITABLE = {"name", "price", "cost", "stock", "is_hit", "description", "photo", "photo_thumb",
-             "brand", "flavor", "strength", "volume", "category", "city"}
+             "brand", "flavor", "strength", "volume", "category", "city", "hidden"}
+
+
+def hide_model_products(model_id, hidden):
+    """Снять модель с витрины сразу на всех точках (или вернуть). Возвращает,
+    скольких товаров коснулось: продавцу важно понимать масштаб действия."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE products SET hidden = %s WHERE model_id = %s"),
+                (1 if hidden else 0, model_id))
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
 
 
 def update_field(product_id, field, value):

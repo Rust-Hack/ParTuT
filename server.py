@@ -320,6 +320,7 @@ _STOCK_KEYS = ("products", "stats")
 _WRITE_PATHS = {
     "/api/admin/product": (), "/api/admin/product/update": (), "/api/admin/product/specs": (),
     "/api/admin/product/from-model": (), "/api/admin/model": (), "/api/admin/model/delete": (),
+    "/api/admin/model/hide": (),
     "/api/admin/model/photo": (),
     "/api/admin/category/spec": ("categories",), "/api/admin/category/spec/update": ("categories",),
     "/api/admin/category/spec/delete": ("categories",),
@@ -377,7 +378,7 @@ _ADMIN_READS = {
     "/api/admin/requests", "/api/admin/reviews", "/api/admin/users", "/api/admin/customer",
     "/api/admin/orders", "/api/admin/stats", "/api/admin/stock/moves", "/api/admin/promos",
     "/api/admin/staff", "/api/admin/raffle", "/api/admin/settings", "/api/admin/models",
-    "/api/admin/referrals", "/api/admin/log",
+    "/api/admin/referrals", "/api/admin/log", "/api/admin/products",
 }
 
 # Поля запроса, которые стоит сохранить в журнале. Остальные — либо секреты
@@ -1046,6 +1047,9 @@ def _all_products_payload():
             # мощность и аккумулятор у пода.
             "specs": db.product_specs(p),
             "variants": variants_by.get(p["id"], []),
+            # Снят с витрины: в каталог такой товар не попадает вовсе, но
+            # остаток, история и отзывы при нём остаются.
+            "hidden": bool(p["hidden"]) if "hidden" in p.keys() else False,
             # Сколько человек ждут поступления — админу видно, что завозить.
             "waiting": waiting.get(p["id"], 0),
             "photo_url": (f"/api/photo?file_id={p['photo']}" if p["photo"] else None),
@@ -1058,11 +1062,24 @@ def _all_products_payload():
 
 @app.route("/api/products")
 def api_products():
+    """Витрина покупателя. Снятое с продажи сюда не попадает — не полагаемся на
+    то, что каждый экран приложения не забудет его отфильтровать."""
     city = request.args.get("city")
-    out = _all_products_payload()
+    out = [p for p in _all_products_payload() if not p["hidden"]]
     if city:
         out = [p for p in out if p["city"] == city]
     return jsonify(out)
+
+
+@app.route("/api/admin/products", methods=["POST"])
+def api_admin_products():
+    """То же, но целиком — со снятыми с витрины. Только для админов."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    out = [p for p in _all_products_payload() if may_city(admin, p["city"])]
+    return jsonify({"ok": True, "products": out})
 
 
 @app.route("/api/photo")
@@ -1258,6 +1275,10 @@ def api_order():
     for pid, qty, flavor in raw_items:
         p = ctx["products"].get(pid)
         if not p:
+            continue
+        # Снятое с витрины не продаём, даже если оно осталось в чьей-то корзине
+        # с прошлой недели: витрина — не единственная дверь в заказ.
+        if "hidden" in p.keys() and p["hidden"]:
             continue
         if flavor:
             # товар-модель со вкусами: остаток берём у нужного варианта
@@ -2094,7 +2115,7 @@ def api_admin_update():
                     for p in db.get_all_products()):
                 # Перенос на точку, где эта модель уже стоит, создал бы двойника.
                 return jsonify({"ok": False, "error": "already_here"}), 400
-        elif field == "is_hit":
+        elif field in ("is_hit", "hidden"):
             value = 1 if raw else 0
         else:
             return jsonify({"ok": False, "error": "bad_field"}), 400
@@ -2966,6 +2987,12 @@ def api_admin_location_delete():
         return jsonify({"ok": False, "error": "not_found"}), 404
     if db.count_products_in_location(loc["name"]) > 0:
         return jsonify({"ok": False, "error": "has_products"}), 400
+    # Открытые заказы этой точки повиснут в городе, которого больше нет: покупатель
+    # ждёт выдачи, а продавец даже не найдёт заказ в списке своей точки.
+    open_orders = [o for o in db.get_orders()
+                   if o["city"] == loc["name"] and o["status"] in ("new", "paid", "confirmed")]
+    if open_orders:
+        return jsonify({"ok": False, "error": "has_orders", "count": len(open_orders)}), 400
     db.delete_location(lid)
     return jsonify({"ok": True})
 
@@ -3061,6 +3088,25 @@ def api_admin_model_save():
                         "orphans": db.orphan_flavors(int(mid))})
     new_id = db.add_model(category, name, data.get("brand") or "", data.get("description") or "", specs, flavors)
     return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/admin/model/hide", methods=["POST"])
+def api_admin_model_hide():
+    """Снять модель с витрины на всех точках сразу (или вернуть).
+
+    «Больше не возим» — это не «этого не было»: удаление уносит остаток,
+    историю движений и отзывы, а снятие оставляет всё на месте."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    try:
+        mid = int(data.get("id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if not db.get_model(mid):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    hidden = bool(data.get("hidden"))
+    return jsonify({"ok": True, "hidden": hidden, "count": db.hide_model_products(mid, hidden)})
 
 
 @app.route("/api/admin/model/delete", methods=["POST"])

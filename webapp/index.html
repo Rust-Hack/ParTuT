@@ -1731,6 +1731,19 @@
       const r = await fetch("/api/products");
       allProducts = await r.json();
     }
+
+    // Витрина и админка смотрят на разные списки: покупателю снятое с продажи
+    // не приходит вовсе, а продавцу оно нужно — иначе «скрыть» превращалось бы
+    // в «потерять». Пока админский список не загружен, работаем по витрине.
+    let adminProducts = [];
+    const shelf = () => adminProducts.length ? adminProducts : allProducts;
+    async function fetchAdminProducts() {
+      try {
+        const r = await fetch("/api/admin/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (d.ok) adminProducts = d.products || [];
+      } catch (e) { /* останемся на витрине — это хуже, но не пусто */ }
+    }
     async function fetchLocations() {
       const r = await fetch("/api/locations");
       locations = await r.json();
@@ -1746,7 +1759,8 @@
       fetchAlsoBought(); fetchFlavors();   // подсказки корзины и справочник вкусов — в фоне
     }
     async function refreshProducts() {
-      await Promise.all([fetchLocations(), fetchProducts(), fetchCategories(), fetchFlavors()]);
+      await Promise.all([fetchLocations(), fetchProducts(), fetchCategories(), fetchFlavors(),
+                         (me && me.is_admin) ? fetchAdminProducts() : null]);
       recomputeCities(); renderChips(); updateFilterBtn(); renderGrid(); renderNav();
       if ($("productsView").classList.contains("show")) renderAdminList();
       if ($("locationsView").classList.contains("show")) renderLocList();
@@ -3457,6 +3471,7 @@
       if (me && me.is_super) loadReqBadge();
       loadPendingReviews(true);          // счётчик отзывов — без открытия раздела
       loadOrdersBadge();                 // сколько заказов ждут продавца
+      await fetchAdminProducts();        // со снятыми с витрины — витрина их не отдаёт
       renderLowBadge();                  // сколько позиций надо завезти
       await fetchBrands();               // нужно разделам «Товары» и «Бренды»
       $("adminView").classList.add("show");
@@ -3491,7 +3506,7 @@
       } catch (e) {}
     }
     function renderLowBadge() {
-      setBadge("lowBadge", allProducts.filter(p => (!myScope() || p.city === myScope())
+      setBadge("lowBadge", shelf().filter(p => (!myScope() || p.city === myScope())
                                                    && stockState(p) !== "ok").length);
     }
     function setBadge(id, n) {
@@ -3693,16 +3708,21 @@
           }).filter(Boolean).join(" · ");
           // «1 точка» не отвечало на вопрос, ради которого сюда и заходят: где
           // эта модель лежит и сколько её там. Показываем точки с остатком.
-          const mine = allProducts.filter(p => p.model_id === m.id);
+          const mine = shelf().filter(p => p.model_id === m.id);
           const where = mine.length
             ? mine.map(p => `${esc(p.city)} <b style="color:${p.stock <= 0 ? "var(--danger)" : p.stock <= LOW_STOCK ? "var(--warn)" : "inherit"}">${p.stock}</b>`).join(" · ")
             : `<span style="color:var(--danger)">нет ни на одной точке</span>`;
+          // Снята везде — значит «больше не возим». Остаток и отзывы при этом целы.
+          const allOff = mine.length && mine.every(p => p.hidden);
+          const off = allOff ? ` · <span style="color:var(--hint)">снята с витрины</span>` : "";
           const own = myScope() ? "" :
-            `<button class="iconbtn" data-mdedit="${m.id}">✏️</button>
+            `<button class="iconbtn" data-mdhide="${m.id}" data-on="${allOff ? 1 : 0}"
+                     title="${allOff ? 'Вернуть на витрину везде' : 'Снять с витрины на всех точках'}">${allOff ? '👁' : '🚫'}</button>
+             <button class="iconbtn" data-mdedit="${m.id}">✏️</button>
              <button class="iconbtn danger" data-mddel="${m.id}">🗑</button>`;
           return `<div class="admrow">
             <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
-              <small>${where}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small></div>
+              <small>${where}${off}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small></div>
             <button class="iconbtn ok" data-mdstock="${m.id}" title="Завезти на точку">📥</button>
             ${own}</div>`;
         }).join("");
@@ -3711,6 +3731,8 @@
       $("mdList").querySelectorAll("[data-mdedit]").forEach(b => b.onclick = () => editModel(+b.dataset.mdedit));
       $("mdList").querySelectorAll("[data-mddel]").forEach(b => b.onclick = () => delModel(+b.dataset.mddel));
       $("mdList").querySelectorAll("[data-mdstock]").forEach(b => b.onclick = () => openStockIn(+b.dataset.mdstock));
+      $("mdList").querySelectorAll("[data-mdhide]").forEach(b =>
+        b.onclick = () => hideModel(+b.dataset.mdhide, b.dataset.on !== "1"));
     }
     // ----- Завоз: модель появляется на точке с ценой и остатком -----
     let stockInModel = null;
@@ -3735,7 +3757,7 @@
            <input type="checkbox" class="sifchk" style="width:auto" checked> ${esc(f)}</label>
          <input class="sifst" inputmode="numeric" placeholder="шт." style="width:64px" value="0"></div>`).join("");
       // Где модель уже стоит — чтобы не завезти второй раз на ту же точку.
-      const where = allProducts.filter(p => p.model_id === m.id);
+      const where = shelf().filter(p => p.model_id === m.id);
       $("stockInWhere").innerHTML = where.length
         ? "Уже на точках: " + where.map(p => `${esc(p.city)} — ${p.price} Br, ${p.stock} шт`).join("; ")
         : "Пока нет ни на одной точке.";
@@ -3745,7 +3767,7 @@
       const price = $("stockInPrice").value.trim();
       if (!price) { alertMsg("Укажите цену."); return; }
       const city = $("stockInCity").value;
-      if (allProducts.some(p => p.model_id === stockInModel.id && p.city === city)) {
+      if (shelf().some(p => p.model_id === stockInModel.id && p.city === city)) {
         alertMsg("На этой точке модель уже есть — правьте её в разделе «Товары».");
         return;
       }
@@ -3791,6 +3813,27 @@
       $("mdFormSect").open = true;
       $("mdName").scrollIntoView({ behavior: "smooth", block: "center" });
     }
+    // Снять модель с витрины на всех точках сразу — обычный ответ на «мы это
+    // больше не возим». Удаление на этот вопрос отвечает слишком грубо: уносит
+    // остаток, историю движений и отзывы.
+    async function hideModel(id, hidden) {
+      const m = models.find(x => x.id === id);
+      const ask = hidden
+        ? `Снять «${m ? m.name : ""}» с витрины на всех точках? Покупатели её не увидят, остаток и отзывы останутся.`
+        : `Вернуть «${m ? m.name : ""}» на витрину?`;
+      confirmMsg(ask, async () => {
+        try {
+          const r = await fetch("/api/admin/model/hide", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ initData, id, hidden }) });
+          const d = await r.json();
+          if (!d.ok) { alertMsg("Не получилось."); return; }
+          await refreshProducts();
+          renderModelList();
+          toast(hidden ? `Снята с витрины · точек: ${d.count}` : `Снова продаётся · точек: ${d.count}`);
+        } catch (e) { alertMsg("Сеть недоступна."); }
+      });
+    }
+
     function delModel(id, force) {
       const m = models.find(x => x.id === id);
       const ask = force
@@ -3827,7 +3870,7 @@
         `<button class="ochip ${admLocFilter === c ? 'active' : ''}" data-al="${esc(c)}">${esc(n)}</button>`).join("");
       // «Что довезти» — главный вопрос к этому списку, а раньше на него отвечали
       // прокруткой всех точек подряд.
-      const mine = allProducts.filter(p => !myScope() || p.city === myScope());
+      const mine = shelf().filter(p => !myScope() || p.city === myScope());
       const nOut = mine.filter(p => stockState(p) === "out").length;
       const nLow = mine.filter(p => stockState(p) === "low").length;
       const st = [["all", "Любой остаток"], ["need", `Надо завезти${nOut + nLow ? ` · ${nOut + nLow}` : ""}`],
@@ -3870,7 +3913,7 @@
     let catEditing = null;      // код категории, которую сейчас переименовывают
     function renderCatList() {
       $("catList").innerHTML = categories.map(c => {
-        const used = allProducts.filter(p => p.category === c.code).length;
+        const used = shelf().filter(p => p.category === c.code).length;
         // Правка прямо в строке: окно prompt в Telegram открывается не везде,
         // и на таких кнопках это оборачивается «нажал — ничего не произошло».
         if (catEditing === c.code) {
@@ -4515,7 +4558,7 @@
     $("stockClose").onclick = () => $("stockView").classList.remove("show");
 
     function openStockMove(id) {
-      stockProduct = allProducts.find(p => p.id === id);
+      stockProduct = shelf().find(p => p.id === id);
       if (!stockProduct) return;
       stockReason = "in";
       $("stockView").classList.add("show");
@@ -4576,7 +4619,7 @@
         const d = await r.json();
         if (!d.ok) { alertMsg("Не удалось записать движение."); return; }
         await refreshProducts();
-        stockProduct = allProducts.find(p => p.id === stockProduct.id) || stockProduct;
+        stockProduct = shelf().find(p => p.id === stockProduct.id) || stockProduct;
         $("stockNow").textContent = `${stockProduct.city} · сейчас ${d.stock} шт`;
         $("stockQty").value = ""; $("stockNote").value = "";
         await loadStockLog(stockProduct.id);
@@ -4812,7 +4855,7 @@
         const i = p.indexOf("="); if (i > 0) kv[p.slice(0, i)] = p.slice(i + 1);
       });
       const pid = +(kv.id || kv.product_id || 0);
-      const p = allProducts.find(o => o.id === pid);
+      const p = shelf().find(o => o.id === pid);
       const what = p ? `${p.name} · ${p.city}` : (kv.name || (pid ? `товар #${pid}` : ""));
       if (x.action === "product/update")
         return [what, `${LOG_FIELDS[kv.field] || kv.field || ""}: ${kv.value || ""}`].filter(Boolean).join(" — ");
@@ -5324,7 +5367,7 @@
                 ? b.flavors.map(f => `<span class="brchip">${esc(f)}</span>`).join("")
                 : '<span style="color:var(--hint);font-size:12.5px">вкусов нет</span>'}</div>`
             : "";
-          const used = allProducts.filter(p => p.brand === b.name).length;
+          const used = shelf().filter(p => p.brand === b.name).length;
           return `<div class="admrow brrow" data-brtoggle="${b.id}">
               <div class="an">${esc(b.name)}<small>вкусов: ${b.flavors.length} · ${used ? `${used} ${plural(used, "товар", "товара", "товаров")}` : "нет товаров"} ${open ? '▲' : '▼'}</small></div>
               <button class="iconbtn" data-bre="${b.id}">✏️</button>
@@ -5638,9 +5681,9 @@
     $("toModels").onclick = () => { $("productsView").classList.remove("show"); openModels(); };
 
     function renderAdminList() {
-      if (!allProducts.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
+      if (!shelf().length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
       const q = (admSearch || "").trim().toLowerCase();
-      const list = allProducts.filter(p => {
+      const list = shelf().filter(p => {
         // Продавец точки ведёт свою точку — чужие товары ему не показываем даже
         // на чтение: правки по ним сервер отклонит, а список только путает.
         if (myScope() && p.city !== myScope()) return false;
@@ -5665,8 +5708,12 @@
         const out = st === "out" ? `<span class="tagbadge out">нет</span>`
                   : st === "low" ? `<span class="tagbadge warn">осталось ${p.stock}</span>` : "";
         const wait = p.waiting ? `<span class="tagbadge warn">ждут ${p.waiting}</span>` : "";
-        const marks = (out || wait) ? `<div class="admmarks">${out}${wait}</div>` : "";
+        const off = p.hidden ? `<span class="tagbadge">снят с витрины</span>` : "";
+        const marks = (out || wait || off) ? `<div class="admmarks">${out}${wait}${off}</div>` : "";
+        // «Больше не продаём» и «этого не было» — разные вещи. Снятый товар
+        // сохраняет остаток, историю и отзывы, удалённый уносит их с собой.
         const tail = `<button class="iconbtn" data-move="${p.id}" title="Приход или списание">📦</button>
+            <button class="iconbtn" data-hide="${p.id}" title="${p.hidden ? 'Вернуть на витрину' : 'Снять с витрины'}">${p.hidden ? '👁' : '🚫'}</button>
             <button class="iconbtn" data-edit="${p.id}">✏️</button>
             <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
         if (hasVariants(p)) {
@@ -5682,6 +5729,7 @@
       $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
       $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
       $("adminList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => delAdminRow(+b.dataset.del));
+      $("adminList").querySelectorAll("[data-hide]").forEach(b => b.onclick = () => toggleHidden(+b.dataset.hide));
     }
 
     // ----- Редактор товара -----
@@ -5689,7 +5737,7 @@
     $("editClose").onclick = () => $("editView").classList.remove("show");
 
     function openEdit(id) {
-      const p = allProducts.find(x => x.id === id); if (!p) return;
+      const p = shelf().find(x => x.id === id); if (!p) return;
       editId = id;
       editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock }));
       editPhotoFile = null;
@@ -5953,7 +6001,27 @@
       finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
     }
 
-    function delAdminRow(id) { confirmMsg("Удалить товар?", () => doDelAdminRow(id)); }
+    function delAdminRow(id) {
+      const p = shelf().find(x => x.id === id);
+      // Удаление уносит остаток и историю. Если товар просто кончился —
+      // правильный ход другой, и сказать об этом надо до, а не после.
+      const warn = p && p.stock > 0
+        ? `Удалить «${p.name}» с точки ${p.city}? На полке ещё ${p.stock} шт — если товар просто закончился, лучше снять с витрины (🚫).`
+        : "Удалить товар с точки?";
+      confirmMsg(warn, () => doDelAdminRow(id));
+    }
+
+    // Снять с витрины / вернуть. Для покупателя товар исчезает, для магазина
+    // остаётся: остаток, движения склада и отзывы на месте.
+    async function toggleHidden(id) {
+      const p = shelf().find(x => x.id === id); if (!p) return;
+      try {
+        await fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData, id, field: "hidden", value: p.hidden ? 0 : 1 }) });
+        await refreshProducts();
+        toast(p.hidden ? "Снова на витрине" : "Снят с витрины — остаток сохранён");
+      } catch (e) { alertMsg("Сеть недоступна."); }
+    }
     async function doDelAdminRow(id) {
       try {
         await fetch("/api/admin/product/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
