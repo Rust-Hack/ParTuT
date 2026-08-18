@@ -37,7 +37,7 @@ def run():
     def заказать(qty, use_coins=False):
         return client.post("/api/order", json={
             "initData": "x", "city": "Минск", "delivery_method_id": method["id"],
-            "delivery_address": "ул. Тестовая 1", "payment_method": "cash",
+            "delivery_address": "ул. Тестовая 1", "phone": "+375291112233", "payment_method": "cash",
             "use_coins": use_coins, "items": [{"id": pid, "qty": qty}]}).get_json()
 
     # --- Порога нет: доставка платная всегда ---
@@ -78,7 +78,7 @@ def run():
     # Порог берётся из настроек магазина, а не из присланного запроса.
     d = client.post("/api/order", json={
         "initData": "x", "city": "Минск", "delivery_method_id": method["id"],
-        "delivery_address": "ул. Тестовая 1", "payment_method": "cash",
+        "delivery_address": "ул. Тестовая 1", "phone": "+375291112233", "payment_method": "cash",
         "delivery_fee": 0, "free_delivery": True,
         "items": [{"id": pid, "qty": 1}]}).get_json()
     c("подделанный запрос доставку не обнуляет", abs(d["total"] - 25.0) < 0.01)

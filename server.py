@@ -1204,6 +1204,10 @@ def _token_ok(file_id, token):
     return hmac.compare_digest(want, sig)
 
 
+def _digits(s):
+    return "".join(ch for ch in (s or "") if ch.isdigit())
+
+
 def _may_see_photo(file_id, token=""):
     """Картинки товаров открыты всем — это витрина. Всё остальное здесь —
     чеки об оплате: к ним нужен пропуск.
@@ -1458,6 +1462,12 @@ def api_order():
     address = (data.get("delivery_address") or "").strip()
     if method["needs_address"] and not address:
         return jsonify({"ok": False, "error": "no_address"}), 400
+    # На доставку телефон обязателен. Курьер стоит у подъезда, а связь с
+    # покупателем — только через Telegram, который может быть выключен: заказ
+    # уезжает обратно, деньги и время потеряны.
+    phone = (data.get("phone") or "").strip()
+    if method["needs_address"] and len(_digits(phone)) < 7:
+        return jsonify({"ok": False, "error": "no_phone"}), 400
     # Точку самовывоза сверяем со списком города, а не берём на слово: иначе в
     # заказ попадёт любой текст, и продавец поедет по несуществующему адресу.
     # Условие простое: у способа не спрашивают адрес, а у города есть точки —
@@ -1513,12 +1523,20 @@ def api_order():
     needs_receipt = (payment == "card")
 
     # Заказ, монеты и склад — одной транзакцией (один commit вместо десятка).
-    order_id, coins_used, total = db.place_order(
-        user_id, username, city, items, subtotal, fee, COIN_VALUE, spend,
-        method["name"], address, payment,
-        (data.get("comment") or "").strip(), (data.get("phone") or "").strip(),
-        "new" if needs_receipt else "paid",
-        promo_code, promo_discount)
+    try:
+        order_id, coins_used, total = db.place_order(
+            user_id, username, city, items, subtotal, fee, COIN_VALUE, spend,
+            method["name"], address, payment,
+            (data.get("comment") or "").strip(), phone,
+            "new" if needs_receipt else "paid",
+            promo_code, promo_discount)
+    except db.OutOfStock as e:
+        # Пока человек оформлял, последнюю штуку забрал кто-то другой. Лучше
+        # честно сказать сейчас, чем продать то, чего нет, и отказывать при выдаче.
+        _cache_bust("products")
+        return jsonify({"ok": False, "error": "sold_out", "name": e.name,
+                        "message": f"«{e.name}» разобрали, пока вы оформляли заказ. "
+                                   "Обновите корзину — остальное на месте."}), 409
     discount = round(coins_used * COIN_VALUE, 2)
     if promo_code and promo_discount:
         db.consume_promo(promo_code)      # одно использование потрачено

@@ -19,13 +19,18 @@ def _clean():
     server._cache_bust()
 
 
-def _sell(pid, name, price, cost, qty=1):
-    """Выданный заказ: закупка фиксируется в позиции, как в бою."""
+def _sell(pid, name, price, cost, qty=1, coins=0, promo=0.0):
+    """Выданный заказ: закупка фиксируется в позиции, как в бою.
+
+    coins/promo — то, чем покупатель расплатился вместо денег: это прямой
+    вычет из выручки заказа, а не подарок «мимо кассы»."""
+    paid = price * qty - round(coins * db.COIN_VALUE + promo, 2)
     oid = db.create_order(BUYER, "buyer", "Минск",
                           [{"id": pid, "name": name, "price": price, "cost": cost, "qty": qty}],
-                          price * qty, "")
+                          max(0.0, paid), "")
     conn = db.connect(); cur = conn.cursor()
-    cur.execute(db._q("UPDATE orders SET status = 'issued' WHERE id = %s"), (oid,))
+    cur.execute(db._q("UPDATE orders SET status = 'issued', coins_used = %s, promo_discount = %s "
+                      "WHERE id = %s"), (coins, promo, oid))
     conn.commit(); conn.close()
     return oid
 
@@ -102,8 +107,43 @@ def run():
     c("и число ожидающих тоже", all("waiting" not in p for p in me_prod))
     c("но цена и остаток на месте", "price" in me_prod[0] and "stock" in me_prod[0])
 
+    # --- Скидки съедают прибыль, и это должно быть видно ---
+    # Заказ на 36 с закупкой 22: если покупатель добавил 1023 монеты, магазин
+    # получил 25.77 и заработал 3.77. Раньше прибыль считалась по ценникам —
+    # 14.00, почти вчетверо больше, — и по такому числу решали, что закупать.
+    c5 = Checker("Скидки в прибыли")
     _clean()
-    return c.fails
+    dp = db.add_product("Минск", "liquid", "Скидочный", 18.0, 10)
+    _sell(dp, "Скидочный", 18.0, 11.0, qty=2, coins=1023)
+    s5 = db.get_business_stats()
+    c5("выручка — то, что реально заплатили", abs(s5["revenue"] - 25.77) < 0.01)
+    c5("прибыль считается от неё же", abs(s5["profit"] - 3.77) < 0.01)
+    c5("а не от ценника (14.00)", abs(s5["profit"] - 14.0) > 1)
+    c5("маржа с той же базы", abs(s5["margin"] - 14.6) < 0.5)
+
+    _clean()
+    dp2 = db.add_product("Минск", "liquid", "Промо", 20.0, 10)
+    _sell(dp2, "Промо", 20.0, 12.0, qty=1, promo=5.0)
+    s6 = db.get_business_stats()
+    c5("промокод тоже вычитается", abs(s6["profit"] - 3.0) < 0.01)
+
+    _clean()
+    dp3 = db.add_product("Минск", "liquid", "Даром", 20.0, 10)
+    _sell(dp3, "Даром", 20.0, 15.0, qty=1, coins=3000)   # скидка больше суммы товаров
+    s7 = db.get_business_stats()
+    c5("скидка не больше стоимости товаров — прибыль в минусе, но не в бездне",
+      -15.01 < s7["profit"] < -14.99)
+
+    # Карточка покупателя считает по тем же правилам.
+    _clean()
+    dp4 = db.add_product("Минск", "liquid", "Карточка", 18.0, 10)
+    _sell(dp4, "Карточка", 18.0, 11.0, qty=2, coins=1023)
+    card = db.customer_card(BUYER)
+    c5("в карточке покупателя та же прибыль", abs(card["profit"] - 3.77) < 0.01)
+    c5("и потрачено — то, что заплатили", abs(card["spent"] - 25.77) < 0.01)
+
+    _clean()
+    return c.fails + c5.fails
 
 
 if __name__ == "__main__":

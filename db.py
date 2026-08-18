@@ -1492,6 +1492,13 @@ def customer_card(user_id, limit=30):
             items = json.loads(r["items"])
         except (TypeError, ValueError):
             items = []
+        # Скидка монетами и промокодом — вычет из денег за этот заказ, а не
+        # подарок «мимо кассы»: без неё карточка показывала бы, что покупатель
+        # приносит больше, чем на самом деле.
+        paid_for_goods = sum(float(i.get("price", 0) or 0) * int(i.get("qty", 0) or 0) for i in items)
+        given = round(int(r["coins_used"] or 0) * COIN_VALUE + float(r["promo_discount"] or 0), 2) \
+            if "coins_used" in r.keys() else 0.0
+        given = min(given, paid_for_goods)
         for it in items:
             try:
                 q = int(it.get("qty", 0))
@@ -1500,11 +1507,13 @@ def customer_card(user_id, limit=30):
             nm = it.get("name", "?")
             price = float(it.get("price", 0) or 0)
             cost = float(it.get("cost", 0) or 0)
+            line = q * price
+            off = (line / paid_for_goods * given) if paid_for_goods else 0.0
             qty_by_name[nm] = qty_by_name.get(nm, 0) + q
             # Нулевая закупочная — это «не заполнено», а не «досталось даром».
             if cost > 0:
-                profit += q * (price - cost)
-                revenue_known += q * price
+                profit += line - off - q * cost
+                revenue_known += line - off
     favorites = [{"name": n, "qty": q} for n, q in sorted(qty_by_name.items(), key=lambda x: -x[1])[:5]]
 
     dates = [r["created_at"] for r in issued if r["created_at"]]
@@ -1878,31 +1887,45 @@ def get_business_stats(days=None):
 
     # Топ товаров (парсим JSON только выданных за период)
     if cutoff:
-        cur.execute(_q("SELECT items FROM orders WHERE status='issued' AND created_at >= %s"), (cutoff,))
+        cur.execute(_q("SELECT items, coins_used, promo_discount FROM orders "
+                       "WHERE status='issued' AND created_at >= %s"), (cutoff,))
     else:
-        cur.execute("SELECT items FROM orders WHERE status='issued'")
+        cur.execute("SELECT items, coins_used, promo_discount FROM orders WHERE status='issued'")
     qty_by_name, rev_by_name, profit_by_name = {}, {}, {}
     profit = 0.0            # прибыль ТОЛЬКО по позициям с известной закупочной ценой
     revenue_known = 0.0     # выручка этих же позиций — чтобы посчитать наценку
     revenue_unknown = 0.0   # выручка там, где закупочная цена не заполнена
     for r in cur.fetchall():
         try:
-            for it in json.loads(r["items"]):
+            items = json.loads(r["items"])
+            # Монеты и промокод — это НЕ подарок покупателю за наш счёт «где-то
+            # там», а прямой вычет из денег за этот заказ. Раньше прибыль
+            # считалась по ценникам, будто скидки не было: заказ на 25.77 при
+            # закупке 22 показывал прибыль 14 вместо 3.77 — и по таким числам
+            # принимались решения о закупке.
+            paid_for_goods = sum(float(i.get("price", 0) or 0) * int(i.get("qty", 0)) for i in items)
+            given = round(int(r["coins_used"] or 0) * COIN_VALUE + float(r["promo_discount"] or 0), 2)
+            given = min(given, paid_for_goods)
+            for it in items:
                 nm = it.get("name", "?")
                 q = int(it.get("qty", 0))
                 price = float(it.get("price", 0) or 0)
                 cost = float(it.get("cost", 0) or 0)
+                line = q * price
+                # Скидка ложится на позиции пропорционально их доле в заказе.
+                off = (line / paid_for_goods * given) if paid_for_goods else 0.0
                 qty_by_name[nm] = qty_by_name.get(nm, 0) + q
-                rev_by_name[nm] = rev_by_name.get(nm, 0) + q * price
+                rev_by_name[nm] = rev_by_name.get(nm, 0) + line - off
                 # Нулевая закупочная цена — это «не заполнено», а не «досталось
                 # даром». Считать её прибылью значит рисовать себе доход,
                 # которого нет, поэтому такие позиции идут отдельной строкой.
                 if cost > 0:
-                    profit += q * (price - cost)
-                    revenue_known += q * price
-                    profit_by_name[nm] = profit_by_name.get(nm, 0) + q * (price - cost)
+                    earned = line - off - q * cost
+                    profit += earned
+                    revenue_known += line - off
+                    profit_by_name[nm] = profit_by_name.get(nm, 0) + earned
                 else:
-                    revenue_unknown += q * price
+                    revenue_unknown += line - off
         except (TypeError, ValueError):
             pass
     top = [{"name": n, "qty": q, "revenue": round(rev_by_name.get(n, 0), 2),
@@ -2381,6 +2404,8 @@ def get_no_reminders(user_id):
 
 # Картинки в копию НЕ кладём: это кэш, их всегда можно скачать заново из
 # Telegram по file_id, зато весят они больше всех остальных данных вместе взятых.
+COIN_VALUE = 0.01        # 100 монет = 1 Br (та же цена, что и при списании)
+
 BACKUP_SKIP = {"photo_blobs"}
 
 
@@ -3190,6 +3215,15 @@ def get_checkout_data(user_id, product_ids, method_id):
             "variants": variants, "method": method, "points": points}
 
 
+class OutOfStock(Exception):
+    """Товар разобрали, пока покупатель оформлял заказ. Несёт его название,
+    чтобы человеку можно было сказать, что именно кончилось."""
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.name = name
+
+
 def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins_to_spend,
                 method_name, address, payment, comment, phone, status,
                 promo_code="", promo_discount=0.0):
@@ -3237,16 +3271,24 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
         )
 
         # 3. Склад: у товаров со вкусами списываем вариант, у обычных — сам товар.
+        #
+        # Списываем УСЛОВНО: «...WHERE stock >= сколько нужно». Если строк не
+        # изменилось — товар разобрали, пока человек оформлял, и весь заказ
+        # откатывается. Раньше остаток просто прижимался к нулю, и на последнюю
+        # штуку могли одновременно оформиться двое: остаток 0, продано две,
+        # а на полке одна. Кому-то из покупателей пришлось бы отказать.
         touched_variants = set()
         for it in items:
             if it.get("flavor"):
-                cur.execute(_q(f"UPDATE product_variants SET stock = {GREATEST}(0, stock - %s) "
-                               "WHERE product_id = %s AND flavor = %s"),
-                            (it["qty"], it["id"], it["flavor"]))
+                cur.execute(_q("UPDATE product_variants SET stock = stock - %s "
+                               "WHERE product_id = %s AND flavor = %s AND stock >= %s"),
+                            (it["qty"], it["id"], it["flavor"], it["qty"]))
                 touched_variants.add(it["id"])
             else:
-                cur.execute(_q(f"UPDATE products SET stock = {GREATEST}(0, stock - %s) WHERE id = %s"),
-                            (it["qty"], it["id"]))
+                cur.execute(_q("UPDATE products SET stock = stock - %s WHERE id = %s AND stock >= %s"),
+                            (it["qty"], it["id"], it["qty"]))
+            if cur.rowcount < 1:
+                raise OutOfStock(it.get("name") or "товар")
         # общий остаток товара-модели = сумма остатков вкусов
         for pid in touched_variants:
             cur.execute(_q("""UPDATE products SET stock =

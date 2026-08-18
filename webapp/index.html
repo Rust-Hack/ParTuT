@@ -3084,6 +3084,9 @@
       if (m.needs_address && !selAddress.trim())
         return m.address_label ? `Заполните поле «${m.address_label}»` : "Укажите адрес";
       if (!m.needs_address && pickupPoints.length && !selPoint) return "Выберите точку самовывоза";
+      // На доставку телефон обязателен: курьеру нужно чем-то позвонить, если
+      // он стоит у подъезда, а Telegram у покупателя выключен.
+      if (m.needs_address && (selPhone.replace(/\D/g, "").length < 7)) return "Укажите телефон для курьера";
       if (m.needs_payment && !selPayment) return "Выберите способ оплаты";
       return null;
     }
@@ -3150,14 +3153,22 @@
         // Телефон и комментарий заполнять необязательно, поэтому они не должны
         // удлинять шторку: прячем под раскрытие, а в заголовке показываем, что
         // уже заполнено — иначе непонятно, есть там что-то или пусто.
+        // На доставку телефон обязателен, поэтому шторку сразу раскрываем и
+        // говорим об этом заголовком: иначе человек упрётся в неактивную кнопку
+        // и не поймёт, чего от него хотят.
+        const нуженТел = !!m.needs_address;
+        const нетТел = нуженТел && selPhone.replace(/\D/g, "").length < 7;
         const сводка = [selPhone && esc(selPhone), selComment && "комментарий",
                         promoOff > 0 && `промокод −${promoOff.toFixed(2)} Br`].filter(Boolean).join(" · ");
-        extra += `<details class="dopt"${(selComment || promoErr || promoOff) ? " open" : ""}>
-            <summary><span class="dopt-t">Телефон, комментарий, промокод</span><b>${сводка || "по желанию"}</b></summary>
+        const заголовок = нуженТел ? "Телефон для курьера, комментарий, промокод"
+                                   : "Телефон, комментарий, промокод";
+        extra += `<details class="dopt"${(нетТел || selComment || promoErr || promoOff) ? " open" : ""}>
+            <summary><span class="dopt-t">${заголовок}</span><b>${сводка || (нуженТел ? "нужен телефон" : "по желанию")}</b></summary>
             <div class="dopt-body">
               <div class="dfield">
-                <label for="delPhone">Телефон для связи</label>
+                <label for="delPhone">Телефон для связи${нуженТел ? " — обязательно" : ""}</label>
                 <input id="delPhone" inputmode="tel" placeholder="+375 29 000-00-00" value="${esc(selPhone)}">
+                ${нуженТел ? `<div class="dnote" style="margin:6px 0 0">Курьер позвонит, если не сможет вас найти.</div>` : ""}
               </div>
               <div class="dfield">
                 <label for="delComment">Комментарий продавцу</label>
@@ -3237,7 +3248,7 @@
       if ($("delAddr")) $("delAddr").oninput = () => { selAddress = $("delAddr").value; refreshDelSubmit(); };
       if ($("delPromo")) $("delPromo").oninput = () => { selPromo = $("delPromo").value.trim().toUpperCase(); };
       if ($("promoApply")) $("promoApply").onclick = applyPromo;
-      if ($("delPhone")) $("delPhone").oninput = () => { selPhone = $("delPhone").value; };
+      if ($("delPhone")) $("delPhone").oninput = () => { selPhone = $("delPhone").value; refreshDelSubmit(); };
       if ($("delComment")) $("delComment").oninput = () => { selComment = $("delComment").value; };
       if ($("delSubmit")) $("delSubmit").onclick = doSubmitOrder;
     }
@@ -3266,10 +3277,18 @@
           payment_method: m.needs_payment ? selPayment : "none" }) });
         const d = await r.json();
         if (!d.ok) {
-          const errs = { auth: "Откройте магазин из бота.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек.", bad_delivery: "Выберите способ получения.", no_address: "Введите адрес.", bad_payment: "Выберите оплату.",
+          const errs = { auth: "Откройте магазин из бота.", no_phone: "Для доставки нужен телефон.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек.", bad_delivery: "Выберите способ получения.", no_address: "Введите адрес.", bad_payment: "Выберите оплату.",
                         no_point: "Выберите точку самовывоза.", bad_point: "Эта точка больше не работает — выберите другую.",
                         promo_unknown: "Такого промокода нет.", promo_used_up: "Промокод уже разобрали.",
                         promo_min: "Промокод действует от большей суммы.", promo_once: "Этим промокодом вы уже пользовались." };
+          // Товар мог кончиться, пока человек заполнял доставку: сервер честно
+          // отказывает, а мы обновляем витрину, чтобы он видел это своими глазами.
+          if (d.error === "sold_out") {
+            await refreshProducts();
+            renderCart();
+            alertMsg(d.message || "Товар разобрали. Обновите корзину.");
+            return;
+          }
           alertMsg(errs[d.error] || "Ошибка оформления."); return;   // окно оставляем — можно поправить
         }
         closeOverlay($("deliveryOverlay"));

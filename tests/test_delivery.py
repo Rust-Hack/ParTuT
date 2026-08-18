@@ -1,5 +1,5 @@
 """Правка способа доставки на месте: /api/admin/delivery/update."""
-from _common import db, client, Checker, as_admin
+from _common import db, client, server, Checker, as_admin, as_user
 
 
 def upd(payload):
@@ -40,3 +40,48 @@ def run():
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)
+
+
+def run_phone():
+    """На доставку телефон обязателен, на самовывоз — нет.
+
+    Курьер стоит у подъезда, а связь с покупателем только через Telegram,
+    который может быть выключен: заказ уезжает обратно, деньги и время потеряны.
+    """
+    c = Checker("Телефон для курьера")
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute("DELETE FROM orders"); cur.execute("DELETE FROM products")
+    cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
+    conn.commit(); conn.close()
+
+    db.add_delivery_method("Минск", "Курьер", True, "Адрес", "", 3.0, True, 0)
+    db.add_delivery_method("Минск", "Самовывоз", False, "", "ул. Тест", 0, True, 0)
+    methods = {m["name"]: m["id"] for m in db.get_delivery_methods("Минск")}
+    pid = db.add_product("Минск", "pods", "ТелефонПод", 20.0, 50)
+    db.set_age_ok(4401)
+    as_user(4401, "buyer")
+    server._cache_bust()
+
+    def заказ(mid, **kw):
+        body = {"initData": "x", "city": "Минск", "delivery_method_id": mid,
+                "payment_method": "cash", "items": [{"id": pid, "qty": 1}]}
+        body.update(kw)
+        return client.post("/api/order", json=body)
+
+    r = заказ(methods["Курьер"], delivery_address="ул. Тестовая 1")
+    c("курьер без телефона — отказ", r.status_code == 400 and r.get_json()["error"] == "no_phone")
+    r = заказ(methods["Курьер"], delivery_address="ул. Тестовая 1", phone="12")
+    c("огрызок вместо номера тоже не проходит", r.status_code == 400)
+    r = заказ(methods["Курьер"], delivery_address="ул. Тестовая 1", phone="+375 29 111-22-33")
+    c("с телефоном заказ проходит", r.get_json().get("ok"))
+    c("телефон сохранён в заказе",
+      "111" in (db.get_order(r.get_json()["order_id"])["phone"] or ""))
+
+    r = заказ(methods["Самовывоз"])
+    c("самовывоз без телефона — можно, человек придёт сам", r.get_json().get("ok"))
+
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute("DELETE FROM orders"); cur.execute("DELETE FROM products")
+    conn.commit(); conn.close()
+    server._cache_bust()
+    return c.fails
