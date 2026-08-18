@@ -171,10 +171,26 @@ def on_admin(message):
     show_admin_menu(message.chat.id)
 
 
+@bot.message_handler(commands=["backup"])
+def cmd_backup(message):
+    """Копия по требованию — чтобы не ждать ночи перед рискованной правкой."""
+    if not is_super_admin(message.from_user.id):
+        return
+    bot.reply_to(message, "Собираю копию…")
+    err = _send_backup([message.chat.id], note="🗄 Резервная копия по запросу")
+    if err:
+        _safe_send(message.chat.id, f"Не получилось: {err}")
+
+
 # ============================================================
 #  ТЕКСТ И ФОТО (нужны только админу; остальных зовём в приложение)
 # ============================================================
 
+# ВНИМАНИЕ: этот обработчик ловит ЛЮБОЕ сообщение, а телебот перебирает их в
+# порядке объявления. Значит все команды обязаны быть объявлены ВЫШЕ него —
+# иначе команда до своего обработчика не доедет. Так и случилось с /backup:
+# бот отвечал на неё «магазин открывается по кнопке ниже», и владелец думал,
+# что копии не работают. Есть тест, который следит за этим порядком.
 @bot.message_handler(func=lambda m: True)
 def on_text(message):
     user_id = message.from_user.id
@@ -583,7 +599,10 @@ def _maybe_send_daily_summary():
 # базе. Копию храним там, где её точно не потеряют и за неё не надо платить —
 # в личке владельца в Telegram. Раз в сутки, ночью, когда никто не покупает.
 BACKUP_HOUR = int(os.environ.get("BACKUP_HOUR", "4"))
-_last_backup_date = None
+# Дату последней копии держим В БАЗЕ, а не в памяти процесса: на Render сервис
+# перезапускается при каждом деплое и после простоя, и «раз в сутки» превращалось
+# в «после каждого запуска» — владельцу падало по три копии подряд.
+_BACKUP_MARK = "last_backup_date"
 
 
 def _backup_bytes():
@@ -615,23 +634,12 @@ def _send_backup(chat_ids, note=""):
 
 def _maybe_send_backup():
     """Раз в сутки после BACKUP_HOUR по минскому времени."""
-    global _last_backup_date
     local = datetime.datetime.utcnow() + datetime.timedelta(hours=SUMMARY_TZ_OFFSET)
-    if local.hour < BACKUP_HOUR or _last_backup_date == local.date():
+    today = local.date().isoformat()
+    if local.hour < BACKUP_HOUR or db.get_setting(_BACKUP_MARK) == today:
         return
-    _last_backup_date = local.date()      # ставим ДО отправки: неудача не должна
+    db.set_setting(_BACKUP_MARK, today)   # ставим ДО отправки: неудача не должна
     _send_backup(SUPER_ADMIN_IDS)         # заставить бота слать копию каждую минуту
-
-
-@bot.message_handler(commands=["backup"])
-def cmd_backup(message):
-    """Копия по требованию — чтобы не ждать ночи перед рискованной правкой."""
-    if not is_super_admin(message.from_user.id):
-        return
-    bot.reply_to(message, "Собираю копию…")
-    err = _send_backup([message.chat.id], note="🗄 Резервная копия по запросу")
-    if err:
-        _safe_send(message.chat.id, f"Не получилось: {err}")
 
 
 # --- Напоминание покупателю: «пора пополнить» ---

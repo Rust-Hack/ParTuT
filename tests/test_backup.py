@@ -122,3 +122,79 @@ def run():
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)
+
+
+def run_handler_order():
+    """Команды обязаны быть объявлены выше общего обработчика.
+
+    Телебот перебирает обработчики в порядке объявления, а on_text ловит ЛЮБОЕ
+    сообщение. /backup был объявлен ниже — и владелец на свою команду получал
+    «магазин открывается по кнопке ниже», думая, что копии сломаны. Ошибка не
+    видна ни в коде команды, ни в логах: она в порядке строк.
+    """
+    c = Checker("Порядок обработчиков бота")
+    import bot as botmod
+
+    handlers = botmod.bot.message_handlers
+    def имя(h):
+        return getattr(h.get("function"), "__name__", "?")
+
+    # Общий — тот, что ловит текст без списка команд (у него стоит func-фильтр).
+    catch_all = next((i for i, h in enumerate(handlers)
+                      if "text" in ((h.get("filters") or {}).get("content_types") or [])
+                      and not (h.get("filters") or {}).get("commands")), None)
+    c("общий обработчик найден", catch_all is not None)
+
+    commands = {}
+    for i, h in enumerate(handlers):
+        for cmd in ((h.get("filters") or {}).get("commands") or []):
+            commands.setdefault(cmd, i)
+    c("команды вообще есть", len(commands) >= 5)
+
+    поздние = [cmd for cmd, i in commands.items() if catch_all is not None and i > catch_all]
+    c(f"ни одна команда не объявлена ниже общего обработчика (иначе она не работает): {поздние}",
+      not поздние)
+    c("/backup среди команд", "backup" in commands)
+    c("и он выше общего обработчика", commands.get("backup", 99) < (catch_all if catch_all is not None else 0))
+    return c.fails
+
+
+def run_daily_once():
+    """Копия уходит раз в сутки, а не после каждого перезапуска.
+
+    Дата последней копии хранилась в памяти процесса. На Render сервис
+    поднимается заново при каждом деплое — и владельцу падало по три копии
+    подряд, а «раз в сутки» держалось только пока процесс жив.
+    """
+    import datetime
+    import bot as botmod
+    from _common import SENT, reset_sent
+
+    c = Checker("Копия раз в сутки")
+    db.set_setting(botmod._BACKUP_MARK, "")
+    отправлено = []
+    orig = botmod._send_backup
+    botmod._send_backup = lambda ids, note="": отправлено.append(note) or None
+    # Час заведомо после BACKUP_HOUR — иначе проверка зависела бы от времени прогона.
+    orig_hour = botmod.BACKUP_HOUR
+    botmod.BACKUP_HOUR = 0
+    try:
+        botmod._maybe_send_backup()
+        c("первая копия ушла", len(отправлено) == 1)
+        botmod._maybe_send_backup()
+        c("вторая в тот же день — нет", len(отправлено) == 1)
+        # Перезапуск сервиса: память чиста, но отметка осталась в базе.
+        botmod._maybe_send_backup()
+        c("и после перезапуска тоже нет", len(отправлено) == 1)
+        c("отметка в базе — сегодняшняя дата",
+          db.get_setting(botmod._BACKUP_MARK) ==
+          (datetime.datetime.utcnow() + datetime.timedelta(hours=botmod.SUMMARY_TZ_OFFSET)).date().isoformat())
+        # Новый день — копия снова уходит.
+        db.set_setting(botmod._BACKUP_MARK, "2020-01-01")
+        botmod._maybe_send_backup()
+        c("назавтра копия уходит снова", len(отправлено) == 2)
+    finally:
+        botmod._send_backup = orig
+        botmod.BACKUP_HOUR = orig_hour
+        db.set_setting(botmod._BACKUP_MARK, "")
+    return c.fails

@@ -47,7 +47,7 @@ def main():
     all_fails = []
     for m in MODULES:
         all_fails += m.run()
-        for extra in ('run_trust', 'run_settings', 'run_locations', 'run_phone'):
+        for extra in ('run_trust', 'run_settings', 'run_locations', 'run_phone', 'run_handler_order', 'run_daily_once'):
             if hasattr(m, extra):
                 all_fails += getattr(m, extra)()
     print("\n" + "=" * 40)
