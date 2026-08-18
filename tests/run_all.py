@@ -32,9 +32,10 @@ import test_specs
 import test_brands
 import test_models
 import test_seller_notify
+import test_permissions
 
 MODULES = [test_order_lifecycle, test_messaging, test_stats, test_delivery,
-           test_gzip, test_cache, test_order_submit, test_photos, test_staff, test_stock_alerts, test_backup, test_errors, test_repeat_reminder, test_prefill, test_pickup_points, test_profit, test_free_delivery, test_promos, test_stock_moves, test_customer_card, test_gallery, test_reviews, test_categories, test_upsell, test_specs, test_brands, test_models, test_seller_notify]
+           test_gzip, test_cache, test_order_submit, test_photos, test_staff, test_stock_alerts, test_backup, test_errors, test_repeat_reminder, test_prefill, test_pickup_points, test_profit, test_free_delivery, test_promos, test_stock_moves, test_customer_card, test_gallery, test_reviews, test_categories, test_upsell, test_specs, test_brands, test_models, test_seller_notify, test_permissions]
 
 
 def main():

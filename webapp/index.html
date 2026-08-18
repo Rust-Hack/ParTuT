@@ -938,21 +938,22 @@
     <div class="prow" id="mProducts"><span>🛍 Товары <b id="lowBadge" class="reqbadge warn" style="display:none">0</b></span><span>›</span></div>
     <div class="prow" id="mReviews"><span>⭐ Отзывы <b id="revBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
 
-    <div class="mgroup">Что мы продаём</div>
+    <div class="mgroup" id="gCatalog">Что мы продаём</div>
     <div class="prow" id="mModels"><span>📚 Ассортимент</span><span>›</span></div>
     <div class="prow" id="mBrands"><span>🏷 Бренды</span><span>›</span></div>
     <div class="prow" id="mCats"><span>🗂 Категории товара</span><span>›</span></div>
 
-    <div class="mgroup">Магазин</div>
+    <div class="mgroup" id="gShop">Магазин</div>
     <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
     <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
     <div class="prow" id="mPromos"><span>🎟 Промокоды</span><span>›</span></div>
     <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
 
-    <div class="mgroup">Настройка</div>
+    <div class="mgroup" id="gSetup">Настройка</div>
     <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
     <div class="prow" id="mStaff" style="display:none"><span>🔑 Доступ продавцов</span><span>›</span></div>
+    <div class="prow" id="mLog" style="display:none"><span>🧾 Журнал действий</span><span>›</span></div>
   </div>
 
   <!-- Отзывы на модерации -->
@@ -1131,6 +1132,16 @@
       <label>Порог участия (Br за месяц)</label><input id="raThreshold" inputmode="decimal" placeholder="25">
       <button class="bigbtn" id="raSave" style="margin-top:16px">Сохранить</button>
       <button class="closebtn" id="raDraw" style="color:var(--danger)">🎲 Разыграть сейчас и начать новый</button>
+    </div>
+  </div>
+
+  <!-- Раздел: Журнал действий (владелец) -->
+  <div class="view" id="logView">
+    <div class="viewhead"><h2>🧾 Журнал</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="logClose">‹ Назад</button></div>
+    <div class="card-block">
+      <p style="color:var(--hint);font-size:13px;margin:0 0 10px;text-align:left">Кто и что менял: цену, остаток, товар, настройки. Остаток и раньше писался в журнал движений у каждого товара — здесь всё остальное, что прежде менялось бесследно.</p>
+      <div id="logList"></div>
     </div>
   </div>
 
@@ -3414,12 +3425,31 @@
       if ($("mRequests")) $("mRequests").style.display = (me && me.is_super) ? "" : "none";
       // Раздавать доступ может только владелец: иначе продавец выпишет права сам себе.
       if ($("mStaff")) $("mStaff").style.display = (me && me.is_super) ? "" : "none";
+      if ($("mLog")) $("mLog").style.display = (me && me.is_super) ? "" : "none";
+      applyAdminScope();
       if (me && me.is_super) loadReqBadge();
       loadPendingReviews(true);          // счётчик отзывов — без открытия раздела
       loadOrdersBadge();                 // сколько заказов ждут продавца
       renderLowBadge();                  // сколько позиций надо завезти
       await fetchBrands();               // нужно разделам «Товары» и «Бренды»
       $("adminView").classList.add("show");
+    }
+
+    // Продавец точки ведёт свою точку: товары, склад, заказы. Всё, что меняет
+    // магазин целиком — ассортимент, бренды, категории, настройки, деньги, —
+    // сервер ему всё равно вернёт 403, и показывать эти строки значит обещать
+    // то, чего не будет.
+    const myScope = () => (me && me.admin_city) || "";
+    function applyAdminScope() {
+      const shopWide = !myScope();
+      // Ассортимент продавцу нужен: оттуда он завозит модель на свою точку.
+      // Заводить и править модели там он не сможет — это прячется внутри.
+      ["mBrands", "mCats", "gShop", "mStats", "mReferrals", "mPromos", "mRaffle",
+       "gSetup", "mLocations", "mSettings"].forEach(id => {
+        const el = $(id); if (el) el.style.display = shopWide ? "" : "none";
+      });
+      const head = document.querySelector("#adminView .viewhead h2");
+      if (head) head.textContent = shopWide ? "🛠 Управление" : `🛠 Управление · ${myScope()}`;
     }
 
     // Заказы и остаток — то, ради чего сюда заходят. Без счётчиков в оба раздела
@@ -3434,7 +3464,8 @@
       } catch (e) {}
     }
     function renderLowBadge() {
-      setBadge("lowBadge", allProducts.filter(p => stockState(p) !== "ok").length);
+      setBadge("lowBadge", allProducts.filter(p => (!myScope() || p.city === myScope())
+                                                   && stockState(p) !== "ok").length);
     }
     function setBadge(id, n) {
       const b = $(id); if (!b) return;
@@ -3515,6 +3546,10 @@
     }
     async function openModels() {
       $("modelsView").classList.add("show");
+      // Продавец точки приходит сюда за одним — завезти модель к себе. Описание
+      // модели общее для всех точек, поэтому форму и правку ему не показываем:
+      // сервер их всё равно не примет.
+      if ($("mdFormSect")) $("mdFormSect").style.display = myScope() ? "none" : "";
       $("mdCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
       await Promise.all([fetchModels(), fetchBrands(), fetchFlavors()]);
       resetModelForm();
@@ -3635,12 +3670,14 @@
           const where = mine.length
             ? mine.map(p => `${esc(p.city)} <b style="color:${p.stock <= 0 ? "var(--danger)" : p.stock <= LOW_STOCK ? "var(--warn)" : "inherit"}">${p.stock}</b>`).join(" · ")
             : `<span style="color:var(--danger)">нет ни на одной точке</span>`;
+          const own = myScope() ? "" :
+            `<button class="iconbtn" data-mdedit="${m.id}">✏️</button>
+             <button class="iconbtn danger" data-mddel="${m.id}">🗑</button>`;
           return `<div class="admrow">
             <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
               <small>${where}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small></div>
             <button class="iconbtn ok" data-mdstock="${m.id}" title="Завезти на точку">📥</button>
-            <button class="iconbtn" data-mdedit="${m.id}">✏️</button>
-            <button class="iconbtn danger" data-mddel="${m.id}">🗑</button></div>`;
+            ${own}</div>`;
         }).join("");
       }
       $("mdList").innerHTML = html;
@@ -3658,7 +3695,9 @@
       $("stockInView").classList.add("show");
       $("stockInName").textContent = `${m.brand ? m.brand + " " : ""}${m.name}`;
       $("stockInMeta").textContent = catName(m.category);
-      $("stockInCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
+      // Продавцу точки — только его точка: чужую сервер всё равно не примет.
+      const points = myScope() ? locations.filter(l => l.name === myScope()) : locations;
+      $("stockInCity").innerHTML = points.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
       $("stockInPrice").value = ""; $("stockInCost").value = ""; $("stockInStock").value = "";
       $("stockInHit").checked = false;
       const withFlavors = m.flavors.length > 0;
@@ -3757,12 +3796,13 @@
       $("admCatChips").innerHTML = cats.map(([c, n]) =>
         `<button class="ochip ${admCatFilter === c ? 'active' : ''}" data-ac="${c}">${n}</button>`).join("");
       const locs = [["all", "Все точки"], ...locations.map(l => [l.name, l.name])];
-      $("admLocChips").innerHTML = locs.map(([c, n]) =>
+      $("admLocChips").innerHTML = myScope() ? "" : locs.map(([c, n]) =>
         `<button class="ochip ${admLocFilter === c ? 'active' : ''}" data-al="${esc(c)}">${esc(n)}</button>`).join("");
       // «Что довезти» — главный вопрос к этому списку, а раньше на него отвечали
       // прокруткой всех точек подряд.
-      const nOut = allProducts.filter(p => stockState(p) === "out").length;
-      const nLow = allProducts.filter(p => stockState(p) === "low").length;
+      const mine = allProducts.filter(p => !myScope() || p.city === myScope());
+      const nOut = mine.filter(p => stockState(p) === "out").length;
+      const nLow = mine.filter(p => stockState(p) === "low").length;
       const st = [["all", "Любой остаток"], ["need", `Надо завезти${nOut + nLow ? ` · ${nOut + nLow}` : ""}`],
                   ["out", `Кончились${nOut ? ` · ${nOut}` : ""}`]];
       $("admStockChips").innerHTML = st.map(([c, n]) =>
@@ -4705,6 +4745,74 @@
     $("mStaff").onclick = openStaff;
     $("staffClose").onclick = () => $("staffView").classList.remove("show");
 
+    // ----- Журнал действий -----
+    $("mLog").onclick = openLog;
+    $("logClose").onclick = () => $("logView").classList.remove("show");
+
+    // Путь запроса — не то, что читает человек. Переводим в дело: «цена»,
+    // «удалил товар», «настройки магазина».
+    const LOG_NAMES = {
+      "product/update": "изменил товар", "product/delete": "удалил товар с точки",
+      "product/variants": "изменил вкусы", "product/specs": "изменил характеристики",
+      "product/from-model": "завёз на точку", "product": "добавил товар",
+      "stock/move": "движение склада", "order/status": "статус заказа",
+      "model": "изменил модель", "model/delete": "удалил модель",
+      "model/photo": "фото модели", "photo/add": "добавил фото", "photo/delete": "убрал фото",
+      "brand": "изменил бренд", "brand/delete": "удалил бренд",
+      "category": "добавил категорию", "category/update": "изменил категорию",
+      "category/delete": "удалил категорию", "settings/update": "настройки магазина",
+      "promo": "промокод", "promo/delete": "удалил промокод", "promo/toggle": "вкл/выкл промокод",
+      "location": "добавил точку", "location/delete": "удалил точку",
+      "delivery": "способ доставки", "delivery/update": "изменил доставку",
+      "delivery/delete": "удалил доставку", "staff/add": "выдал доступ",
+      "staff/remove": "забрал доступ", "review/decide": "решение по отзыву",
+      "review/delete": "удалил отзыв", "review/reply": "ответил на отзыв",
+      "coins/adjust": "правка монет", "grant": "начислил", "message": "написал клиенту",
+      "stats/reset": "сбросил статистику", "raffle/update": "правка розыгрыша",
+      "raffle/draw": "разыграл призы", "user/delete": "удалил пользователя",
+    };
+
+    const LOG_FIELDS = { price: "цена", cost: "закупка", stock: "остаток", name: "название",
+                         city: "точка", is_hit: "хит", description: "описание", category: "категория" };
+    const LOG_REASONS = { in: "приход", broken: "брак", expired: "просрочка", lost: "недостача",
+                          gift: "подарок", fix: "пересчёт" };
+
+    // «id=14 · field=price · value=15.5» — это язык запроса, а не человека.
+    // Показываем товар по имени и говорим, что именно изменилось.
+    function logLine(x) {
+      const kv = {};
+      (x.details || "").split(" · ").forEach(p => {
+        const i = p.indexOf("="); if (i > 0) kv[p.slice(0, i)] = p.slice(i + 1);
+      });
+      const pid = +(kv.id || kv.product_id || 0);
+      const p = allProducts.find(o => o.id === pid);
+      const what = p ? `${p.name} · ${p.city}` : (kv.name || (pid ? `товар #${pid}` : ""));
+      if (x.action === "product/update")
+        return [what, `${LOG_FIELDS[kv.field] || kv.field || ""}: ${kv.value || ""}`].filter(Boolean).join(" — ");
+      if (x.action === "stock/move")
+        return [what, `${LOG_REASONS[kv.reason] || kv.reason || ""} ${kv.qty || ""} шт`].filter(Boolean).join(" — ");
+      if (x.action === "order/status")
+        return `заказ #${kv.id || "?"} — ${kv.action || ""}`;
+      if (x.action.startsWith("product/") || x.action === "product") return what;
+      return x.details || "";
+    }
+
+    async function openLog() {
+      $("logView").classList.add("show");
+      $("logList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+      try {
+        const r = await fetch("/api/admin/log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        const rows = d.log || [];
+        if (!rows.length) { $("logList").innerHTML = `<p style="color:var(--hint)">Пока пусто. Здесь появятся правки цен, остатков и настроек.</p>`; return; }
+        $("logList").innerHTML = rows.map(x => {
+          const line = logLine(x);
+          return `<div class="statrow"><span>${esc(LOG_NAMES[x.action] || x.action)}${line ? " · " + esc(line) : ""}
+            <small style="display:block;color:var(--hint)">${esc(x.who)} · ${esc(x.at)}</small></span></div>`;
+        }).join("");
+      } catch (e) { $("logList").innerHTML = `<p style="color:var(--hint)">Сеть недоступна.</p>`; }
+    }
+
     async function openStaff() {
       $("staffView").classList.add("show");
       $("stId").value = ""; $("stNote").value = "";
@@ -5409,6 +5517,9 @@
       if (!allProducts.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
       const q = (admSearch || "").trim().toLowerCase();
       const list = allProducts.filter(p => {
+        // Продавец точки ведёт свою точку — чужие товары ему не показываем даже
+        // на чтение: правки по ним сервер отклонит, а список только путает.
+        if (myScope() && p.city !== myScope()) return false;
         if (admCatFilter !== "all" && p.category !== admCatFilter) return false;
         if (admLocFilter !== "all" && p.city !== admLocFilter) return false;
         const st = stockState(p);

@@ -327,6 +327,20 @@ def init_db():
         )
     """)
 
+    # Журнал действий продавцов. Остаток менялся с записью в журнал движений, а
+    # цена, удаление товара и правка настроек не оставляли следа вовсе: владелец
+    # не мог ответить, почему вчера продавали по 12 и кто убрал модель.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS admin_log (
+            id         {ID_COL},
+            admin_id   BIGINT,
+            admin_name TEXT,
+            action     TEXT,
+            details    TEXT,
+            created_at TEXT
+        )
+    """)
+
     # Сами картинки (товары, чеки). Telegram хранит их по file_id, но качать оттуда
     # долго — два запроса на каждое фото. Скачиваем ОДИН раз и держим тут, чтобы
     # перезапуск сервера не заставлял качать всё заново.
@@ -2522,6 +2536,43 @@ def staff_ids_by_city():
     for row in list_staff():
         out.setdefault(row["city"] or "", set()).add(int(row["user_id"]))
     return out
+
+
+# ---------- Журнал действий ----------
+
+ADMIN_LOG_KEEP = 2000     # сколько последних записей держим
+
+
+def log_admin_action(admin_id, admin_name, action, details=""):
+    """Записывает, кто и что изменил. Пишется молча: упавший журнал не должен
+    ронять саму операцию — продавец не виноват, что мы не смогли записать."""
+    try:
+        conn = connect()
+        cur = conn.cursor()
+        cur.execute(_q("INSERT INTO admin_log (admin_id, admin_name, action, details, created_at) "
+                       "VALUES (%s, %s, %s, %s, %s)"),
+                    (admin_id, (admin_name or "")[:64], (action or "")[:64],
+                     (details or "")[:300], _now_str()))
+        # Чистим хвост: журнал не должен расти без предела на бесплатной базе.
+        cur.execute(_q("DELETE FROM admin_log WHERE id <= "
+                       "(SELECT MAX(id) FROM admin_log) - %s"), (ADMIN_LOG_KEEP,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Не смог записать действие в журнал: {e}")
+
+
+def list_admin_log(limit=100, admin_id=None):
+    conn = connect()
+    cur = conn.cursor()
+    if admin_id:
+        cur.execute(_q("SELECT * FROM admin_log WHERE admin_id = %s ORDER BY id DESC LIMIT %s"),
+                    (int(admin_id), limit))
+    else:
+        cur.execute(_q("SELECT * FROM admin_log ORDER BY id DESC LIMIT %s"), (limit,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
 
 
 # ---------- Картинки ----------

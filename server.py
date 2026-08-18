@@ -29,15 +29,15 @@ from urllib.parse import parse_qsl
 
 import requests
 import telebot
-from flask import Flask, jsonify, request, Response, send_from_directory
+from flask import Flask, g, jsonify, request, Response, send_from_directory
 
 import config
 import db
 import errors
 import notifications
 from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CITY_ADMINS,
-                   CONFIRM_MINUTES, is_admin, is_super_admin, admins_for_city, all_admin_ids,
-                   CITIES)
+                   CONFIRM_MINUTES, is_admin, is_super_admin, admin_city, admins_for_city,
+                   all_admin_ids, CITIES)
 
 db.init_db()
 config.seed_admins_from_env()   # разовый перенос админов из окружения в базу
@@ -168,15 +168,80 @@ def get_user(init_data):
 
 
 def get_admin(init_data):
-    """Возвращает пользователя, ТОЛЬКО если он админ. Иначе None (доступ запрещён)."""
+    """Возвращает пользователя, ТОЛЬКО если он админ. Иначе None (доступ запрещён).
+
+    Кладёт его же в g.admin: журнал действий и проверка города берут админа
+    оттуда, чтобы не разбирать initData повторно на каждом запросе."""
     user = get_user(init_data)
     if not user or not user.get("id") or not is_admin(int(user["id"])):
         return None
+    user = dict(user, city=admin_city(int(user["id"])))
+    g.admin = user
     return user
 
 
 def _admin_display(admin):
     return admin.get("username") or admin.get("first_name") or str(admin.get("id"))
+
+
+# Что общее для всего магазина: правит витрину и деньги сразу на всех точках,
+# поэтому продавцу одного города там делать нечего. Проверяется централизованно
+# в before_request — иначе о ней забудут на следующем же эндпоинте.
+_OWNER_ONLY = (
+    "/api/admin/model", "/api/admin/brand", "/api/admin/category",
+    "/api/admin/location", "/api/admin/delivery", "/api/admin/point",
+    "/api/admin/settings/update", "/api/admin/promo", "/api/admin/raffle/update",
+    "/api/admin/raffle/draw", "/api/admin/staff/", "/api/admin/stats",
+    "/api/admin/user/delete", "/api/admin/log",
+)
+# Читать разрешаем всем админам: продавцу надо видеть ассортимент, реквизиты
+# и промокоды, чтобы отвечать покупателю, — просто не менять их. Статистики в
+# этом списке нет намеренно: она про деньги всего магазина.
+_OWNER_ONLY_READS = {"/api/admin/models", "/api/admin/staff", "/api/admin/promos",
+                     "/api/admin/raffle", "/api/admin/settings"}
+
+
+@app.before_request
+def _guard_owner_only():
+    path = request.path
+    if not path.startswith("/api/admin/") or path in _OWNER_ONLY_READS:
+        return None
+    if not any(path.startswith(p) for p in _OWNER_ONLY):
+        return None
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData") or request.form.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    if admin.get("city"):
+        return jsonify({"ok": False, "error": "owner_only",
+                        "message": "Это меняет магазин целиком — только у владельца."}), 403
+    return None
+
+
+def may_city(admin, city):
+    """Продавец города работает только со своим городом. Пустой город у админа —
+    полный доступ (владелец или админ над всеми точками)."""
+    scope = (admin or {}).get("city") or ""
+    return not scope or scope == city
+
+
+def _foreign():
+    return jsonify({"ok": False, "error": "other_city",
+                    "message": "Это товар другой точки."}), 403
+
+
+def deny_city(admin, city):
+    """Готовый ответ 403, если точка чужая, иначе None — чтобы в маршруте была
+    одна строчка, а не четыре одинаковых на каждый эндпоинт."""
+    return None if may_city(admin, city) else _foreign()
+
+
+def deny_product(admin, pid):
+    """То же, но город берётся у самого товара."""
+    if not (admin or {}).get("city"):
+        return None                      # полный доступ — читать товар незачем
+    p = db.get_product(pid)
+    return None if (p and may_city(admin, p["city"])) else _foreign()
 
 
 def _notify_supers_request(rid, admin, summary):
@@ -301,7 +366,41 @@ def _bust_cache_on_write(resp):
             # — иначе новый способ менять склад однажды забудут сюда вписать.
             if keys is _STOCK_KEYS or request.path.startswith("/api/admin/product"):
                 _bg(_flush_stock_alerts)
+        _write_admin_log(resp)
     return resp
+
+
+# Админские маршруты, которые только читают. Список явный: угадывать по имени
+# («заканчивается на -s») — верный способ однажды не записать изменение.
+_ADMIN_READS = {
+    "/api/admin/requests", "/api/admin/reviews", "/api/admin/users", "/api/admin/customer",
+    "/api/admin/orders", "/api/admin/stats", "/api/admin/stock/moves", "/api/admin/promos",
+    "/api/admin/staff", "/api/admin/raffle", "/api/admin/settings", "/api/admin/models",
+    "/api/admin/referrals", "/api/admin/log",
+}
+
+# Поля запроса, которые стоит сохранить в журнале. Остальные — либо секреты
+# (initData), либо шум (картинки в base64), либо и то и другое.
+_LOG_FIELDS = ("id", "model_id", "product_id", "name", "field", "value", "city",
+               "price", "cost", "stock", "code", "reason", "qty", "status", "action",
+               "user_id", "delta", "coins", "spins", "text")
+
+
+def _write_admin_log(resp):
+    """Кто и что изменил. Пишем централизованно по факту успешного изменения:
+    вписывать вызов в каждый маршрут — значит однажды забыть про новый."""
+    if not request.path.startswith("/api/admin/") or request.path in _ADMIN_READS:
+        return
+    admin = getattr(g, "admin", None)
+    if not admin:
+        return                                   # действие не админа — не наш журнал
+    try:
+        src = request.get_json(silent=True) or request.form or {}
+        parts = [f"{k}={str(src[k])[:40]}" for k in _LOG_FIELDS if k in src and src[k] not in ("", None)]
+        db.log_admin_action(int(admin["id"]), _admin_display(admin),
+                            request.path.replace("/api/admin/", ""), " · ".join(parts))
+    except Exception as e:
+        print(f"Журнал действий: {e}")
 
 
 def _flush_stock_alerts():
@@ -457,6 +556,9 @@ def api_me():
         my_point = None
     return jsonify({"ok": True, "age_ok": age_ok, "is_admin": is_admin(uid),
                     "is_super": is_super_admin(uid), "alerts": alerts,
+                    # Город продавца: пустой — доступ ко всему магазину. Приложение
+                    # по нему прячет то, что всё равно вернёт 403.
+                    "admin_city": admin_city(uid) if is_admin(uid) else "",
                     "reminders_on": reminders_on, "prefill": prefill,
                     "my_point": my_point})
 
@@ -1867,7 +1969,8 @@ def _save_specs(product_id, category, values):
 def api_admin_product_specs():
     """Сохранить характеристики товара (все разом)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         pid = int(data.get("id"))
@@ -1876,6 +1979,9 @@ def api_admin_product_specs():
     p = db.get_product(pid)
     if not p:
         return jsonify({"ok": False, "error": "not_found"}), 404
+    deny = deny_city(admin, p["city"])
+    if deny:
+        return deny
     _save_specs(pid, p["category"], data.get("specs"))
     return jsonify({"ok": True})
 
@@ -1944,13 +2050,17 @@ def api_admin_add():
 def api_admin_update():
     """Изменить одно поле товара (price / stock / name / description / is_hit)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
     try:
         pid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
+    deny = deny_product(admin, pid)
+    if deny:
+        return deny
 
     field = data.get("field")
     raw = data.get("value")
@@ -1970,6 +2080,11 @@ def api_admin_update():
             names = {loc["name"] for loc in db.get_locations()}
             if value not in names:
                 return jsonify({"ok": False, "error": "bad_value"}), 400
+            # Перенос — это и есть смена точки: чужую нельзя ни как источник,
+            # ни как цель, иначе товар уезжает туда, где продавец не отвечает.
+            deny = deny_city(admin, value)
+            if deny:
+                return deny
             cur = db.get_product(pid)
             mid = (cur["model_id"] if cur and "model_id" in cur.keys() else None)
             if mid and value != cur["city"] and any(
@@ -1993,12 +2108,16 @@ def api_admin_update():
 def api_admin_variants():
     """Заменяет список вкусов товара целиком (добавить/убрать/изменить остаток)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         pid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
+    deny = deny_product(admin, pid)
+    if deny:
+        return deny
 
     db.delete_variants(pid)
     for v in (data.get("variants") or []):
@@ -2017,12 +2136,16 @@ def api_admin_variants():
 def api_admin_delete():
     """Удалить товар."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         pid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
+    deny = deny_product(admin, pid)
+    if deny:
+        return deny
     db.delete_variants(pid)
     db.delete_product(pid)
     return jsonify({"ok": True})
@@ -2210,18 +2333,21 @@ def _order_json(o):
 
 @app.route("/api/admin/orders", methods=["POST"])
 def api_admin_orders():
-    """Список всех заказов для админ-панели (новые сверху)."""
+    """Заказы для админ-панели (новые сверху). Продавец города видит свои."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    return jsonify({"ok": True, "orders": [_order_json(o) for o in db.get_orders()]})
+    orders = [o for o in db.get_orders() if may_city(admin, o["city"])]
+    return jsonify({"ok": True, "orders": [_order_json(o) for o in orders]})
 
 
 @app.route("/api/admin/order/status", methods=["POST"])
 def api_admin_order_status():
     """Продавец меняет статус заказа из приложения (confirm / issued / reject)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         oid = int(data.get("id"))
@@ -2231,6 +2357,9 @@ def api_admin_order_status():
     order = db.get_order(oid)
     if not order:
         return jsonify({"ok": False, "error": "not_found"}), 404
+    deny = deny_city(admin, order["city"])
+    if deny:
+        return deny
 
     action = data.get("action")
     client_id = order["user_id"]
@@ -2336,6 +2465,9 @@ def api_admin_stock_move():
         return jsonify({"ok": False, "error": "bad_reason"}), 400
     if not db.get_product(pid):
         return jsonify({"ok": False, "error": "not_found"}), 404
+    deny = deny_product(admin, pid)
+    if deny:
+        return deny
 
     # Приход прибавляет, всё остальное списывает. Знак задаёт причина, а не
     # клиент: иначе «списание» могло бы прийти с плюсом.
@@ -2479,6 +2611,23 @@ def _super(data):
     if not user or not user.get("id") or not is_super_admin(int(user["id"])):
         return None
     return user
+
+
+@app.route("/api/admin/log", methods=["POST"])
+def api_admin_log():
+    """Кто и что менял. Остаток всегда писался в журнал движений, а цена,
+    удаление товара и правка настроек не оставляли следа вовсе."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not _super(data):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    rows = db.list_admin_log(limit=150)
+    return jsonify({"ok": True, "log": [{
+        "who": r["admin_name"] or str(r["admin_id"] or ""),
+        "admin_id": r["admin_id"],
+        "action": r["action"] or "",
+        "details": r["details"] or "",
+        "at": r["created_at"] or "",
+    } for r in rows]})
 
 
 @app.route("/api/admin/staff", methods=["POST"])
@@ -2903,7 +3052,8 @@ def api_admin_model_photo():
 def api_admin_product_from_model():
     """Завоз: модель появляется на точке с ценой и остатком."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         mid = int(data.get("model_id"))
@@ -2914,6 +3064,10 @@ def api_admin_product_from_model():
     city = (data.get("city") or "").strip()
     if not m or city not in db.location_names():
         return jsonify({"ok": False, "error": "bad_data"}), 400
+    # Завозить на свою точку продавец вправе — это его работа. На чужую нет.
+    deny = deny_city(admin, city)
+    if deny:
+        return deny
     # Один товар на точке — одна запись. Иначе на витрине две одинаковые
     # карточки с разными остатками, и продавец не знает, какую вести.
     if any(p["city"] == city and (p["model_id"] if "model_id" in p.keys() else None) == mid

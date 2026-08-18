@@ -67,6 +67,18 @@ def reset_sent():
     SENT.clear()
 
 
+# Настоящие проверки прав — до того, как их подменит as_admin(). Тест про
+# права обязан звать именно их, иначе он проверяет заглушку.
+REAL_GET_ADMIN = server.get_admin
+REAL_GET_USER = server.get_user
+
+
+def real_auth():
+    """Вернуть подлинную проверку прав (для тестов доступа)."""
+    server.get_admin = REAL_GET_ADMIN
+    server.get_user = REAL_GET_USER
+
+
 def as_user(uid, username=None, first_name=None):
     """Следующие запросы будут «от» этого клиента."""
     server.get_user = lambda init: {"id": uid, "username": username, "first_name": first_name}
