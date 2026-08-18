@@ -420,6 +420,7 @@ def init_db():
     _ensure_order_columns()     # coins_used / доставка у заказов
     seed_categories()           # стартовые категории, если таблица пустая
     _ensure_category_columns()  # has_flavors у категорий
+    _ensure_photo_columns()     # галерея у модели, а не у товара
     seed_category_specs()       # характеристики категорий, если их ещё нет
     models_seeded_from_products()   # разово собирает ассортимент из прежних товаров
     seed_locations()            # добавит стартовые точки, если таблица пустая
@@ -455,6 +456,21 @@ def _ensure_product_columns():
     # прибыль, и решения о закупке принимаются вслепую.
     if "cost" not in cols:
         cur.execute("ALTER TABLE products ADD COLUMN cost REAL DEFAULT 0")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_photo_columns():
+    """Галерея переехала с товара на модель: коробка одна и та же на всех точках,
+    а фото у каждого наличия отдельно — это те же снимки в трёх экземплярах."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "product_photos")
+    if "model_id" not in cols:
+        cur.execute("ALTER TABLE product_photos ADD COLUMN model_id INTEGER")
+        # Прежние фото товаров переносим на их модели.
+        cur.execute("UPDATE product_photos SET model_id = ("
+                    "SELECT model_id FROM products WHERE products.id = product_photos.product_id)")
     conn.commit()
     conn.close()
 
@@ -2750,6 +2766,43 @@ def product_ratings():
 MAX_EXTRA_PHOTOS = 5      # плюс главное фото — шесть картинок на карточку
 
 
+def model_photos(model_id):
+    """Галерея модели. Фото — свойство самого товара, а не точки: на всех
+    точках это одна и та же коробка."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT * FROM product_photos WHERE model_id = %s ORDER BY sort, id"), (model_id,))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def all_model_photos():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM product_photos WHERE model_id IS NOT NULL ORDER BY model_id, sort, id")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def add_model_photo(model_id, file_id, thumb_id=""):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT COUNT(*) AS c, COALESCE(MAX(sort), 0) AS mx FROM product_photos WHERE model_id = %s"),
+                (model_id,))
+    row = cur.fetchone()
+    if int(row["c"]) >= MAX_EXTRA_PHOTOS:
+        conn.close()
+        return None
+    pid = _insert_id(cur, "INSERT INTO product_photos (product_id, model_id, file_id, thumb_id, sort) "
+                          "VALUES (%s, %s, %s, %s, %s)",
+                     (0, model_id, file_id, thumb_id or "", int(row["mx"]) + 1))
+    conn.commit()
+    conn.close()
+    return pid
+
+
 def get_product_photos(product_id):
     conn = connect()
     cur = conn.cursor()
@@ -3521,6 +3574,27 @@ def propagate_model(model_id):
     conn.commit()
     conn.close()
     return n
+
+
+def orphan_flavors(model_id):
+    """Вкусы, которые остались на точках, но из модели уже убраны.
+
+    Остаток стирать нельзя — это реальный товар на полке. Но и молчать нельзя:
+    вкус продолжает продаваться, а в модели его нет, и следующий завоз про
+    него не вспомнит."""
+    m = get_model(model_id)
+    if not m:
+        return []
+    known = {f.strip().lower() for f in m["flavors"]}
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT v.flavor AS flavor, SUM(v.stock) AS stock FROM product_variants v "
+                   "JOIN products p ON p.id = v.product_id WHERE p.model_id = %s "
+                   "GROUP BY v.flavor"), (model_id,))
+    out = [{"flavor": r["flavor"], "stock": int(r["stock"] or 0)}
+           for r in cur.fetchall() if r["flavor"].strip().lower() not in known]
+    conn.close()
+    return out
 
 
 def count_products_of_model(model_id):

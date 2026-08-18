@@ -1294,8 +1294,10 @@
           </div>
           <div id="mdFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
         </div>
-        <label>Фото</label>
+        <label>Главное фото</label>
         <div class="edphoto"><img id="mdPhotoPrev" alt="" style="display:none"><input type="file" id="mdPhoto" accept="image/*"></div>
+        <label style="margin-top:12px" id="mdGalLabel">Ещё фото <span style="color:var(--hint);font-weight:400">— покупатель листает их в карточке</span></label>
+        <div class="edgal" id="mdGal"></div>
         <button class="bigbtn" id="mdSave" style="margin-top:14px">Сохранить модель</button>
         <button class="closebtn" id="mdCancel" style="display:none">Отменить редактирование</button>
       </div>
@@ -3501,8 +3503,16 @@
       const f = $("mdPhoto").files[0]; modelPhotoFile = f || null;
       if (f) { $("mdPhotoPrev").src = URL.createObjectURL(f); $("mdPhotoPrev").style.display = ""; }
     };
+    // Дополнительные фото грузятся сразу, а у новой модели ещё нет id, к которому
+    // их привязать — поэтому блок появляется после первого сохранения.
+    function showModelGallery(on) {
+      $("mdGalLabel").style.display = on ? "" : "none";
+      $("mdGal").style.display = on ? "" : "none";
+      if (on) renderEditGallery();
+    }
     function resetModelForm() {
-      editingModelId = null; modelFlavors = []; modelPhotoFile = null;
+      editingModelId = null; modelFlavors = []; modelPhotoFile = null; editPhotos = [];
+      showModelGallery(false);
       $("mdName").value = ""; $("mdDesc").value = ""; $("mdPhoto").value = "";
       $("mdPhotoPrev").style.display = "none"; $("mdPhotoPrev").removeAttribute("src");
       $("mdCancel").style.display = "none"; $("mdSave").textContent = "Сохранить модель";
@@ -3522,18 +3532,35 @@
       try {
         const r = await fetch("/api/admin/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const d = await r.json();
-        if (!d.ok) { alertMsg("Не удалось сохранить модель."); return; }
+        if (!d.ok) {
+          alertMsg(d.error === "exists"
+            ? `Такая модель уже есть: «${d.name}». Правьте её, а не заводите вторую — иначе остатки и продажи разъедутся по двум карточкам.`
+            : "Не удалось сохранить модель — проверьте название и категорию.");
+          return;
+        }
         if (modelPhotoFile) {
           const fd = new FormData();
           fd.append("initData", initData); fd.append("id", d.id); fd.append("file", modelPhotoFile);
           await fetch("/api/admin/model/photo", { method: "POST", body: fd });
         }
-        const updated = d.updated;
+        const updated = d.updated, wasNew = !editingModelId;
         resetModelForm();
         await Promise.all([fetchModels(), fetchFlavors()]);
         await refreshProducts();     // правка модели меняет и товары на точках
         renderModelList();
-        alertMsg(updated ? `Сохранено ✅ Обновлено товаров на точках: ${updated}` : "Модель сохранена ✅");
+        // У новой модели галерея появляется только сейчас — id для неё уже есть.
+        if (wasNew) editModel(d.id);
+        const orphans = (d.orphans || []).filter(o => o.stock > 0);
+        if (orphans.length) {
+          // Вкус убрали из модели, а на полке он есть — он и дальше продаётся.
+          alertMsg(`Сохранено ✅ Обновлено товаров на точках: ${updated}\n\n`
+            + `На точках остались вкусы, которых больше нет в модели: `
+            + orphans.map(o => `${o.flavor} (${o.stock} шт)`).join(", ")
+            + `.\nОни продолжают продаваться. Уберите их в «Товарах», если больше не возите.`);
+        } else {
+          alertMsg(updated ? `Сохранено ✅ Обновлено товаров на точках: ${updated}`
+                           : "Модель сохранена ✅ Теперь можно добавить ещё фото и завезти её на точку.");
+        }
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { $("mdSave").disabled = false; $("mdSave").textContent = editingModelId ? "Обновить модель" : "Сохранить модель"; }
     };
@@ -3620,7 +3647,12 @@
       try {
         const r = await fetch("/api/admin/product/from-model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const d = await r.json();
-        if (!d.ok) { alertMsg("Не удалось завезти — проверьте цену и точку."); return; }
+        if (!d.ok) {
+          alertMsg(d.error === "already_here" ? "На этой точке модель уже есть — правьте её в «Товарах»."
+                 : d.error === "bad_price" ? "Цена должна быть больше нуля."
+                 : "Не удалось завезти — проверьте цену и точку.");
+          return;
+        }
         await refreshProducts(); await fetchModels(); renderModelList();
         $("stockInView").classList.remove("show");
         alertMsg("Завезено ✅");
@@ -3637,6 +3669,8 @@
       if ($("mdBrand")) $("mdBrand").value = m.brand || "";
       $("mdSpecs").innerHTML = specFieldsHtml(m.category, m.specs, "mds_");
       if (m.thumb_url) { $("mdPhotoPrev").src = m.thumb_url; $("mdPhotoPrev").style.display = ""; }
+      editPhotos = (m.gallery || []).map(g => ({ id: g.id, url: g.thumb || g.url }));
+      showModelGallery(true);
       $("mdCancel").style.display = "block"; $("mdSave").textContent = "Обновить модель";
       $("mdFormSect").open = true;
       $("mdName").scrollIntoView({ behavior: "smooth", block: "center" });
@@ -3772,7 +3806,7 @@
       confirmMsg(`Удалить категорию «${c ? c.name : code}»?`, async () => {
         const d = await catApi("/api/admin/category/delete", { code });
         if (!d.ok) {
-          alertMsg(d.error === "has_products" ? `Сначала перенесите товары: в этой категории их ${d.count}.`
+          alertMsg(d.error === "has_products" ? `Сначала перенесите или уберите: в этой категории ${d.count} товаров и моделей.`
                  : d.error === "last_one" ? "Это последняя категория — без неё товар не завести."
                  : "Не удалось удалить.");
           return;
@@ -5363,8 +5397,7 @@
           <img id="edPhotoPrev" alt="" src="${thumbOf(p) || ''}" ${p.photo_url ? '' : 'style="display:none"'}>
           <input type="file" id="edPhoto" accept="image/*">
         </div>
-        <label style="margin-top:12px">Ещё фото <span style="color:var(--hint);font-weight:400">— покупатель листает их в карточке</span></label>
-        <div class="edgal" id="edGal"></div>`;
+`;
     }
     function editHitBlock(p) {
       return `<div class="chk" style="margin-top:12px"><input type="checkbox" id="edHit" ${p.is_hit ? 'checked' : ''}>
@@ -5387,24 +5420,24 @@
     const MAX_EXTRA_PHOTOS = 5;
     let editPhotos = [];
     function renderEditGallery() {
-      const box = $("edGal"); if (!box) return;
+      const box = $("mdGal"); if (!box) return;
       box.innerHTML = editPhotos.map(g =>
           `<div class="g"><img src="${g.thumb || g.url}" alt=""><button data-gdel="${g.id}" title="Убрать">✕</button></div>`).join("")
         + (editPhotos.length < MAX_EXTRA_PHOTOS
-            ? `<label class="add">＋<input type="file" id="edGalAdd" accept="image/*" multiple style="display:none"></label>`
+            ? `<label class="add">＋<input type="file" id="mdGalAdd" accept="image/*" multiple style="display:none"></label>`
             : `<div style="color:var(--hint);font-size:12px;align-self:center">Больше ${MAX_EXTRA_PHOTOS} — уже долгая загрузка у покупателя</div>`);
       box.querySelectorAll("[data-gdel]").forEach(b => b.onclick = () => delEditPhoto(+b.dataset.gdel));
-      const add = $("edGalAdd");
+      const add = $("mdGalAdd");
       if (add) add.onchange = () => addEditPhotos([...add.files]);
     }
     async function addEditPhotos(files) {
-      const box = $("edGal");
+      const box = $("mdGal");
       for (const f of files) {
         if (editPhotos.length >= MAX_EXTRA_PHOTOS) { alertMsg(`Больше ${MAX_EXTRA_PHOTOS} дополнительных фото не нужно.`); break; }
         if (box) box.insertAdjacentHTML("beforeend", `<div class="g" id="gLoading"><img src="${URL.createObjectURL(f)}" alt="" style="opacity:.45"></div>`);
         try {
           const fd = new FormData();
-          fd.append("initData", initData); fd.append("id", editId); fd.append("file", f);
+          fd.append("initData", initData); fd.append("model_id", editingModelId); fd.append("file", f);
           const r = await fetch("/api/admin/photo/add", { method: "POST", body: fd });
           const d = await r.json();
           if (d.ok) editPhotos.push({ id: d.photo_id, url: URL.createObjectURL(f) });
@@ -5413,7 +5446,7 @@
         const tmp = $("gLoading"); if (tmp) tmp.remove();
       }
       renderEditGallery();
-      refreshProducts();     // витрина должна увидеть новые фото, даже если админ закроет редактор
+      refreshProducts();     // витрина должна увидеть новые фото сразу
     }
     function delEditPhoto(photoId) {
       confirmMsg("Убрать это фото?", async () => {

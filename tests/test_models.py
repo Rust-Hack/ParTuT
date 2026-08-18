@@ -106,6 +106,50 @@ def run():
     c4("удаление несуществующей — 404",
       client.post("/api/admin/model/delete", json={"initData": "x", "id": 999999}).status_code == 404)
 
+    # --- Вкус убрали из модели, а на точке он остался ---
+    c6 = Checker("Осиротевшие вкусы")
+    r = client.post("/api/admin/model", json={"initData": "x", "id": lid, "category": "liquid",
+                                              "name": "Husky", "brand": "Husky",
+                                              "specs": {"strength": "20", "volume": "30"},
+                                              "flavors": ["Мята"]})
+    orphans = {o["flavor"]: o["stock"] for o in r.get_json()["orphans"]}
+    c6("про оставшийся вкус сказано", orphans.get("Вишня") == 2)
+    c6("остаток НЕ стёрт — это товар на полке",
+      {v["flavor"]: v["stock"] for v in db.get_variants(pid)}.get("Вишня") == 2)
+    c6("вкус из модели в сироты не попал", "Мята" not in orphans)
+
+    # --- Чего админ может натворить и что мы теперь ловим ---
+    c5 = Checker("Защиты при заведении")
+    r = client.post("/api/admin/model", json={"initData": "x", "category": "liquid",
+                                              "name": "husky", "brand": "Husky"})
+    c5("дубль модели отклонён (регистр не спасает)",
+      r.status_code == 400 and r.get_json()["error"] == "exists")
+    r = client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": lid,
+                                                           "city": "Минск", "price": "20"})
+    c5("повторный завоз на ту же точку отклонён",
+      r.status_code == 400 and r.get_json()["error"] == "already_here")
+    r = client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": lid,
+                                                           "city": "Туров", "price": "0"})
+    c5("нулевая цена отклонена", r.status_code == 400 and r.get_json()["error"] == "bad_price")
+    r = client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": lid,
+                                                           "city": "Нетакого", "price": "10"})
+    c5("выдуманная точка отклонена", r.status_code == 400)
+
+    # Перенос товара на точку, где эта модель уже стоит
+    client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": lid,
+                                                       "city": "Туров", "price": "17"})
+    r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
+                                                       "field": "city", "value": "Туров"})
+    c5("перенос в точку с двойником отклонён",
+      r.status_code == 400 and r.get_json()["error"] == "already_here")
+    c5("а на свободную точку переносится",
+      client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
+                                                     "field": "city", "value": "Лунинец"}).get_json()["ok"])
+
+    # Категорию и бренд с моделями удалять нельзя
+    r = client.post("/api/admin/category/delete", json={"initData": "x", "code": "liquid"})
+    c5("категорию с моделями не удалить", r.status_code == 400 and r.get_json()["count"] >= 1)
+
     # --- Права ---
     deny_admin()
     c4("посторонний ассортимент не видит",
@@ -118,7 +162,7 @@ def run():
     as_admin()
 
     _clean()
-    return c.fails + c2.fails + c3.fails + c4.fails
+    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails
 
 
 if __name__ == "__main__":

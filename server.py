@@ -840,8 +840,10 @@ def api_admin_category_delete():
     code = (data.get("code") or "").strip()
     if code not in db.category_codes():
         return jsonify({"ok": False, "error": "not_found"}), 404
-    used = db.count_products_in_category(code)
+    used = db.count_products_in_category(code) + len(db.list_models(code))
     if used:
+        # Считаем и модели: удалить категорию, оставив модели без полей и
+        # раздела, значит потерять их описание молча.
         return jsonify({"ok": False, "error": "has_products", "count": used}), 400
     if len(db.category_codes()) <= 1:
         return jsonify({"ok": False, "error": "last_one"}), 400     # без категорий товар не завести
@@ -905,10 +907,12 @@ def _all_products_payload():
     except Exception as e:
         ratings = {}                      # без оценок витрина живёт
         print(f"Не удалось прочитать оценки товаров: {e}")
-    gallery = {}
+    gallery, model_gallery = {}, {}
     try:
         for ph in db.all_product_photos():
             gallery.setdefault(ph["product_id"], []).append(ph)
+        for ph in db.all_model_photos():
+            model_gallery.setdefault(ph["model_id"], []).append(ph)
     except Exception as e:
         print(f"Не удалось прочитать галерею товаров: {e}")   # без галереи витрина живёт
     out = []
@@ -916,7 +920,10 @@ def _all_products_payload():
         # Главное фото всегда первое: покупатель видит ту же картинку, что и в каталоге.
         photos = ([{"id": 0, "url": f"/api/photo?file_id={p['photo']}",
                     "thumb": f"/api/photo?file_id={p['photo_thumb'] or p['photo']}"}] if p["photo"] else [])
-        for ph in gallery.get(p["id"], []):
+        mid = p["model_id"] if "model_id" in p.keys() else None
+        # Галерея — свойство модели; у товаров, заведённых до неё, остаётся своя.
+        extra = model_gallery.get(mid) if mid else gallery.get(p["id"], [])
+        for ph in (extra or []):
             photos.append({"id": ph["id"], "url": f"/api/photo?file_id={ph['file_id']}",
                            "thumb": f"/api/photo?file_id={ph['thumb_id'] or ph['file_id']}"})
         out.append({
@@ -1963,6 +1970,14 @@ def api_admin_update():
             names = {loc["name"] for loc in db.get_locations()}
             if value not in names:
                 return jsonify({"ok": False, "error": "bad_value"}), 400
+            cur = db.get_product(pid)
+            mid = (cur["model_id"] if cur and "model_id" in cur.keys() else None)
+            if mid and value != cur["city"] and any(
+                    p["city"] == value and p["id"] != pid
+                    and (p["model_id"] if "model_id" in p.keys() else None) == mid
+                    for p in db.get_all_products()):
+                # Перенос на точку, где эта модель уже стоит, создал бы двойника.
+                return jsonify({"ok": False, "error": "already_here"}), 400
         elif field == "is_hit":
             value = 1 if raw else 0
         else:
@@ -2043,30 +2058,30 @@ def api_admin_photo():
 
 @app.route("/api/admin/photo/add", methods=["POST"])
 def api_admin_photo_add():
-    """Добавить фото в галерею товара (главное фото при этом не меняется)."""
+    """Добавить фото в галерею МОДЕЛИ (главное фото при этом не меняется)."""
     user = get_admin(request.form.get("initData", ""))
     if not user:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
-        pid = int(request.form.get("id"))
+        mid = int(request.form.get("model_id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    if not db.get_product(pid):
+    if not db.get_model(mid):
         return jsonify({"ok": False, "error": "not_found"}), 404
     file = request.files.get("file")
     if not file:
         return jsonify({"ok": False, "error": "no_file"}), 400
-    if len(db.get_product_photos(pid)) >= db.MAX_EXTRA_PHOTOS:
+    if len(db.model_photos(mid)) >= db.MAX_EXTRA_PHOTOS:
         # Проверяем ДО отправки в Telegram: иначе картинка уедет впустую.
         return jsonify({"ok": False, "error": "too_many", "max": db.MAX_EXTRA_PHOTOS}), 400
     try:
         msg = tg.send_photo(int(user["id"]), file.read(),
-                            caption="🖼 Фото товара сохранено", disable_notification=True)
+                            caption="🖼 Фото модели сохранено", disable_notification=True)
         file_id, thumb_id = _pick_photo_sizes(msg.photo)
     except Exception as e:
-        print(f"Не смог обработать фото товара: {e}")
+        print(f"Не смог обработать фото модели: {e}")
         return jsonify({"ok": False, "error": "send_failed"}), 500
-    photo_id = db.add_product_photo(pid, file_id, thumb_id)
+    photo_id = db.add_model_photo(mid, file_id, thumb_id)
     if not photo_id:
         return jsonify({"ok": False, "error": "too_many", "max": db.MAX_EXTRA_PHOTOS}), 400
     return jsonify({"ok": True, "photo_id": photo_id})
@@ -2782,6 +2797,9 @@ def api_admin_models():
     models = db.list_models()
     for m in models:
         m["products"] = db.count_products_of_model(m["id"])
+        m["gallery"] = [{"id": g["id"], "url": f"/api/photo?file_id={g['file_id']}",
+                         "thumb": f"/api/photo?file_id={g['thumb_id'] or g['file_id']}"}
+                        for g in db.model_photos(m["id"])]
         m["photo_url"] = f"/api/photo?file_id={m['photo']}" if m["photo"] else None
         m["thumb_url"] = f"/api/photo?file_id={m['photo_thumb'] or m['photo']}" if m["photo"] else None
     return jsonify({"ok": True, "models": models})
@@ -2813,12 +2831,23 @@ def api_admin_model_save():
             seen.add(f.lower())
             flavors.append(f)
     mid = data.get("id")
+    # Две одинаковые модели в одной категории — это раздвоенная витрина и
+    # раздвоенная статистика: остатки и продажи разъедутся по двум карточкам.
+    twin = next((m for m in db.list_models(category)
+                 if m["name"].strip().lower() == name.lower()
+                 and (m["brand"] or "").strip().lower() == (data.get("brand") or "").strip().lower()
+                 and (not mid or int(m["id"]) != int(mid))), None)
+    if twin:
+        return jsonify({"ok": False, "error": "exists", "name": twin["name"]}), 400
     if mid:
         if not db.get_model(int(mid)):
             return jsonify({"ok": False, "error": "not_found"}), 404
         moved = db.update_model(int(mid), category=category, name=name, brand=data.get("brand") or "",
                                 description=data.get("description") or "", specs=specs, flavors=flavors)
-        return jsonify({"ok": True, "id": int(mid), "updated": moved})
+        # Вкус, убранный из модели, продолжает лежать и продаваться на точке.
+        # Стирать остаток нельзя, но сказать об этом обязаны.
+        return jsonify({"ok": True, "id": int(mid), "updated": moved,
+                        "orphans": db.orphan_flavors(int(mid))})
     new_id = db.add_model(category, name, data.get("brand") or "", data.get("description") or "", specs, flavors)
     return jsonify({"ok": True, "id": new_id})
 
@@ -2849,7 +2878,9 @@ def api_admin_model_photo():
     if not user:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
-        mid = int(request.form.get("id"))
+        # Форма шлёт id, программные вызовы — model_id: принимаем оба, чтобы
+        # фото не терялось из-за названия поля.
+        mid = int(request.form.get("model_id") or request.form.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if not db.get_model(mid):
@@ -2883,6 +2914,13 @@ def api_admin_product_from_model():
     city = (data.get("city") or "").strip()
     if not m or city not in db.location_names():
         return jsonify({"ok": False, "error": "bad_data"}), 400
+    # Один товар на точке — одна запись. Иначе на витрине две одинаковые
+    # карточки с разными остатками, и продавец не знает, какую вести.
+    if any(p["city"] == city and (p["model_id"] if "model_id" in p.keys() else None) == mid
+           for p in db.get_all_products()):
+        return jsonify({"ok": False, "error": "already_here"}), 400
+    if price <= 0:
+        return jsonify({"ok": False, "error": "bad_price"}), 400
     try:
         cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
     except (TypeError, ValueError):
@@ -2960,7 +2998,7 @@ def api_admin_brand_delete():
     # У товаров бренд записан строкой и после удаления справочника никуда не
     # денется — молча оставлять «ничей» бренд в фильтре нельзя, поэтому
     # предупреждаем и требуем подтверждения.
-    used = db.count_products_of_brand(b["name"])
+    used = db.count_products_of_brand(b["name"]) + sum(1 for m in db.list_models() if m["brand"] == b["name"])
     if used and not data.get("force"):
         return jsonify({"ok": False, "error": "has_products", "count": used}), 400
     db.delete_brand(bid)

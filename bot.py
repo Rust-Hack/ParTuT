@@ -338,10 +338,15 @@ def handle_admin_callback(call, chat_id, user_id, data):
         return
 
     if data == "adm:add":
+        # Товар заводится в приложении: сначала модель в «Ассортименте», потом
+        # завоз на точку. Второй путь через бота создавал товар в обход модели —
+        # такой не обновлялся вместе с ней и жил своей жизнью.
         bot.answer_callback_query(call.id)
-        admin_state[user_id] = {"action": "add", "step": "city", "draft": {}}
-        bot.send_message(chat_id, "Новый товар. В каком городе он продаётся?",
-                         reply_markup=admin_city_keyboard())
+        bot.send_message(chat_id,
+                         "Товары теперь заводятся в приложении:\n\n"
+                         "1. 📚 Ассортимент — описать модель (бренд, характеристики, вкусы, фото)\n"
+                         "2. 📥 у модели — завезти её на точку: цена и остаток\n\n"
+                         "Так описание модели одно на все точки и правится в одном месте.")
         return
 
     if data.startswith("admcity:"):
