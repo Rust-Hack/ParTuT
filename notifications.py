@@ -52,6 +52,11 @@ def notify_sellers(bot, order_id):
     pm_ru = {"card": "💳 картой (чек)", "cash": "💵 наличными", "none": "🚕 при получении"}.get(pm, pm)
     if pm_ru:
         lines.append(f"Оплата: {pm_ru}")
+    # Заказ картой приходит продавцу СРАЗУ, ещё до чека: раньше он ждал чека и,
+    # если клиент выбирал «оплачу позже», не приходил вовсе — заказ висел в базе,
+    # и о нём никто не знал. Лучше показать «ждём чек», чем промолчать.
+    if pm == "card" and not order["receipt_file_id"]:
+        lines.append("⏳ <i>Чек ещё не загружен — придёт следующим сообщением.</i>")
     lines.append(f"<b>Итого: {order['total']:.2f} BYN</b>")
 
     uname = order["username"] or ""
@@ -80,6 +85,25 @@ def notify_sellers(bot, order_id):
         except Exception as e:
             print(f"Не смог отправить заказ #{order_id} админу {admin_id}: {e}")
     db.touch_order_reminded(order_id)     # запускаем отсчёт до напоминания
+
+
+def notify_receipt(bot, order_id):
+    """Чек по уже отправленному заказу — отдельным сообщением следом.
+
+    Сам заказ продавец получил в момент оформления, поэтому повторять его
+    целиком незачем: нужен только чек и номер, к которому он относится."""
+    order = db.get_order(order_id)
+    if not order or not order["receipt_file_id"]:
+        return
+    text = (f"🧾 <b>Чек по заказу #{order['id']}</b>\n"
+            f"🏙 {CITIES.get(order['city'], order['city'])} · {order['total']:.2f} BYN")
+    kb = _orders_kb()
+    for admin_id in admins_for_city(order["city"]):
+        try:
+            bot.send_photo(admin_id, order["receipt_file_id"], caption=text,
+                           parse_mode="HTML", reply_markup=kb)
+        except Exception as e:
+            print(f"Не смог отправить чек по заказу #{order_id} админу {admin_id}: {e}")
 
 
 def remind_sellers(bot, order):

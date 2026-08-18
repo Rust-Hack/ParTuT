@@ -2543,6 +2543,18 @@ def alerts_of_user(user_id):
     return ids
 
 
+def remove_stock_alert(product_id, user_id):
+    """Покупатель передумал ждать. Подписка ставилась одним нажатием, а снять её
+    было нельзя вовсе — оставалось терпеть сообщение о товаре, который уже не
+    нужен, или блокировать бота."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM stock_alerts WHERE product_id = %s AND user_id = %s"),
+                (product_id, user_id))
+    conn.commit()
+    conn.close()
+
+
 def stock_alerts_ready():
     """Кого пора обрадовать: подписки на товары, которые СНОВА в наличии.
     Возвращает [(user_id, product_id, название)]."""

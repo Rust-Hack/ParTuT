@@ -494,6 +494,12 @@ def api_notify_me():
     p = db.get_product(pid)
     if not p:
         return jsonify({"ok": False, "error": "not_found"}), 404
+    # Тем же адресом и отписываемся: подписка ставилась одним нажатием, а снять
+    # её было нельзя — «сообщите, когда появится» работало только в одну сторону.
+    # Проверяем ДО остатка: отписаться нужно и от товара, который уже завезли.
+    if data.get("off"):
+        db.remove_stock_alert(pid, int(user["id"]))
+        return jsonify({"ok": True, "off": True})
     if (p["stock"] or 0) > 0:
         # Пока покупатель раздумывал, товар завезли — подписка не нужна.
         return jsonify({"ok": True, "in_stock": True})
@@ -531,6 +537,8 @@ def _compress(resp):
             return resp
         if resp.direct_passthrough or resp.status_code < 200 or resp.status_code >= 300:
             return resp
+        if resp.headers.get("Content-Encoding"):
+            return resp        # уже сжато на месте (index.html) — второй раз нельзя
         ctype = (resp.content_type or "").split(";")[0].strip()
         if ctype not in _GZIP_TYPES:
             return resp
@@ -549,13 +557,52 @@ def _compress(resp):
 _INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp", "index.html")
 
 
+_index_cache = {"key": None, "raw": b"", "gz": b"", "etag": ""}
+_index_lock = threading.Lock()
+
+
+def _index_payload():
+    """Готовое приложение: сырые байты, сжатые байты и ETag.
+
+    Файл на 430 КБ читался с диска и сжимался заново на КАЖДОЕ открытие
+    приложения, хотя меняется он только при деплое. Держим результат в памяти
+    и пересобираем, когда у файла изменилось время правки или размер.
+    """
+    st = os.stat(_INDEX_PATH)
+    key = (st.st_mtime_ns, st.st_size)
+    with _index_lock:
+        if _index_cache["key"] == key:
+            return dict(_index_cache)
+    with open(_INDEX_PATH, "rb") as f:
+        raw = f.read()
+    entry = {"key": key, "raw": raw, "gz": gzip.compress(raw, 6),
+             "etag": '"%s"' % hashlib.md5(raw).hexdigest()}
+    with _index_lock:
+        _index_cache.update(entry)
+    return entry
+
+
 @app.route("/")
 def index():
-    # Читаем файл в обычный Response (не passthrough), чтобы сработало gzip-сжатие.
-    with open(_INDEX_PATH, "rb") as f:
-        html_bytes = f.read()
-    resp = Response(html_bytes, content_type="text/html; charset=utf-8")
-    resp.headers["Cache-Control"] = "no-cache"    # всегда свежая версия после деплоя
+    entry = _index_payload()
+    etag = entry["etag"]
+    # Приложение целиком качалось при каждом открытии — сотня килобайт по мобильной
+    # сети только ради того, чтобы получить ровно тот же файл. Теперь браузер
+    # присылает ETag, и, пока версия не сменилась, ответ — пустой 304.
+    if request.headers.get("If-None-Match") == etag:
+        resp = Response(status=304)
+        resp.headers["ETag"] = etag
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+    use_gzip = "gzip" in request.headers.get("Accept-Encoding", "")
+    resp = Response(entry["gz"] if use_gzip else entry["raw"],
+                    content_type="text/html; charset=utf-8")
+    if use_gzip:
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Vary"] = "Accept-Encoding"
+    resp.headers["Cache-Control"] = "no-cache"    # всегда сверяемся: после деплоя нужна свежая
+    resp.headers["ETag"] = etag
     return resp
 
 
@@ -661,7 +708,13 @@ def api_my_settings():
             db.set_user_point(uid, pid)
 
     if "phone" in data:
-        db.set_user_phone(uid, data.get("phone"))
+        # Пустой телефон — законный ответ («не хочу указывать»), а вот огрызок
+        # вроде «+375» хуже пустого: он молча подставится в заказ, и продавец
+        # будет звонить в никуда. Тот же порог, что при оформлении доставки.
+        phone = (data.get("phone") or "").strip()
+        if phone and len(_digits(phone)) < 7:
+            return jsonify({"ok": False, "error": "bad_phone"}), 400
+        db.set_user_phone(uid, phone)
     if "reminders_on" in data:
         db.set_no_reminders(uid, not data.get("reminders_on"))
 
@@ -891,6 +944,24 @@ def api_admin_review_decide():
     return jsonify({"ok": True, "status": status})
 
 
+def _json_etag(payload):
+    """JSON со сверкой версии: пока данные не менялись, браузер получает 304.
+
+    Витрина и справочники перекачивались целиком при каждом открытии приложения,
+    хотя меняются редко. Хэш считается от готового тела ответа, поэтому «не
+    менялись» здесь значит буквально это — отдать устаревшее нельзя.
+    """
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    etag = '"%s"' % hashlib.md5(body.encode("utf-8")).hexdigest()
+    if request.headers.get("If-None-Match") == etag:
+        resp = Response(status=304)
+    else:
+        resp = Response(body, content_type="application/json")
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 # ============================================================
 #  ЛОКАЦИИ (точки продаж)
 # ============================================================
@@ -901,7 +972,7 @@ def api_locations():
     if cached is None:
         cached = _cache_set("locations",
                             [{"id": r["id"], "name": r["name"]} for r in db.get_locations()], 300)
-    return jsonify(cached)
+    return _json_etag(cached)
 
 
 @app.route("/api/categories")
@@ -919,7 +990,7 @@ def api_categories():
                                             "has_flavors": bool(c.get("has_flavors")),
                                             "specs": by_cat.get(c["code"], [])}
                                            for c in db.list_categories()], 300)
-    return jsonify(cached)
+    return _json_etag(cached)
 
 
 @app.route("/api/also-bought")
@@ -1159,7 +1230,7 @@ def api_products():
     out = [_public_product(p) for p in _all_products_payload() if not p["hidden"]]
     if city:
         out = [p for p in out if p["city"] == city]
-    return jsonify(out)
+    return _json_etag(out)
 
 
 # Что в товаре не для покупателя: закупка (наша маржа), число ждущих
@@ -1545,9 +1616,11 @@ def api_order():
     if promo_code and promo_discount:
         db.consume_promo(promo_code)      # одно использование потрачено
 
-    if not needs_receipt:
-        # уведомления (продавцам + клиенту) — в фоне, чтобы «Оформить» отвечал сразу
-        _bg(_notify_new_order, order_id, user_id)
+    # Уведомления (продавцам + клиенту) — в фоне, чтобы «Оформить» отвечал сразу.
+    # Шлём ВСЕГДА, а не только когда чек не нужен: заказ картой раньше ждал чека,
+    # и если клиент нажимал «оплачу позже» или просто закрывал приложение, продавец
+    # не узнавал о заказе никогда. Чек придёт следом отдельным сообщением.
+    _bg(_notify_new_order, order_id, user_id)
 
     return jsonify({
         "ok": True,
@@ -1604,7 +1677,8 @@ def api_receipt():
 
     if file_id:
         db.set_order_receipt(order_id, file_id)     # статус -> paid, чек сохранён
-        _bg(notifications.notify_sellers, tg, order_id)  # продавцам — в фоне, не тормозим ответ
+        # Сам заказ продавец уже получил при оформлении — теперь только чек.
+        _bg(notifications.notify_receipt, tg, order_id)
         return jsonify({"ok": True})
 
     return jsonify({"ok": False, "error": "send_failed"}), 500
@@ -1723,7 +1797,9 @@ def api_my_orders():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     orders = [_order_json(o, data.get("initData", "")) for o in db.get_orders_by_user(int(user["id"]))]
-    return jsonify({"ok": True, "orders": orders})
+    # Реквизиты нужны и здесь: кто выбрал «оплачу позже», возвращается сюда, а
+    # номер счёта видел один раз на экране оформления и больше нигде.
+    return jsonify({"ok": True, "orders": orders, "payment_info": _payment_info()})
 
 
 @app.route("/api/bonus", methods=["POST"])
@@ -2472,6 +2548,11 @@ def _client_order_summary(order_id):
         lines.append(f"Оплата: {pm}")
     lines.append(f"💰 Итого: {o['total']:.2f} Br")
     lines.append("")
+    # Клиент закрыл приложение, не приложив чек, — напоминаем прямо в чате,
+    # иначе про недоплаченный заказ он вспомнит только когда позвонит продавец.
+    if (o["payment_method"] or "") == "card" and not o["receipt_file_id"]:
+        lines.append("⏳ Ждём фото чека: Профиль → Мои заказы → «Загрузить чек».")
+        lines.append("")
     lines.append("Статус — в приложении: Профиль → Мои заказы. Уведомим об изменениях 🔔")
     return "\n".join(lines)
 
@@ -3207,7 +3288,7 @@ def api_brands():
     key = f"brands:{category or 'all'}"
     cached = _cache_get(key)
     if cached is not None:
-        return jsonify(cached)
+        return _json_etag(cached)
     out = []
     for b in db.get_brands(category):
         try:
@@ -3215,7 +3296,7 @@ def api_brands():
         except Exception:
             flavors = []
         out.append({"id": b["id"], "name": b["name"], "category": b["category"] or "", "flavors": flavors})
-    return jsonify(_cache_set(key, out, 300))
+    return _json_etag(_cache_set(key, out, 300))
 
 
 @app.route("/api/flavors")
@@ -3225,7 +3306,7 @@ def api_flavors():
     cached = _cache_get("flavors")
     if cached is None:
         cached = _cache_set("flavors", db.known_flavors(), 300)
-    return jsonify(cached)
+    return _json_etag(cached)
 
 
 @app.route("/api/admin/models", methods=["POST"])

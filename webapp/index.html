@@ -4,6 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>ParTuT</title>
+  <script>
+    // Витрине Telegram не нужен: товары, точки и категории — обычные публичные
+    // адреса. Поэтому просим их ПЕРВЫМ делом, не дожидаясь telegram-web-app.js:
+    // он лежит на чужом сервере и на медленной сети занимает секунду и больше,
+    // а страница всё это время стоит и ничего не качает.
+    window.__boot = {};
+    try {
+      window.__boot.products = fetch("/api/products");
+      window.__boot.locations = fetch("/api/locations");
+      window.__boot.categories = fetch("/api/categories");
+      for (var _k in window.__boot) window.__boot[_k].catch(function () {});
+    } catch (e) { window.__boot = null; }
+  </script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>
     // Тему ставим ДО первой отрисовки. Иначе заставка успевает мигнуть тёмной
@@ -17,6 +30,26 @@
           (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
         document.documentElement.setAttribute("data-theme", saved || sys);
       } catch (e) {}
+    })();
+
+    // «Кто ты» спрашиваем сразу, как появился initData, — не дожидаясь, пока
+    // браузер разберёт основной скрипт (а он большой). Раньше витрина ждала
+    // этого ответа, прежде чем пойти за товарами: два обращения подряд по
+    // мобильной сети заметны глазом. Теперь всё идёт разом.
+    (function () {
+      try {
+        if (!window.__boot) return;
+        var tgApp = window.Telegram && window.Telegram.WebApp;
+        var initData = (tgApp && tgApp.initData) || "";
+        var sp = (tgApp && tgApp.initDataUnsafe && tgApp.initDataUnsafe.start_param) || "";
+        window.__boot.me = fetch("/api/me", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData: initData, start_param: sp })
+        });
+        // Гасим «необработанный отказ» в консоли: если запрос не удался, основной
+        // код спокойно повторит его обычным путём, и пугать этим незачем.
+        window.__boot.me.catch(function () {});
+      } catch (e) { /* основной код сходит за всем обычным путём */ }
     })();
   </script>
   <style>
@@ -298,7 +331,20 @@
     .view .icon { font-size: 54px; text-align: center; margin: 10px 0; }
     .view h2 { font-size: 21px; margin: 0 0 8px; text-align: center; }
     .view p { color: var(--hint); font-size: 14px; line-height: 1.5; text-align: center; margin: 4px 0; }
-    .req { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 16px; margin: 16px 0; font-size: 15px; white-space: pre-line; line-height: 1.6; }
+    .req { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 16px; margin: 16px 0; font-size: 15px; line-height: 1.6; }
+    /* Реквизиты: номер счёта — кнопка. Выделять его пальцем в Telegram WebView
+       почти невозможно, а переписывать 28 символов руками — верный способ
+       ошибиться и заплатить не туда. */
+    .creq { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+      background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+      padding: 10px 12px; margin: 8px 0; color: var(--text); font: inherit; cursor: pointer; }
+    .creq:active { opacity: .6; }
+    .creq .cl { flex: 1; min-width: 0; }
+    .creq small { display: block; color: var(--hint); font-size: 12px; line-height: 1.3; }
+    .creq b { display: block; font-size: 15px; font-weight: 600; line-height: 1.35;
+      word-break: break-all; user-select: all; -webkit-user-select: all; }
+    .creq .ci { flex: none; font-size: 17px; opacity: .75; }
+    .req .rline { margin: 6px 0; }
     .spacer { flex: 1; }
 
     /* Форма админа */
@@ -1034,6 +1080,19 @@
       <div class="dnote">Раз в несколько недель бот напомнит, что запасы кончаются. Можно выключить.</div>
 
       <button class="bigbtn" id="mySave" style="margin-top:18px">Сохранить</button>
+
+      <!-- Ниже — то, что действует сразу и кнопки «Сохранить» не требует.
+           Без черты это читалось как часть формы выше. -->
+      <div style="border-top:1px solid var(--line);margin:24px 0 0"></div>
+
+      <!-- Подписка «сообщите, когда появится» ставилась одним нажатием, а снять
+           её было негде: единственным способом отказаться было заблокировать бота. -->
+      <label style="margin-top:18px">Жду поступления</label>
+      <div id="myAlerts"></div>
+
+      <label style="margin-top:22px">Ваш ID</label>
+      <button class="creq" id="myIdCopy" style="margin:0"><span class="cl"><b id="myIdVal">—</b></span><span class="ci">⧉</span></button>
+      <div class="dnote" style="margin:6px 0 0">Назовите его продавцу, если нужно найти вас или ваш заказ.</div>
     </div>
   </div>
 
@@ -1505,8 +1564,7 @@
     const catHasFlavors = (code) => !!(categories.find(c => c.code === code) || {}).has_flavors;
     async function fetchCategories() {
       try {
-        const r = await fetch("/api/categories");
-        const list = await r.json();
+        const list = await bootFetch("categories", "/api/categories");
         if (Array.isArray(list) && list.length) { categories = list; applyCategories(); }
       } catch (e) {}
       // Выбранной категории могло не стать — иначе витрина молча покажет пусто.
@@ -1532,11 +1590,50 @@
     // Поэтому проверять их наличие бесполезно — надо ловить отказ. Без этого
     // исключение вылетало ДО самого действия: продавец жал «Подтвердить», а
     // заказ молча оставался неподтверждённым.
+    // Ответ, начатый в шапке страницы. Забираем его один раз: при повторном
+    // обновлении витрины запрос делается заново, иначе мы бы вечно показывали
+    // самые первые данные.
+    function bootFetch(key, url, opts) {
+      const b = window.__boot;
+      const started = b && b[key];
+      if (started) {
+        b[key] = null;
+        return started.then(r => r.json()).catch(() => fetch(url, opts).then(r => r.json()));
+      }
+      return fetch(url, opts).then(r => r.json());
+    }
+
     function alertMsg(m) {
       try {
         if (tg && tg.showAlert) { tg.showAlert(m); return; }
       } catch (e) { /* старый клиент — покажем обычным окном */ }
       try { alert(m); } catch (e) {}
+    }
+
+    // Копирование в буфер. navigator.clipboard есть не везде (старый WebView,
+    // не-https), и там он молча отказывает — поэтому держим запасной путь через
+    // скрытое поле. Кнопка «скопировать», которая иногда ничего не делает, хуже,
+    // чем её отсутствие: человек уверен, что номер у него в буфере.
+    async function copyText(text) {
+      const s = String(text == null ? "" : text);
+      if (!s) return false;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(s);
+          return true;
+        }
+      } catch (e) { /* пробуем запасной путь ниже */ }
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = s;
+        ta.setAttribute("readonly", "");
+        ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+        document.body.appendChild(ta);
+        ta.select(); ta.setSelectionRange(0, s.length);
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        return ok;
+      } catch (e) { return false; }
     }
 
     function confirmMsg(question, onYes) {
@@ -1548,7 +1645,7 @@
     const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
     const NAV = [
-      { id: "catalog", label: "Ассортимент", icon: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/>' },
+      { id: "catalog", label: "Каталог", icon: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/>' },
       { id: "bonus", label: "Бонусы", icon: '<rect x="3" y="8" width="18" height="13" rx="1"/><path d="M3 12h18M12 8v13"/><path d="M12 8S9 3 6.5 4.5 9 8 12 8zM12 8s3-5 5.5-3.5S15 8 12 8z"/>' },
       { id: "cart", label: "Корзина", icon: '<circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.4 12.4a2 2 0 002 1.6h8.7a2 2 0 002-1.6L23 6H6"/>' },
       { id: "fav", label: "Избранное", icon: '<path d="M20.8 5.6a5 5 0 00-7.1 0L12 7.3l-1.7-1.7a5 5 0 10-7.1 7.1L12 21l8.8-8.3a5 5 0 000-7.1z"/>' },
@@ -1716,8 +1813,8 @@
       initTheme();
       try {
         const startParam = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || "";
-        const r = await fetch("/api/me", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, start_param: startParam }) });
-        me = await r.json();
+        me = await bootFetch("me", "/api/me", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ initData, start_param: startParam }) });
         if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
         stockAlerts = new Set(me.alerts || []);   // о чём уже просили сообщить
         remindersOn = me.reminders_on !== false;
@@ -1745,8 +1842,7 @@
     $("ageNo").onclick = () => { if (tg) tg.close(); };
 
     async function fetchProducts() {
-      const r = await fetch("/api/products");
-      allProducts = await r.json();
+      allProducts = await bootFetch("products", "/api/products");
     }
 
     // Витрина и админка смотрят на разные списки: покупателю снятое с продажи
@@ -1762,8 +1858,7 @@
       } catch (e) { /* останемся на витрине — это хуже, но не пусто */ }
     }
     async function fetchLocations() {
-      const r = await fetch("/api/locations");
-      locations = await r.json();
+      locations = await bootFetch("locations", "/api/locations");
     }
     function recomputeCities() {
       cityList = locations.map(l => l.name);   // точки берём из базы (даже пустые)
@@ -2225,11 +2320,52 @@
       $("myPhone").value = (me && me.prefill && me.prefill.phone) || "";
       $("myRemind").classList.toggle("on", remindersOn);
       $("myPoints").innerHTML = `<p style="color:var(--hint);font-size:13px;margin:0">Загрузка…</p>`;
+      $("myIdVal").textContent = (tgUser && tgUser.id) || "—";
+      renderMyAlerts();
       try {
         const r = await fetch("/api/my-points");
         myPoints = (await r.json()).points || [];
       } catch (e) { myPoints = []; }
       renderMyPoints();
+    }
+
+    $("myIdCopy").onclick = async () => {
+      const id = (tgUser && tgUser.id) || "";
+      if (!id) return;
+      const ok = await copyText(id);
+      haptic("impact", "light");
+      if (ok) toast("ID скопирован ✓");
+    };
+
+    // Список «жду поступления». Названия берём с витрины; если товар с неё убрали,
+    // показываем номер — отписаться человек должен уметь в любом случае.
+    function renderMyAlerts() {
+      const box = $("myAlerts");
+      const ids = [...stockAlerts];
+      if (!ids.length) {
+        box.innerHTML = `<div class="dnote" style="margin:6px 0 0">Пока ничего не ждёте. Если товара нет в наличии, на его карточке есть кнопка «Сообщить о поступлении».</div>`;
+        return;
+      }
+      box.innerHTML = ids.map(id => {
+        const p = allProducts.find(x => x.id === id);
+        return `<div class="prow" style="padding-left:0;padding-right:0">
+          <span>${p ? esc(p.name) : "Товар №" + id}</span>
+          <button class="closebtn" style="width:auto;padding:6px 10px;color:var(--danger)" data-unwait="${id}">Не ждать</button></div>`;
+      }).join("");
+      box.querySelectorAll("[data-unwait]").forEach(b => b.onclick = () => stopWaiting(+b.dataset.unwait));
+    }
+
+    async function stopWaiting(id) {
+      try {
+        const r = await fetch("/api/notify-me", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData, product_id: id, off: true }) });
+        const d = await r.json();
+        if (!d.ok) { alertMsg("Не удалось отписаться."); return; }
+        stockAlerts.delete(id);
+        renderMyAlerts();
+        renderGrid();          // на витрине кнопка снова станет «сообщить о поступлении»
+        toast("Больше не ждём ✓");
+      } catch (e) { alertMsg("Сеть недоступна."); }
     }
 
     function renderMyPoints() {
@@ -2255,18 +2391,29 @@
 
     $("mySave").onclick = async () => {
       const btn = $("mySave");
+      // Огрызок номера хуже пустого поля: он подставится в заказ, и продавец
+      // будет звонить в никуда. Пустое поле — законный ответ, его пропускаем.
+      const phone = $("myPhone").value.trim();
+      if (phone && phone.replace(/\D/g, "").length < 7) {
+        alertMsg("Похоже, номер неполный. Проверьте телефон или оставьте поле пустым.");
+        return;
+      }
       btn.disabled = true; btn.textContent = "Сохраняю…";
       try {
         const r = await fetch("/api/my-settings", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ initData, point_id: myPointId || 0, phone: $("myPhone").value, reminders_on: remindersOn }) });
+          body: JSON.stringify({ initData, point_id: myPointId || 0, phone, reminders_on: remindersOn }) });
         const d = await r.json();
-        if (!d.ok) { alertMsg("Не удалось сохранить."); return; }
+        if (!d.ok) {
+          alertMsg(d.error === "bad_phone" ? "Похоже, номер неполный. Проверьте телефон."
+                                           : "Не удалось сохранить.");
+          return;
+        }
         // Обновляем то, что подставляется в заказ, без перезагрузки приложения.
         me.my_point = d.point_id;
         if (me.prefill) me.prefill.phone = d.phone || "";
         remindersOn = d.reminders_on !== false;
         $("myView").classList.remove("show");
-        alertMsg("Сохранено ✅");
+        toast("Сохранено ✓");
       } catch (e) { alertMsg("Сеть недоступна."); }
       finally { btn.disabled = false; btn.textContent = "Сохранить"; }
     };
@@ -3300,7 +3447,7 @@
           $("payTitle").textContent = `Оплата заказа #${d.order_id}`;
           const disc = d.discount ? `Списано ${d.coins_used} 🪙 (−${d.discount.toFixed(2)} Br)\n` : "";
           const feeLine = d.fee ? `Доставка: +${d.fee.toFixed(2)} Br\n` : "";
-          $("payReq").textContent = `${disc}${feeLine}К оплате: ${d.total.toFixed(2)} Br\n\n${d.payment_info}`;
+          renderPayReq(d);
           $("payView").classList.add("show");
         } else {
           $("doneText").textContent = d.payment_method === "cash"
@@ -3315,6 +3462,53 @@
         if (btn) { btn.disabled = false; btn.textContent = btnText; }
       }
     }
+    // ----- Реквизиты для оплаты -----
+    // Владелец пишет реквизиты свободным текстом («Карта:», номер строкой ниже,
+    // «или по номеру: +375…»), поэтому разбираем их, а не требуем формат.
+    const PAY_NUM = /\+?[A-Z0-9][A-Z0-9\s-]{7,}[A-Z0-9]/i;
+    function payNumber(line) {
+      const m = String(line).match(PAY_NUM);
+      if (!m) return "";
+      const raw = m[0].replace(/[\s-]/g, "");
+      // 6+ цифр — это счёт, карта или телефон. Меньше — просто слово с цифрой.
+      return raw.replace(/\D/g, "").length >= 6 ? raw : "";
+    }
+    function payReqRows(info) {
+      const rows = [];
+      let pending = "";                       // подпись, у которой номер строкой ниже
+      for (const raw of String(info || "").split("\n")) {
+        const line = raw.trim();
+        if (!line) continue;
+        const i = line.indexOf(":");
+        let label = pending, value = line;
+        if (i > 0) { label = line.slice(0, i).trim(); value = line.slice(i + 1).trim(); }
+        pending = "";
+        if (!value) { pending = label; continue; }     // строка вида «Карта:»
+        const num = payNumber(value);
+        rows.push(num ? { label, value, copy: num } : { text: line });
+      }
+      return rows;
+    }
+    function renderPayReq(d) {
+      const html = [];
+      if (d.discount) html.push(`<div class="rline">Списано ${d.coins_used} 🪙 (−${d.discount.toFixed(2)} Br)</div>`);
+      if (d.fee) html.push(`<div class="rline">Доставка: +${d.fee.toFixed(2)} Br</div>`);
+      const row = (label, value, copy) =>
+        `<button class="creq" data-copy="${esc(copy)}"><span class="cl">${label ? `<small>${esc(label)}</small>` : ""}<b>${esc(value)}</b></span><span class="ci">⧉</span></button>`;
+      // Сумму тоже копируем: в банковском приложении её вбивают руками.
+      html.push(row("К оплате", `${d.total.toFixed(2)} Br`, d.total.toFixed(2)));
+      for (const r of payReqRows(d.payment_info)) {
+        html.push(r.copy ? row(r.label, r.value, r.copy) : `<div class="rline">${esc(r.text)}</div>`);
+      }
+      html.push(`<div class="rline" style="color:var(--hint);font-size:13px">Нажмите на номер — он скопируется.</div>`);
+      $("payReq").innerHTML = html.join("");
+      $("payReq").querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
+        const ok = await copyText(b.dataset.copy);
+        haptic("impact", "light");
+        if (ok) toast("Скопировано ✓"); else alertMsg("Не удалось скопировать. Выделите номер и скопируйте вручную.");
+      });
+    }
+
     $("uploadBtn").onclick = () => $("receiptFile").click();
     $("payCancel").onclick = () => $("payView").classList.remove("show");
     $("receiptFile").onchange = async (e) => {
@@ -5036,6 +5230,7 @@
 
     // ----- Мои заказы (история + повтор) -----
     let myOrders = [];
+    let payInfoText = "";          // реквизиты магазина — приходят вместе со списком заказов
     $("myOrdersClose").onclick = () => $("myOrdersView").classList.remove("show");
     async function openMyOrders() {
       $("myOrdersView").classList.add("show");
@@ -5044,6 +5239,7 @@
         const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
         const d = await r.json();
         myOrders = d.orders || [];
+        if (d.payment_info) payInfoText = d.payment_info;   // чтобы показать реквизиты повторно
       } catch (e) { myOrders = []; }
       await loadReviewables();      // «оцените покупку» показываем сразу, а не вторым экраном
       renderMyOrders();
@@ -5131,10 +5327,15 @@
       $("myOrdersList").querySelectorAll("[data-repeat]").forEach(b => b.onclick = () => repeatOrder(myOrders[+b.dataset.repeat]));
       $("myOrdersList").querySelectorAll("[data-ask]").forEach(b => b.onclick = () => openSupport(myOrders[+b.dataset.ask].id));
       $("myOrdersList").querySelectorAll("[data-cancel]").forEach(b => b.onclick = () => cancelMyOrder(myOrders[+b.dataset.cancel]));
+      // Раньше эта кнопка сразу открывала выбор файла — а человек, нажавший
+      // «оплачу позже», к тому моменту уже не помнил номер счёта и найти его
+      // было негде. Теперь возвращаем тот же экран оплаты, с реквизитами.
       $("myOrdersList").querySelectorAll("[data-pay]").forEach(b => b.onclick = () => {
         const o = myOrders[+b.dataset.pay];
         currentOrder = { order_id: o.id, confirm_minutes: 15 };
-        $("receiptFile").click();
+        $("payTitle").textContent = `Оплата заказа #${o.id}`;
+        renderPayReq({ total: +o.total, payment_info: payInfoText });
+        $("payView").classList.add("show");
       });
     }
     function cancelMyOrder(o) {
@@ -5194,7 +5395,9 @@
       ["issued", "Выданы"], ["canceled", "Отклонены"], ["all", "Все"],
     ];
 
-    $("ordersClose").onclick = () => $("ordersView").classList.remove("show");
+    // Возвращаясь в «Управление», продавец должен видеть сегодняшние цифры, а не
+    // те, с которыми входил: заказы он только что и разгребал.
+    $("ordersClose").onclick = () => { $("ordersView").classList.remove("show"); loadToday(); };
     $("ordersSearch").oninput = (e) => { ordersSearch = e.target.value; renderOrders(); };
 
     async function loadAdminOrders() {
@@ -5376,6 +5579,7 @@
         $("orejView").classList.remove("show");
         await loadAdminOrders();
         await refreshProducts();
+        loadToday();               // отклонённый заказ ушёл из «ждут подтверждения»
       } catch (e) { alertMsg("Сеть недоступна."); }
     };
 
@@ -5387,6 +5591,7 @@
           await fetch("/api/admin/order/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, action }) });
           await loadAdminOrders();
           await refreshProducts();   // остаток мог вернуться при отклонении
+          loadToday();               // плитки «ждут подтверждения» / «к выдаче» — сразу
         } catch (e) { alertMsg("Сеть недоступна."); }
       };
       confirmMsg(ask, go);
