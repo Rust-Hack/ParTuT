@@ -547,6 +547,17 @@
     .statdelta.up { color: #2e9e4f; }
     .statdelta.down { color: var(--danger); }
     .statdelta.flat { color: var(--hint); }
+    /* Сводка дня на входе в управление: плитка — это ещё и кнопка. */
+    .today { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 4px 0 6px; }
+    .tcard { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 13px 14px;
+             text-align: left; border: 2px solid transparent; }
+    .tcard .tnum { font-size: 22px; font-weight: 800; }
+    .tcard .tlab { color: var(--hint); font-size: 12.5px; margin-top: 2px; }
+    .tcard.act { border-color: var(--accent); }          /* требует действия сейчас */
+    .tcard.act .tnum { color: var(--accent); }
+    .tcard.warn .tnum { color: var(--warn); }
+    .tcard.calm .tnum { color: var(--text); }
+    .tquiet { color: var(--hint); font-size: 13.5px; padding: 2px 4px 8px; }
     .stathead { font-weight: 800; margin: 20px 0 8px; }
     .stathint { color: var(--hint); font-size: 12px; font-weight: 500; margin-left: 6px; }
     .statlist { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 4px 14px; }
@@ -930,6 +941,10 @@
   <div class="view" id="adminView">
     <div class="viewhead"><h2>🛠 Управление</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="adminClose">Закрыть</button></div>
+    <!-- Управление открывалось голым меню: чтобы понять, есть ли работа, надо
+         было зайти в заказы, потом в товары, потом в статистику. -->
+    <div id="todayCard"></div>
+
     <!-- Порядок — по частоте: заказы продавец открывает каждый день, категории —
          раз в полгода. Без групп всё это лежало вперемешку одним списком из 13 строк. -->
     <div class="mgroup">Каждый день</div>
@@ -3471,6 +3486,7 @@
       if (me && me.is_super) loadReqBadge();
       loadPendingReviews(true);          // счётчик отзывов — без открытия раздела
       loadOrdersBadge();                 // сколько заказов ждут продавца
+      loadToday();                       // сводка дня — первое, что видно на входе
       await fetchAdminProducts();        // со снятыми с витрины — витрина их не отдаёт
       renderLowBadge();                  // сколько позиций надо завезти
       await fetchBrands();               // нужно разделам «Товары» и «Бренды»
@@ -3505,6 +3521,38 @@
         setBadge("ordBadge", adminOrders.filter(o => o.status === "paid").length);
       } catch (e) {}
     }
+    // Сводка дня. Отвечает на четыре вопроса, ради которых сюда и заходят:
+    // что ждёт меня, что ждёт покупателя, сколько наторговали, что кончается.
+    // Каждая плитка — кнопка в нужный раздел с уже выставленным фильтром.
+    async function loadToday() {
+      try {
+        const r = await fetch("/api/admin/today", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        if (!d.ok) { $("todayCard").innerHTML = ""; return; }
+        renderToday(d.today);
+      } catch (e) { $("todayCard").innerHTML = ""; }
+    }
+
+    function renderToday(t) {
+      const need = t.out_stock + t.low_stock;
+      const tiles = [
+        { n: t.waiting, lab: "ждут подтверждения", cls: t.waiting ? "act" : "calm", go: () => { ordersStatusFilter = "paid"; openOrders(); } },
+        { n: t.to_issue, lab: "к выдаче", cls: "calm", go: () => { ordersStatusFilter = "confirmed"; openOrders(); } },
+        { n: `${(+t.revenue_today).toFixed(2)} ${CUR}`,
+          lab: `выдано сегодня${t.issued_today ? ` · ${t.issued_today} ${plural(t.issued_today, "заказ", "заказа", "заказов")}` : ""}`,
+          cls: "calm",
+          // Продавцу точки статистика магазина закрыта — ведём его в свои выданные.
+          go: () => { if (myScope()) { ordersStatusFilter = "issued"; openOrders(); } else openStats(); } },
+        { n: need, lab: t.out_stock ? `надо завезти · ${t.out_stock} кончилось` : "надо завезти",
+          cls: need ? "warn" : "calm", go: () => { admStockFilter = "need"; openProducts(); } },
+      ];
+      const quiet = !t.waiting && !need
+        ? `<div class="tquiet">Ничего не ждёт — можно спокойно работать.</div>` : "";
+      $("todayCard").innerHTML = `<div class="today">${tiles.map((x, i) =>
+        `<button class="tcard ${x.cls}" data-t="${i}"><div class="tnum">${x.n}</div><div class="tlab">${x.lab}</div></button>`).join("")}</div>${quiet}`;
+      $("todayCard").querySelectorAll("[data-t]").forEach(b => b.onclick = () => tiles[+b.dataset.t].go());
+    }
+
     function renderLowBadge() {
       setBadge("lowBadge", shelf().filter(p => (!myScope() || p.city === myScope())
                                                    && stockState(p) !== "ok").length);

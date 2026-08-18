@@ -3263,6 +3263,41 @@ def get_orders(limit=200):
     return rows
 
 
+def seller_today(city=None):
+    """Сводка дня: что ждёт продавца прямо сейчас и чем закончился день.
+
+    Раньше на эти четыре числа уходило два экрана: заказы открой и посчитай,
+    остаток посмотри в товарах, деньги — в статистике за месяц.
+
+    «Сегодня» считается по дате создания заказа — так же, как в «Статистике»:
+    два экрана с одинаковой подписью и разными числами хуже, чем небольшая
+    неточность в редком случае «заказали вчера, забрали сегодня».
+    """
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    where_city = " AND city = %s" if city else ""
+    args_city = (city,) if city else ()
+    conn = connect()
+    cur = conn.cursor()
+
+    cur.execute(_q(f"SELECT status, COUNT(*) AS c FROM orders "
+                   f"WHERE status IN ('new', 'paid', 'confirmed'){where_city} GROUP BY status"),
+                args_city)
+    open_by = {r["status"]: int(r["c"]) for r in cur.fetchall()}
+
+    cur.execute(_q(f"SELECT COUNT(*) AS c, COALESCE(SUM(total), 0) AS s FROM orders "
+                   f"WHERE status = 'issued' AND created_at LIKE %s{where_city}"),
+                (today + "%", *args_city))
+    row = cur.fetchone()
+    conn.close()
+    return {
+        "waiting": open_by.get("paid", 0),        # ждут подтверждения — работа на продавце
+        "to_issue": open_by.get("confirmed", 0),  # подтверждены, ждут покупателя
+        "unpaid": open_by.get("new", 0),          # картой без чека — ход клиента
+        "issued_today": int(row["c"]),
+        "revenue_today": round(float(row["s"] or 0), 2),
+    }
+
+
 def get_orders_by_user(user_id, limit=50):
     """Заказы конкретного клиента, новые сверху — для истории в профиле."""
     conn = connect()

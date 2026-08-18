@@ -55,6 +55,7 @@ except Exception as e:
 REFERRAL_BONUS = 50        # vapecoins пригласившему за нового друга
 COINS_PER_BYN = 1          # vapecoins клиенту за каждый Br выданного заказа
 COIN_VALUE = 0.01          # сколько стоит 1 монета при списании (100 монет = 1 Br)
+LOW_STOCK = 3              # с этого остатка товар считается «заканчивается» (везде одинаково)
 
 # Колесо фортуны: секторы (монеты + вес вероятности). Малые призы — часто, крупные — редко.
 WHEEL_SECTORS = [
@@ -2367,6 +2368,24 @@ def api_admin_orders():
     return jsonify({"ok": True, "orders": [_order_json(o) for o in orders]})
 
 
+@app.route("/api/admin/today", methods=["POST"])
+def api_admin_today():
+    """Сводка дня для входа в управление: что ждёт и чем кончился день."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    scope = admin.get("city") or None
+    out = db.seller_today(scope)
+    products = [p for p in db.get_all_products() if not scope or p["city"] == scope]
+    # Тот же порог, что в статистике и в фильтре товаров: три экрана с разным
+    # понятием «мало» — это три разных ответа на один вопрос.
+    out["out_stock"] = sum(1 for p in products if p["stock"] <= 0)
+    out["low_stock"] = sum(1 for p in products if 0 < p["stock"] <= LOW_STOCK)
+    out["city"] = scope or ""
+    return jsonify({"ok": True, "today": out})
+
+
 @app.route("/api/admin/order/status", methods=["POST"])
 def api_admin_order_status():
     """Продавец меняет статус заказа из приложения (confirm / issued / reject)."""
@@ -2499,7 +2518,7 @@ def api_admin_stats():
 
     products = db.get_all_products()             # склад — не зависит от периода
     stats["low_stock"] = [{"name": p["name"], "city": p["city"], "stock": p["stock"]}
-                          for p in products if 0 < p["stock"] <= 3][:12]
+                          for p in products if 0 < p["stock"] <= LOW_STOCK][:12]
     stats["out_stock"] = [{"name": p["name"], "city": p["city"]}
                           for p in products if p["stock"] <= 0][:12]
     stats["out_of_stock"] = sum(1 for p in products if p["stock"] <= 0)
