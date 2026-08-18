@@ -99,6 +99,15 @@ def open_shop_prompt(chat_id, greeting=False):
 
 @bot.message_handler(commands=["start"])
 def on_start(message):
+    # Человек написал боту — значит представился. Запоминаем имя сразу: до
+    # первого заказа других источников имени у нас нет.
+    try:
+        db.ensure_user(message.from_user.id)
+        db.remember_user_name(message.from_user.id,
+                              message.from_user.username or "",
+                              message.from_user.first_name or "")
+    except Exception as e:
+        print(f"Не смог запомнить имя пользователя: {e}")
     # Реферальная привязка по deep-link: t.me/<bot>?start=refN (надёжнее, чем startapp).
     parts = (message.text or "").split(maxsplit=1)
     payload = parts[1].strip() if len(parts) > 1 else ""

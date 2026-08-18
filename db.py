@@ -534,12 +534,45 @@ def _ensure_user_columns():
         cur.execute("ALTER TABLE users ADD COLUMN no_reminders INTEGER DEFAULT 0")  # отписался от напоминаний
     if "reminded_at" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN reminded_at TEXT")  # когда напоминали в последний раз
+    # Имя человека. Раньше его нигде не хранили: в списке пользователей оно
+    # бралось из заказов, поэтому все, кто ещё не покупал, выглядели голым id —
+    # написать им было некому и не от кого. У многих в Telegram нет @имени
+    # вовсе, поэтому держим и имя из профиля.
+    if "username" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN username TEXT")
+    if "first_name" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
     if "phone" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN phone TEXT")        # телефон из настроек покупателя
     if "pickup_point_id" not in cols:
         # Своя точка самовывоза «по умолчанию»: покупатель выбирает её один раз
         # в профиле, а в заказе может поменять.
         cur.execute("ALTER TABLE users ADD COLUMN pickup_point_id INTEGER")
+    # Тем, кто уже покупал, имя достаём из их заказов: оно там лежало всё это
+    # время, просто в списке пользователей его никто не показывал.
+    cur.execute("""UPDATE users SET username =
+                     (SELECT o.username FROM orders o
+                       WHERE o.user_id = users.user_id AND o.username <> ''
+                       ORDER BY o.id DESC LIMIT 1)
+                   WHERE username IS NULL OR username = ''""")
+    conn.commit()
+    conn.close()
+
+
+def remember_user_name(user_id, username="", first_name=""):
+    """Запоминает, как зовут человека. Имя в Telegram меняется, поэтому пишем
+    свежее при каждом заходе, но не затираем его пустым: у части людей @имени
+    нет вовсе, и терять из-за этого имя из профиля незачем."""
+    username = (username or "").lstrip("@").strip()[:64]
+    first_name = (first_name or "").strip()[:64]
+    if not username and not first_name:
+        return
+    conn = connect()
+    cur = conn.cursor()
+    if username:
+        cur.execute(_q("UPDATE users SET username = %s WHERE user_id = %s"), (username, user_id))
+    if first_name:
+        cur.execute(_q("UPDATE users SET first_name = %s WHERE user_id = %s"), (first_name, user_id))
     conn.commit()
     conn.close()
 
@@ -1405,16 +1438,25 @@ def list_users(search="", limit=300):
     cur.execute("SELECT COUNT(*) AS c FROM users")
     total = cur.fetchone()["c"]
     base = ("SELECT user_id, COALESCE(age_ok,0) AS age_ok, COALESCE(coins,0) AS coins, "
-            "referred_by, COALESCE(wheel_spins,0) AS wheel_spins, COALESCE(ref_earned,0) AS ref_earned FROM users ")
+            "referred_by, COALESCE(wheel_spins,0) AS wheel_spins, COALESCE(ref_earned,0) AS ref_earned, "
+            "COALESCE(username,'') AS username, COALESCE(first_name,'') AS first_name FROM users ")
     search = (search or "").strip()
     if search:
         # ищем и по id, и по имени (через заказы) — сначала находим id, потом полные данные
+        # Сравниваем и приведённое к нижнему регистру, и как набрали: LOWER()
+        # в SQLite умеет только латиницу, и поиск по русскому имени молча не
+        # находил бы ничего на одной базе и находил на другой.
         like = f"%{search.lower()}%"
+        raw = f"%{search}%"
         cur.execute(_q(
             "SELECT DISTINCT u.user_id AS user_id FROM users u "
             "LEFT JOIN orders o ON o.user_id = u.user_id "
-            "WHERE CAST(u.user_id AS TEXT) LIKE %s OR LOWER(COALESCE(o.username,'')) LIKE %s "
-            "ORDER BY u.user_id DESC LIMIT %s"), (f"%{search}%", like, limit))
+            "WHERE CAST(u.user_id AS TEXT) LIKE %s "
+            "   OR LOWER(COALESCE(o.username,'')) LIKE %s OR COALESCE(o.username,'') LIKE %s "
+            "   OR LOWER(COALESCE(u.username,'')) LIKE %s OR COALESCE(u.username,'') LIKE %s "
+            "   OR LOWER(COALESCE(u.first_name,'')) LIKE %s OR COALESCE(u.first_name,'') LIKE %s "
+            "ORDER BY u.user_id DESC LIMIT %s"),
+            (raw, like, raw, like, raw, like, raw, limit))
         match_ids = [r["user_id"] for r in cur.fetchall()]
         if not match_ids:
             conn.close()
@@ -1446,7 +1488,9 @@ def list_users(search="", limit=300):
     for u in users:
         cnt, spent = orders_by.get(u["user_id"], (0, 0))
         out.append({
-            "id": u["user_id"], "username": names.get(u["user_id"], ""),
+            # Имя из профиля, а если его нет — из последнего заказа.
+            "id": u["user_id"], "username": u["username"] or names.get(u["user_id"], ""),
+            "first_name": u["first_name"],
             "coins": u["coins"], "age_ok": bool(u["age_ok"]),
             "wheel_spins": u["wheel_spins"], "ref_earned": u["ref_earned"],
             "referred_by": u["referred_by"], "referrals": refcount.get(u["user_id"], 0),
@@ -1526,11 +1570,15 @@ def customer_card(user_id, limit=30):
         except ValueError:
             days_since = None
 
-    username = ""
-    for r in rows:                       # заказы идут новыми вверх — берём свежее имя
-        if r["username"]:
-            username = r["username"]
-            break
+    # Имя из профиля, а если его нет — из последнего заказа: у покупателя без
+    # заказов карточка иначе открывалась безымянной.
+    username = (u["username"] or "") if (u and "username" in u.keys()) else ""
+    first_name = (u["first_name"] or "") if (u and "first_name" in u.keys()) else ""
+    if not username:
+        for r in rows:                   # заказы идут новыми вверх — берём свежее имя
+            if r["username"]:
+                username = r["username"]
+                break
 
     out_orders = []
     for r in rows[:limit]:
@@ -1547,7 +1595,7 @@ def customer_card(user_id, limit=30):
         })
 
     return {
-        "id": user_id, "username": username,
+        "id": user_id, "username": username, "first_name": first_name,
         "coins": int((u["coins"] if u else 0) or 0),
         "age_ok": bool(u["age_ok"]) if u else False,
         "phone": (u["phone"] if u else "") or "",

@@ -577,6 +577,10 @@ def api_me():
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
     age_ok = db.ensure_user_get_age(uid)      # создать + узнать 18+ за одно подключение
+    # Запоминаем, как человека зовут. Telegram присылает имя при каждом открытии
+    # приложения, а мы его нигде не сохраняли: в списке покупателей все, кто ещё
+    # не сделал заказ, выглядели голым числом.
+    _bg(db.remember_user_name, uid, user.get("username") or "", user.get("first_name") or "")
 
     # Реферал: friend открыл Mini App с параметром start_param=refN (дубль к боту).
     # Только ЗАПОМИНАЕМ пригласившего — монеты дадим, когда друг сделает заказ.

@@ -4516,7 +4516,11 @@
         _usersById = {};
         d.users.forEach(u => { _usersById[u.id] = u; });
         $("allUsersList").innerHTML = d.users.map(u => {
-          const who = (u.username ? `@${esc(u.username)}` : `ID ${u.id}`) + (u.super ? ` <span class="superbadge">🛡 SUPER</span>` : "");
+          // Имя, а если его в Telegram нет — имя из профиля. Голый id остаётся
+          // только для тех, кто не открывал ни бота, ни приложение.
+          const имя = u.username ? `@${esc(u.username)}`
+                    : u.first_name ? esc(u.first_name) : `ID ${u.id}`;
+          const who = имя + (u.super ? ` <span class="superbadge">🛡 SUPER</span>` : "");
           const meta = `🪙${u.coins} · 🎡${u.wheel_spins} · ${u.orders} зак · ${u.referrals} реф${u.age_ok ? "" : " · нет 18+"}`;
           const acts = u.super
             ? `<span class="uprotected">защищён</span>`
