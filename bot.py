@@ -130,8 +130,12 @@ def on_myid(message):
 
 @bot.message_handler(commands=["reply"])
 def on_reply(message):
-    """Ответ клиенту на его вопрос: /reply <user_id> текст (только для админов)."""
-    if not is_admin(message.from_user.id):
+    """Ответ на вопрос в поддержку: /reply <user_id> текст.
+
+    Только владельцам: вопросы из «Написать в поддержку» приходят им, а команда
+    позволяет написать ЛЮБОМУ id — продавцу это не нужно, у него есть «✍️
+    Написать» в заказе, и там проверяется его точка."""
+    if not is_super_admin(message.from_user.id):
         return
     parts = (message.text or "").split(maxsplit=2)
     if len(parts) < 3:

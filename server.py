@@ -218,6 +218,7 @@ _OWNER_ONLY = (
     "/api/admin/promo", "/api/admin/raffle/update", "/api/admin/raffle/draw",
     # люди
     "/api/admin/users", "/api/admin/user/delete", "/api/admin/referral",
+    "/api/admin/customer",          # история покупок и телефон — по всем точкам
     "/api/admin/staff/", "/api/admin/log",
     # заявки на подтверждение: решает их владелец. Маршруты и сами это проверяют,
     # но пусть правило будет и здесь — в одном месте видно всё, что не продавцу.
@@ -232,12 +233,16 @@ _OWNER_ONLY = (
 # Ровно этот путь, без вложенных: /api/admin/product заводит товар мимо
 # ассортимента (владельцу), а /api/admin/product/update — это цена на точке
 # (продавцу), и по префиксу их не различить.
-_OWNER_ONLY_EXACT = {"/api/admin/product"}
-# Читать разрешаем всем: продавцу надо видеть ассортимент, реквизиты и
-# промокоды, чтобы отвечать покупателю, — просто не менять их. Статистики
-# и журнала здесь нет намеренно: это деньги и надзор всего магазина.
-_OWNER_ONLY_READS = {"/api/admin/models", "/api/admin/staff", "/api/admin/promos",
-                     "/api/admin/raffle", "/api/admin/settings"}
+_OWNER_ONLY_EXACT = {
+    "/api/admin/product",
+    "/api/admin/promos",      # коды со статистикой: сколько выручки принёс каждый
+    "/api/admin/raffle",      # настройка розыгрыша
+    "/api/admin/settings",    # реквизиты и правила магазина
+    "/api/admin/staff",       # кто ещё работает и с какими правами
+}
+# Единственное общее чтение, оставленное продавцу: ассортимент. Без него он не
+# завезёт модель на свою точку. Всё остальное про магазин целиком — у владельца.
+_OWNER_ONLY_READS = {"/api/admin/models"}
 # Техническое: про программу, а не про магазин.
 _DEV_ONLY = ("/api/admin/stats/reset",)
 
@@ -790,18 +795,43 @@ def _notify_new_review(review_id):
 def api_admin_reviews():
     """Отзывы для админа: очередь на модерацию, опубликованные, скрытые."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     status = (data.get("status") or "pending").strip()
     if status not in ("pending", "approved", "hidden", "all"):
         status = "pending"
-    rows = db.admin_reviews(status)
+    rows = [r for r in db.admin_reviews(status) if _review_in_scope(admin, r)]
     return jsonify({"ok": True, "status": status, "pending": db.count_pending_reviews(), "reviews": [{
         "id": r["id"], "product_id": r["product_id"], "product": r["product_name"] or "товар удалён",
         "rating": r["rating"], "text": r["text"] or "", "who": _review_author(r),
         "created_at": r["created_at"] or "", "status": r["status"],
         "reply": r.get("reply") or "",
     } for r in rows]})
+
+
+def _sold_here(city):
+    """Что продаётся на точке: id товаров и id их моделей."""
+    pids, mids = set(), set()
+    for p in db.get_all_products():
+        if p["city"] == city:
+            pids.add(p["id"])
+            mid = p["model_id"] if "model_id" in p.keys() else None
+            if mid:
+                mids.add(mid)
+    return pids, mids
+
+
+def _review_in_scope(admin, review):
+    """Продавец отвечает за то, чем торгует. Отзыв о модели, которой на его
+    точке нет, — не его разговор, и в очереди он только мешает."""
+    scope = (admin or {}).get("city")
+    if not scope:
+        return True
+    pids, mids = _sold_here(scope)
+    # Отзыв приходит и строкой из базы, и готовым словарём — .keys() понимают оба.
+    mid = review["model_id"] if "model_id" in review.keys() else None
+    return review["product_id"] in pids or (mid is not None and mid in mids)
 
 
 @app.route("/api/admin/review/delete", methods=["POST"])
@@ -823,12 +853,19 @@ def api_admin_review_delete():
 def api_admin_review_reply():
     """Ответ магазина под отзывом. Пустой текст убирает ответ."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    admin = get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         rid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
+    review = db.get_review(rid)
+    if not review:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    if not _review_in_scope(admin, review):
+        return jsonify({"ok": False, "error": "other_city",
+                        "message": "Этого товара на вашей точке нет."}), 403
     if not db.set_review_reply(rid, data.get("text") or ""):
         return jsonify({"ok": False, "error": "not_found"}), 404
     return jsonify({"ok": True})
@@ -1639,6 +1676,12 @@ def api_admin_message():
     text = (data.get("text") or "").strip()[:2000]
     if not text:
         return jsonify({"ok": False, "error": "empty"}), 400
+    # Продавец пишет по своим заказам, а не всей базе покупателей: иначе с одной
+    # точки можно разослать что угодно всем клиентам магазина.
+    scope = admin.get("city")
+    if scope and not any(o["city"] == scope for o in db.get_orders_by_user(target, 50)):
+        return jsonify({"ok": False, "error": "other_city",
+                        "message": "Этот покупатель не заказывал на вашей точке."}), 403
     contact = _contact_link(admin.get("username"), int(admin["id"]), "написать менеджеру")
     msg = (f"💬 Сообщение от магазина:\n{html.escape(text)}\n\n"
            f"По любым вопросам: {contact}")
@@ -2709,7 +2752,9 @@ def api_admin_stock_moves():
         deny = deny_product(admin, pid)
         if deny:
             return deny
-    moves = db.get_stock_moves(pid, 60)
+    # Без товара в запросе это «вся история магазина» — продавцу отдаём только
+    # его точку. Раньше проверка стояла лишь на запрос по конкретному товару.
+    moves = db.get_stock_moves(pid, 60, city=(admin.get("city") or None))
     return jsonify({"ok": True, "moves": moves, "reasons": db.STOCK_REASONS})
 
 

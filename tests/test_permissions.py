@@ -115,18 +115,31 @@ def run():
         c3("доступ другим не выдаст", _code("/api/admin/staff/add", user_id=999, city="") == 403)
         c3("фото модели не тронет", _code("/api/admin/photo/delete", photo_id=1) == 403)
         c3("точку продаж не создаст", _code("/api/admin/location", name="Своя") == 403)
-        c3("но ассортимент посмотреть может", _post("/api/admin/models").get_json().get("ok"))
-        c3("и реквизиты прочитать — их спрашивает покупатель",
-          _post("/api/admin/settings").get_json().get("ok"))
+        c3("промокоды с выручкой не посмотрит", _code("/api/admin/promos") == 403)
+        c3("настройки магазина не прочтёт", _code("/api/admin/settings") == 403)
+        c3("карточку покупателя не откроет", _code("/api/admin/customer", user_id=BUYER) == 403)
+        c3("кто ещё работает — не его дело", _code("/api/admin/staff") == 403)
+        c3("но ассортимент посмотреть может — с него он завозит",
+          _post("/api/admin/models").get_json().get("ok"))
         c3("и сводку своего дня видит", _post("/api/admin/today").get_json().get("ok"))
 
         # ---------- Отзывы: отвечает продавец, решает владелец ----------
         c4 = Checker("Отзывы")
-        rid = db.add_review(minsk, BUYER, 3, "Средне", "vasya")
+        # Модель стоит на обеих точках, поэтому отзыв о ней — общий разговор.
+        rid = db.add_review(turov, BUYER, 3, "Средне", "vasya")
+        # А эта модель есть только в Минске: туровскому продавцу она чужая.
+        only_minsk = db.add_model("liquid", "Только Минск")
+        mp = db.add_product_from_model(only_minsk, "Минск", 10.0, stock=1)
+        alien = db.add_review(mp, BUYER + 1, 2, "Не понравилось", "petya")
+        server._cache_bust()
         _as(SELLER)
-        c4("продавец видит отзывы", _post("/api/admin/reviews", status="all").get_json().get("ok"))
+        seen = {r["id"] for r in _post("/api/admin/reviews", status="all").get_json()["reviews"]}
+        c4("видит отзыв о том, чем торгует", rid in seen)
+        c4("чужой товар в очередь не попал", alien not in seen)
         c4("и отвечает покупателю",
           _post("/api/admin/review/reply", id=rid, text="Спасибо, разберёмся").get_json().get("ok"))
+        c4("а на чужой отзыв ответить не может",
+          _code("/api/admin/review/reply", id=alien, text="я тут") == 403)
         c4("но не публикует", _code("/api/admin/review/decide", id=rid, ok=True) == 403)
         c4("и не удаляет", _code("/api/admin/review/delete", id=rid) == 403)
         _as(OWNER)

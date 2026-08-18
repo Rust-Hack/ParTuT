@@ -2033,13 +2033,20 @@ def move_stock(product_id, delta, reason, flavor=None, cost=0, note="", admin_id
     return int(p["stock"]) if p else 0
 
 
-def get_stock_moves(product_id=None, limit=100):
+def get_stock_moves(product_id=None, limit=100, city=None):
+    """Движения склада. city ограничивает выборку одной точкой: без товара в
+    запросе продавец иначе получал бы всю историю магазина — а по ней видно
+    завоз и списания соседних точек."""
     conn = connect()
     cur = conn.cursor()
     if product_id:
         cur.execute(_q("""SELECT m.*, p.name AS product FROM stock_moves m
                           LEFT JOIN products p ON p.id = m.product_id
                           WHERE m.product_id = %s ORDER BY m.id DESC LIMIT %s"""), (product_id, limit))
+    elif city:
+        cur.execute(_q("""SELECT m.*, p.name AS product FROM stock_moves m
+                          LEFT JOIN products p ON p.id = m.product_id
+                          WHERE p.city = %s ORDER BY m.id DESC LIMIT %s"""), (city, limit))
     else:
         cur.execute(_q("""SELECT m.*, p.name AS product FROM stock_moves m
                           LEFT JOIN products p ON p.id = m.product_id
