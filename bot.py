@@ -760,6 +760,20 @@ def _expire_unpaid_orders():
     return done
 
 
+_CLEANUP_MARK = "last_cleanup_date"
+
+
+def _nightly_cleanup():
+    """Раз в сутки убираем то, что копится само: картинки снятых с точки товаров
+    и старые движения монет. База бесплатная, место на ней кончается тихо."""
+    if not _claim_daily(_CLEANUP_MARK, BACKUP_HOUR):
+        return
+    photos = db.purge_orphan_photos()
+    coins = db.trim_coin_log()
+    if photos or coins:
+        print(f"Ночная уборка: картинок {photos}, движений монет {coins}")
+
+
 def _remind_sellers():
     """Продавцу — про заказы, которые ждут его решения. Раз в 10 минут на заказ."""
     for order in db.orders_needing_reminder(10):
@@ -776,6 +790,7 @@ _BACKGROUND_STEPS = [
     ("сводка дня", _maybe_send_daily_summary),
     ("резервная копия", _maybe_send_backup),
     ("напоминания покупателям", _maybe_send_repeat_reminders),
+    ("ночная уборка", _nightly_cleanup),
 ]
 
 

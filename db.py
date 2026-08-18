@@ -3281,6 +3281,60 @@ def delete_product_photo(photo_id):
     return deleted
 
 
+# Летопись монет нужна для отчёта «роздано за период», а не навсегда: держим
+# с запасом больше года, чтобы сравнение «этот август против прошлого» работало.
+COIN_LOG_KEEP_DAYS = 400
+
+
+def trim_coin_log(days=COIN_LOG_KEEP_DAYS):
+    """Убирает движения монет старше срока. Возвращает, сколько убрано."""
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("DELETE FROM coin_log WHERE created_at < %s"), (cutoff,))
+    gone = cur.rowcount
+    conn.commit()
+    conn.close()
+    return max(0, gone)
+
+
+def purge_orphan_photos(limit=200):
+    """Убирает картинки, на которые больше никто не ссылается.
+
+    Товар снимают с точки — строки о нём уходят, а картинка оставалась в базе
+    навсегда. Место на бесплатной базе кончается тихо, и заметить это можно
+    было бы только когда магазин перестанет принимать заказы.
+
+    Ошибиться тут почти нечем: file_id в Telegram остаётся рабочим, и удалённая
+    по недосмотру картинка просто скачается заново при первом показе. Поэтому
+    достаточно одного условия — на неё никто не ссылается.
+
+    Разом убираем не больше limit штук: ночная уборка не должна держать базу.
+    Возвращает, сколько убрано.
+    """
+    # Сутки форы: картинка появляется в базе следом за товаром, и уборка не
+    # должна успеть между этими двумя действиями.
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+    conn = connect()
+    cur = conn.cursor()
+    # NOT IN и NULL несовместимы: один NULL в списке — и условие не выполнится
+    # НИ ДЛЯ ОДНОЙ строки, уборка молча перестанет работать. Отсюда IS NOT NULL.
+    cur.execute(_q("""
+        DELETE FROM photo_blobs WHERE file_id IN (
+            SELECT file_id FROM photo_blobs
+             WHERE (created_at IS NULL OR created_at < %s)
+               AND file_id NOT IN (SELECT photo FROM products WHERE photo IS NOT NULL)
+               AND file_id NOT IN (SELECT photo_thumb FROM products WHERE photo_thumb IS NOT NULL)
+               AND file_id NOT IN (SELECT file_id FROM product_photos WHERE file_id IS NOT NULL)
+               AND file_id NOT IN (SELECT thumb_id FROM product_photos WHERE thumb_id IS NOT NULL)
+             LIMIT %s)
+    """), (cutoff, limit))
+    gone = cur.rowcount
+    conn.commit()
+    conn.close()
+    return max(0, gone)
+
+
 def photo_blob_stats():
     """Сколько картинок лежит в базе и сколько места занимают (для админ-статистики)."""
     conn = connect()
