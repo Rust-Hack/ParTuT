@@ -14,6 +14,7 @@
 разное в зависимости от того, в какое время суток её запустили.
 """
 import datetime
+import threading
 
 from _common import db, Checker
 
@@ -173,8 +174,50 @@ def run():
     db.init_db()
     c5("перезапуск сервиса историю не двигает", _взять() == (o, u, r))
 
+    # --- Несколько процессов поднялись разом ---
+    # При выкладке процессов может стартовать несколько. «Прочитать отметку,
+    # потом записать» пропустило бы всех — история уехала бы на шесть часов
+    # вместо трёх, и заметить это было бы уже не по чему.
+    c6 = Checker("Сдвиг при одновременном старте")
     _clean()
-    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("DELETE FROM settings WHERE key = %s"), (db._TZ_SHIFT_MARK,))
+    conn.commit(); conn.close()
+    oid2 = db.create_order(7403, "старый", "Минск",
+                           [{"product_id": 1, "name": "Под", "price": 1.0, "qty": 1}], 1.0, "")
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("UPDATE orders SET created_at = %s WHERE id = %s"), ("2026-08-10 10:00", oid2))
+    conn.commit(); conn.close()
+
+    итоги = []
+    потоки = [threading.Thread(target=lambda: итоги.append(db._shift_history_to_shop_time()))
+              for _ in range(6)]
+    for t in потоки:
+        t.start()
+    for t in потоки:
+        t.join()
+    c6("сдвиг выполнил ровно один запуск", sum(1 for x in итоги if x > 0) == 1)
+    c6("и время сдвинулось один раз, а не шесть",
+       db.get_order(oid2)["created_at"] == "2026-08-10 13:00")
+
+    # Сорвался — отметку надо отпустить: пропустить перевод не страшно, а вот
+    # пометить его сделанным, не сделав, — страшно.
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("DELETE FROM settings WHERE key = %s"), (db._TZ_SHIFT_MARK,))
+    conn.commit(); conn.close()
+    настоящий = db._all_table_names
+    db._all_table_names = lambda cur: (_ for _ in ()).throw(RuntimeError("база отвалилась"))
+    try:
+        db._shift_history_to_shop_time()
+    finally:
+        db._all_table_names = настоящий
+    c6("после срыва отметка отпущена", not db.get_setting(db._TZ_SHIFT_MARK))
+    c6("и следующий запуск доводит дело до конца",
+       db._shift_history_to_shop_time() > 0
+       and db.get_order(oid2)["created_at"] == "2026-08-10 16:00")
+
+    _clean()
+    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails
 
 
 if __name__ == "__main__":

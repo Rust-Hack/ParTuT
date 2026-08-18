@@ -73,6 +73,11 @@ def run():
 
     # --- Порог участия ---
     c = Checker("Кого пускают в розыгрыш")
+    # Пока розыгрышей не было вовсе, вкладки у покупателя быть не должно.
+    as_user(UIDS[0], "новичок")
+    c("без розыгрышей вкладка скрыта",
+      client.post("/api/me", json={"initData": "x"}).get_json().get("raffle_on") is False)
+    as_admin()
     rid = db.create_raffle(threshold=25, prize3_coins=500, days=30)
     as_user(UIDS[0], "бедный")
     r = client.post("/api/raffle/join", json={"initData": "x"})

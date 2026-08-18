@@ -11,6 +11,7 @@
 двойное нажатие отправляет два запроса разом, и оба успевают не найти прежний
 заказ.
 """
+import datetime
 import threading
 
 from _common import db, client, server, Checker, as_user, as_admin, SENT, reset_sent
@@ -105,6 +106,26 @@ def run():
         "payment_method": "cash", "items": [{"id": pid, "qty": 1}]}).get_json()
     c3("старое приложение без ключа оформляет как прежде", без_ключа.get("ok") is True)
 
+    # --- Ключ старше суток ---
+    # Уникальный ключ в базе вечен, а окно поиска — сутки. Повтор давней попытки
+    # проваливался бы мимо поиска, упирался в ключ и отвечал ошибкой сервера
+    # вместо собственного заказа человека.
+    c35 = Checker("Повтор давней попытки")
+    свежий = order("попытка-старая")
+    conn = db.connect(); cur = conn.cursor()
+    давно = (datetime.datetime.now() - datetime.timedelta(days=40)).strftime("%Y-%m-%d %H:%M")
+    cur.execute(db._q("UPDATE orders SET created_at = %s WHERE id = %s"),
+                (давно, свежий["order_id"]))
+    conn.commit(); conn.close()
+    было = _count_orders()
+    r = client.post("/api/order", json={
+        "initData": "x", "city": "Минск", "delivery_method_id": mid,
+        "payment_method": "cash", "items": [{"id": pid, "qty": 2}],
+        "client_token": "попытка-старая"})
+    c35("ошибки сервера нет", r.status_code == 200)
+    c35("вернулся тот же заказ", r.get_json().get("order_id") == свежий["order_id"])
+    c35("второго заказа не появилось", _count_orders() == было)
+
     # --- Чужой ключ ---
     # Ключ придумывает клиент, значит его могут прислать чужой. Чужой заказ по
     # нему доставаться не должен.
@@ -121,7 +142,7 @@ def run():
     conn = db.connect(); cur = conn.cursor()
     cur.execute(db._q("DELETE FROM users WHERE user_id = %s"), (8802,))
     conn.commit(); conn.close()
-    return c.fails + c2.fails + c3.fails + c4.fails
+    return c.fails + c2.fails + c35.fails + c3.fails + c4.fails
 
 
 if __name__ == "__main__":

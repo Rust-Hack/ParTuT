@@ -671,8 +671,7 @@ def api_me():
                     # Идёт ли розыгрыш. Приложение прячет по этому флагу целую
                     # вкладку: показывать «Розыгрыши» там, где ничего не
                     # разыгрывают, — обещание, которого магазин не давал.
-                    "raffle_on": (db.get_active_raffle() is not None
-                                  or db.recent_finished_raffle() is not None),
+                    "raffle_on": db.has_any_raffle(),
                     "my_point": my_point})
 
 

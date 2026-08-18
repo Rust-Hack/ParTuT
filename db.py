@@ -748,6 +748,13 @@ def _shift_history_to_shop_time():
     """
     if get_setting(_TZ_SHIFT_MARK) or not SHOP_TZ_OFFSET:
         return 0
+    # Право сдвинуть историю забираем одним действием. Внутри процесса гонки нет
+    # (init_db зовут последовательно), но при выкладке процессов может подняться
+    # несколько, и «прочитать, потом записать» пропустило бы обоих — история
+    # уехала бы на шесть часов вместо трёх. Если сдвиг сорвётся, отметку вернём
+    # обратно: пропустить перевод не страшно, сделать его дважды — страшно.
+    if not claim_setting(_TZ_SHIFT_MARK, _now_str()):
+        return 0
     # Верхняя граница сдвига. Запись, сделанную старым кодом, видно по одному
     # признаку: она отстаёт от настоящего момента минимум на SHOP_TZ_OFFSET часов
     # — столько сервер и «терял». Значит всё, что новее этой границы, записано
@@ -784,24 +791,14 @@ def _shift_history_to_shop_time():
                             WHERE "{col}" GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]*'
                               AND ("{col}" <= ? OR "{col}" > ?)""", (граница, сейчас))
                 сдвинуто += max(0, cur.rowcount)
-        # Отметку ставим ТОЙ ЖЕ транзакцией, а не через set_setting: у него своё
-        # подключение и свой commit, и при откате сдвига отметка бы уцелела —
-        # история осталась бы несдвинутой, но помеченной как сдвинутая.
-        отметка = _now_str()
-        if USE_PG:
-            cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) "
-                        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                        (_TZ_SHIFT_MARK, отметка))
-        else:
-            cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                        (_TZ_SHIFT_MARK, отметка))
         conn.commit()
         if сдвинуто:
             print(f"История переведена на время магазина: записей {сдвинуто}")
     except Exception as e:
         conn.rollback()
-        # Не сдвинуть историю — неприятно, но терпимо: магазин работает дальше,
-        # а отметку не ставим, и следующий запуск попробует снова.
+        # Не сдвинуть историю — неприятно, но терпимо: магазин работает дальше.
+        # Отметку отпускаем, чтобы следующий запуск попробовал снова.
+        set_setting(_TZ_SHIFT_MARK, "")
         print(f"Не смог перевести историю на время магазина: {e}")
     conn.close()
     return сдвинуто
@@ -825,6 +822,20 @@ def _ensure_raffle_columns():
         cur.execute("ALTER TABLE raffles ADD COLUMN photo TEXT")
     conn.commit()
     conn.close()
+
+
+def has_any_raffle():
+    """Был ли розыгрыш вообще. По этому флагу приложение показывает вкладку.
+
+    Отдельный вопрос, а не два запроса подряд: розыгрыш бывает либо идущим,
+    либо завершённым, значит «есть что показать» — это «есть хоть один».
+    А спрашивают об этом на каждом открытии приложения."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 AS x FROM raffles LIMIT 1")
+    есть = cur.fetchone() is not None
+    conn.close()
+    return есть
 
 
 def recent_finished_raffle():
@@ -3846,15 +3857,24 @@ def find_order_by_token(user_id, token, hours=ORDER_TOKEN_HOURS):
     """Заказ, оформленный этой же попыткой, или None.
 
     Ключ ищется вместе с user_id: он приходит от клиента, и чужой заказ по нему
-    достаться не должен ни по ошибке, ни нарочно."""
+    достаться не должен ни по ошибке, ни нарочно.
+
+    hours=None — искать без ограничения по времени. Так спрашивают, когда ключ
+    уже отверг вставку: уникальный ключ в базе вечен, а окно поиска — сутки, и
+    без этого повтор годовой давности отвечал бы ошибкой вместо своего заказа.
+    """
     if not token:
         return None
-    cutoff = (shop_now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("SELECT * FROM orders WHERE user_id = %s AND client_token = %s "
-                   "AND created_at >= %s ORDER BY id DESC LIMIT 1"),
-                (user_id, token, cutoff))
+    if hours is None:
+        cur.execute(_q("SELECT * FROM orders WHERE user_id = %s AND client_token = %s "
+                       "ORDER BY id DESC LIMIT 1"), (user_id, token))
+    else:
+        cutoff = (shop_now() - datetime.timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
+        cur.execute(_q("SELECT * FROM orders WHERE user_id = %s AND client_token = %s "
+                       "AND created_at >= %s ORDER BY id DESC LIMIT 1"),
+                    (user_id, token, cutoff))
     row = cur.fetchone()
     conn.close()
     return row
@@ -3951,7 +3971,9 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
         # нажатии на плохой связи. Уникальный ключ пропустил ровно один; второму
         # отдаём тот же заказ, а не ошибку: человек оформлял один раз.
         if client_token:
-            prev = find_order_by_token(user_id, client_token)
+            # Без ограничения по времени: раз ключ отверг вставку, заказ с этой
+            # попыткой в базе есть — вопрос только в том, насколько он давний.
+            prev = find_order_by_token(user_id, client_token, hours=None)
             if prev:
                 return int(prev["id"]), int(prev["coins_used"] or 0), float(prev["total"]), True
         raise
