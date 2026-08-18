@@ -451,6 +451,7 @@ def init_db():
     seed_category_specs()       # характеристики категорий, если их ещё нет
     models_seeded_from_products()   # разово собирает ассортимент из прежних товаров
     _ensure_review_columns()    # отзыв принадлежит модели — ПОСЛЕ того, как модели собраны
+    _ensure_raffle_uniques()    # один билет на человека, один активный розыгрыш
     seed_locations()            # добавит стартовые точки, если таблица пустая
     seed_delivery()             # дефолтные способы получения для Минск/Туров
 
@@ -701,6 +702,41 @@ def _now_str():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
+def _ensure_raffle_uniques():
+    """Честность розыгрыша — правилом базы, а не проверкой в коде.
+
+    Было две дыры, и обе открывались одновременными нажатиями. «Участвую»
+    сначала спрашивало «уже участвует?», потом вставляло билет — пять нажатий
+    подряд давали одному человеку пять билетов и впятеро больше шансов. А когда
+    у розыгрыша выходил срок, каждый, кто в этот момент открыл вкладку, запускал
+    розыгрыш заново: победителю слали поздравление по разу от каждого, монеты за
+    третье место начислялись столько же раз, и на месте одного розыгрыша
+    оставалась пачка активных.
+
+    Уникальный ключ закрывает и то, и другое: спорить с ним бесполезно.
+    Дубли, которые успели накопиться, сначала разводим — иначе ключ не встанет.
+    """
+    conn = connect()
+    cur = conn.cursor()
+    try:
+        # Лишние билеты одного человека: оставляем самый первый.
+        cur.execute("""DELETE FROM raffle_entries WHERE id NOT IN
+                       (SELECT MIN(id) FROM raffle_entries GROUP BY raffle_id, user_id)""")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS raffle_entries_uniq "
+                    "ON raffle_entries (raffle_id, user_id)")
+        # Лишние активные розыгрыши: настоящий — последний, остальные закрываем.
+        cur.execute("""UPDATE raffles SET status = 'finished'
+                        WHERE status = 'active' AND id <>
+                              (SELECT MAX(id) FROM raffles WHERE status = 'active')""")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS raffles_one_active "
+                    "ON raffles (status) WHERE status = 'active'")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Не смог навести порядок в розыгрышах: {e}")
+    conn.close()
+
+
 def get_active_raffle():
     conn = connect()
     cur = conn.cursor()
@@ -725,14 +761,23 @@ def create_raffle(title="Розыгрыш месяца", prize1="Однораз�
     ends = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
     conn = connect()
     cur = conn.cursor()
-    rid = _insert_id(
-        cur,
-        """INSERT INTO raffles (title, prize1, prize2, prize3_coins, threshold, starts_at, ends_at, status, created_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, 'active', %s)""",
-        (title, prize1, prize2, int(prize3_coins), float(threshold),
-         now.strftime("%Y-%m-%d %H:%M"), ends, now.strftime("%Y-%m-%d %H:%M")),
-    )
-    conn.commit()
+    try:
+        rid = _insert_id(
+            cur,
+            """INSERT INTO raffles (title, prize1, prize2, prize3_coins, threshold, starts_at, ends_at, status, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, 'active', %s)""",
+            (title, prize1, prize2, int(prize3_coins), float(threshold),
+             now.strftime("%Y-%m-%d %H:%M"), ends, now.strftime("%Y-%m-%d %H:%M")),
+        )
+        conn.commit()
+    except Exception:
+        # Активный розыгрыш уже завёл кто-то другой — их не может быть двое.
+        conn.rollback()
+        conn.close()
+        existing = get_active_raffle()
+        if existing:
+            return int(existing["id"])
+        raise
     conn.close()
     return rid
 
@@ -751,6 +796,31 @@ def update_raffle_field(raffle_id, field, value):
     return True
 
 
+def claim_raffle_draw(raffle_id):
+    """Забирает право разыграть этот розыгрыш. True достаётся ровно одному.
+
+    Розыгрыш запускается лениво — тем, кто первым открыл вкладку после срока.
+    В час пик таких «первых» несколько, и без этого условия каждый раздавал
+    призы заново."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE raffles SET status = 'finished' WHERE id = %s AND status = 'active'"),
+                (raffle_id,))
+    won = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return won
+
+
+def set_raffle_winners(raffle_id, winners):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE raffles SET winners = %s WHERE id = %s"),
+                (json.dumps(winners, ensure_ascii=False), raffle_id))
+    conn.commit()
+    conn.close()
+
+
 def finish_raffle(raffle_id, winners):
     conn = connect()
     cur = conn.cursor()
@@ -761,9 +831,17 @@ def finish_raffle(raffle_id, winners):
 
 
 def add_raffle_entry(raffle_id, user_id):
+    """Билет участника. Повторное нажатие второго билета не даёт — за этим следит
+    уникальный ключ, а не проверка перед вставкой: между проверкой и вставкой
+    проходит второе нажатие."""
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("INSERT INTO raffle_entries (raffle_id, user_id) VALUES (%s, %s)"), (raffle_id, user_id))
+    if USE_PG:
+        cur.execute("INSERT INTO raffle_entries (raffle_id, user_id) VALUES (%s, %s) "
+                    "ON CONFLICT DO NOTHING", (raffle_id, user_id))
+    else:
+        cur.execute("INSERT OR IGNORE INTO raffle_entries (raffle_id, user_id) VALUES (?, ?)",
+                    (raffle_id, user_id))
     conn.commit()
     conn.close()
 

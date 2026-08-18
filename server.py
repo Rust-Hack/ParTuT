@@ -2250,8 +2250,17 @@ def api_slot_spin():
 # ------------------- Розыгрыши (раз в месяц) -------------------
 
 def _draw_raffle(raffle):
-    """Выбирает победителей 1-3 мест, начисляет монеты за 3 место, уведомляет, завершает."""
-    uids = db.get_raffle_user_ids(raffle["id"])
+    """Выбирает победителей 1-3 мест, начисляет монеты за 3 место, уведомляет, завершает.
+
+    Возвращает True, если розыгрыш провели именно мы. Право разыграть забирается
+    у базы: розыгрыш запускается лениво, тем, кто первым открыл вкладку после
+    срока, и в час пик таких «первых» несколько — каждый раздавал призы заново.
+    """
+    if not db.claim_raffle_draw(raffle["id"]):
+        return False                      # уже разыграл кто-то другой
+    # Один человек — одно место. Ключ в базе не даст ему второй билет, но в
+    # старых розыгрышах дубли могли остаться, а забрать все три места нельзя.
+    uids = list(dict.fromkeys(db.get_raffle_user_ids(raffle["id"])))
     random.shuffle(uids)
     places = [(1, raffle["prize1"] or "Приз за 1 место", 0),
               (2, raffle["prize2"] or "Приз за 2 место", 0),
@@ -2266,7 +2275,8 @@ def _draw_raffle(raffle):
             db.add_coins(wid, coins, "raffle")
         _notify_client(wid, f"🏆 Вы заняли {place} место в розыгрыше! Приз: {prize}. "
                             + ("Монеты начислены." if coins else "Продавец свяжется с вами."))
-    db.finish_raffle(raffle["id"], winners)
+    db.set_raffle_winners(raffle["id"], winners)
+    return True
 
 
 def _ensure_raffle():
@@ -2276,8 +2286,10 @@ def _ensure_raffle():
         db.create_raffle()
         return
     if r["ends_at"] and db._now_str() >= r["ends_at"]:
-        _draw_raffle(r)
-        db.create_raffle()
+        # Новый розыгрыш заводит тот, кто провёл прошлый: иначе на месте одного
+        # оставалась пачка активных.
+        if _draw_raffle(r):
+            db.create_raffle()
 
 
 def _raffle_public_from_state(st):
@@ -3243,8 +3255,8 @@ def api_admin_raffle_draw():
         return jsonify({"ok": False, "error": "forbidden"}), 403
     _ensure_raffle()
     r = db.get_active_raffle()
-    _draw_raffle(r)
-    db.create_raffle()
+    if r and _draw_raffle(r):
+        db.create_raffle()
     return jsonify({"ok": True})
 
 
