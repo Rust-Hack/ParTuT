@@ -711,7 +711,7 @@ def api_my_settings():
         # Пустой телефон — законный ответ («не хочу указывать»), а вот огрызок
         # вроде «+375» хуже пустого: он молча подставится в заказ, и продавец
         # будет звонить в никуда. Тот же порог, что при оформлении доставки.
-        phone = (data.get("phone") or "").strip()
+        phone = _text(data.get("phone"))
         if phone and len(_digits(phone)) < 7:
             return jsonify({"ok": False, "error": "bad_phone"}), 400
         db.set_user_phone(uid, phone)
@@ -1019,7 +1019,7 @@ def api_admin_category_add():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    name = (data.get("name") or "").strip()
+    name = _text(data.get("name"))
     if not name:
         return jsonify({"ok": False, "error": "bad_name"}), 400
     code = db.add_category(name, data.get("emoji") or "")
@@ -1033,7 +1033,7 @@ def api_admin_category_update():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    code = (data.get("code") or "").strip()
+    code = _text(data.get("code"))
     if code not in db.category_codes():
         return jsonify({"ok": False, "error": "not_found"}), 404
     sort = data.get("sort")
@@ -1049,7 +1049,7 @@ def api_admin_category_spec_add():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    category = (data.get("category") or "").strip()
+    category = _text(data.get("category"))
     if category not in db.category_codes():
         return jsonify({"ok": False, "error": "not_found"}), 404
     options = data.get("options")
@@ -1105,7 +1105,7 @@ def api_admin_category_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    code = (data.get("code") or "").strip()
+    code = _text(data.get("code"))
     if code not in db.category_codes():
         return jsonify({"ok": False, "error": "not_found"}), 404
     used = db.count_products_in_category(code) + len(db.list_models(code))
@@ -1138,7 +1138,7 @@ def api_delivery():
     Отдаём вместе с точками самовывоза этого города: покупатель выбирает нужную
     прямо в заказе, а не роется в настройках. Один запрос вместо двух — шторка
     оформления должна открываться мгновенно."""
-    city = request.args.get("city", "")
+    city = _text(request.args.get("city"))
     key = f"delivery:{city}"
     cached = _cache_get(key)
     if cached is None:
@@ -1231,7 +1231,7 @@ def api_products():
 
     Закупочная цена вырезается здесь же: она лежала в том же ответе, что и
     витрина, и любой покупатель мог прочитать, почём мы берём товар."""
-    city = request.args.get("city")
+    city = _text(request.args.get("city")) or None
     out = [_public_product(p) for p in _all_products_payload() if not p["hidden"]]
     if city:
         out = [p for p in out if p["city"] == city]
@@ -1282,6 +1282,25 @@ def _token_ok(file_id, token):
         return False
     want = hmac.new(BOT_TOKEN.encode(), f"{file_id}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
     return hmac.compare_digest(want, sig)
+
+
+def _text(value, limit=None):
+    """Строка из того, что прислал клиент, — что бы он ни прислал.
+
+    Раньше по всему серверу стояло `(data.get("x") or "").strip()`. Приложение
+    шлёт строку, и всё работало; но стоило прийти списку или числу — обработчик
+    падал с 500. Причём каждое такое падение ещё и отправляло разработчику
+    письмо о сбое, то есть любой желающий мог завалить почту, зная адрес.
+    Списки и словари строкой не считаем: это не «текст с опечаткой», а мусор.
+    """
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    s = value if isinstance(value, str) else str(value)
+    # Нулевой байт: SQLite его молча глотает, а Postgres отказывается принимать
+    # такую строку вовсе — и запрос падает с 500. Пришёл он из адреса или из
+    # тела, для нас это мусор в любом случае.
+    s = s.replace("\x00", "").strip()
+    return s[:limit] if limit else s
 
 
 def _digits(s):
@@ -1469,6 +1488,21 @@ def _confirm_minutes():
     return cached
 
 
+def _sold_out_message(gone, short):
+    """Человеческое объяснение, почему заказ не оформился.
+
+    Говорим названиями, а не кодами: «разобрали» и «осталось 2» покупатель
+    понимает сразу, а «error: sold_out» — нет."""
+    parts = []
+    if gone:
+        names = ", ".join(f"«{g['name']}»" for g in gone[:3])
+        parts.append(f"{names} разобрали, пока вы оформляли заказ")
+    for sh in short[:3]:
+        parts.append(f"«{sh['name']}» осталось {sh['left']} шт")
+    tail = "Мы поправили корзину — проверьте и оформите заново."
+    return (". ".join(parts) + ". " + tail) if parts else tail
+
+
 @app.route("/api/order", methods=["POST"])
 def api_order():
     data = request.get_json(force=True, silent=True) or {}
@@ -1481,13 +1515,17 @@ def api_order():
 
     # Разбираем корзину клиента (id + количество), чтобы одним запросом взять товары.
     raw_items = []
-    for ri in data.get("items", []):
+    # Корзина обязана быть списком словарей. Если пришло что-то другое — это не
+    # наше приложение, и падать с 500 на этом незачем: просто нечего заказывать.
+    for ri in (data.get("items") if isinstance(data.get("items"), list) else []):
+        if not isinstance(ri, dict):
+            continue
         try:
             pid, qty = int(ri.get("id")), int(ri.get("qty", 0))
         except (TypeError, ValueError):
             continue
         if qty > 0:
-            raw_items.append((pid, qty, (ri.get("flavor") or "").strip() or None))
+            raw_items.append((pid, qty, _text(ri.get("flavor")) or None))
     try:
         method_id = int(data.get("delivery_method_id"))
     except (TypeError, ValueError):
@@ -1500,6 +1538,7 @@ def api_order():
 
     # Цены и наличие берём из БАЗЫ, а не из того, что прислал клиент.
     items, total, cities = [], 0.0, set()
+    gone, short = [], []          # разобрали совсем / осталось меньше, чем просят
     for pid, qty, flavor in raw_items:
         p = ctx["products"].get(pid)
         if not p:
@@ -1510,16 +1549,25 @@ def api_order():
             continue
         if flavor:
             # товар-модель со вкусами: остаток берём у нужного варианта
-            avail = ctx["variants"].get(pid, {}).get(flavor, 0)
-            if avail <= 0:
-                continue
-            real_qty = min(qty, avail)
+            known = ctx["variants"].get(pid, {})
+            if flavor not in known:
+                continue      # такого вкуса у товара нет вовсе — это не «разобрали»
+            avail = int(known.get(flavor) or 0)
             name = f"{p['name']} — {flavor}"
         else:
-            if p["stock"] <= 0:
-                continue
-            real_qty = min(qty, p["stock"])
+            avail = int(p["stock"] or 0)
             name = p["name"]
+        # Раньше не хватило остатка — товар молча выбрасывали из заказа, а
+        # количество молча урезали. Человек получал «Корзина пуста» при полной
+        # корзине или платил за меньшее, чем собирался, и узнавал об этом только
+        # у продавца. Теперь честно отказываем и говорим, что изменилось.
+        if avail <= 0:
+            gone.append({"id": pid, "flavor": flavor, "name": name})
+            continue
+        if qty > avail:
+            short.append({"id": pid, "flavor": flavor, "name": name, "left": avail})
+            continue
+        real_qty = qty
         # Закупочную цену ЗАПОМИНАЕМ в заказе, а не смотрим потом в товаре:
         # завтра поставщик поднимет цену, и прибыль по прошлым продажам поедет.
         items.append({"id": pid, "flavor": flavor, "name": name, "price": p["price"],
@@ -1527,6 +1575,14 @@ def api_order():
         total += p["price"] * real_qty
         cities.add(p["city"])
 
+    # Что-то разобрали или осталось меньше — не оформляем втихую. Приложение по
+    # этому ответу поправит корзину, покажет сообщение и даст оформить заново.
+    if gone or short:
+        _cache_bust("products")
+        return jsonify({"ok": False, "error": "sold_out",
+                        "name": (gone or short)[0]["name"],
+                        "gone": gone, "short": short,
+                        "message": _sold_out_message(gone, short)}), 409
     if not items:
         return jsonify({"ok": False, "error": "empty"}), 400
     if len(cities) > 1:
@@ -1539,13 +1595,13 @@ def api_order():
     method = ctx["method"]
     if not method or method["city"] != city:
         return jsonify({"ok": False, "error": "bad_delivery"}), 400
-    address = (data.get("delivery_address") or "").strip()
+    address = _text(data.get("delivery_address"))
     if method["needs_address"] and not address:
         return jsonify({"ok": False, "error": "no_address"}), 400
     # На доставку телефон обязателен. Курьер стоит у подъезда, а связь с
     # покупателем — только через Telegram, который может быть выключен: заказ
     # уезжает обратно, деньги и время потеряны.
-    phone = (data.get("phone") or "").strip()
+    phone = _text(data.get("phone"))
     if method["needs_address"] and len(_digits(phone)) < 7:
         return jsonify({"ok": False, "error": "no_phone"}), 400
     # Точку самовывоза сверяем со списком города, а не берём на слово: иначе в
@@ -1584,7 +1640,7 @@ def api_order():
     #    round() убирает float-погрешность (25/0.01 = 2499.999…). Само списание — внутри
     #    транзакции place_order (атомарно, защищает от гонки и двойного клика).
     # 3а. Промокод. Скидку считает сервер — присланную сумму принимать нельзя.
-    promo_code = (data.get("promo_code") or "").strip().upper()
+    promo_code = _text(data.get("promo_code")).upper()
     promo_discount = 0.0
     if promo_code:
         promo_discount, promo_err = db.check_promo(promo_code, user_id, subtotal)
@@ -1607,9 +1663,18 @@ def api_order():
         order_id, coins_used, total = db.place_order(
             user_id, username, city, items, subtotal, fee, COIN_VALUE, spend,
             method["name"], address, payment,
-            (data.get("comment") or "").strip(), phone,
+            _text(data.get("comment")), phone,
             "new" if needs_receipt else "paid",
             promo_code, promo_discount)
+    except db.PromoGone as e:
+        # Код разобрали, пока человек оформлял. Молча оформить без скидки нельзя:
+        # он согласился на одну сумму, а заплатил бы другую.
+        msgs = {"promo_once": "Этот промокод уже использован на вашем аккаунте.",
+                "promo_used_up": "Промокод закончился — его разобрали.",
+                "promo_unknown": "Промокод больше не действует."}
+        return jsonify({"ok": False, "error": "promo_gone",
+                        "message": msgs.get(e.reason, "Промокод больше не действует.")
+                                   + " Уберите его и оформите заказ заново."}), 409
     except db.OutOfStock as e:
         # Пока человек оформлял, последнюю штуку забрал кто-то другой. Лучше
         # честно сказать сейчас, чем продать то, чего нет, и отказывать при выдаче.
@@ -1618,8 +1683,9 @@ def api_order():
                         "message": f"«{e.name}» разобрали, пока вы оформляли заказ. "
                                    "Обновите корзину — остальное на месте."}), 409
     discount = round(coins_used * COIN_VALUE, 2)
-    if promo_code and promo_discount:
-        db.consume_promo(promo_code)      # одно использование потрачено
+    # Списание применения промокода переехало ВНУТРЬ транзакции заказа
+    # (db._reserve_promo): отдельным походом в базу оно позволяло применить один
+    # и тот же код несколько раз одновременными заказами.
 
     # Уведомления (продавцам + клиенту) — в фоне, чтобы «Оформить» отвечал сразу.
     # Шлём ВСЕГДА, а не только когда чек не нужен: заказ картой раньше ждал чека,
@@ -1725,7 +1791,7 @@ def api_support():
     user = get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
-    text = (data.get("text") or "").strip()[:2000]
+    text = _text(data.get("text"), 2000)
     if not text:
         return jsonify({"ok": False, "error": "empty"}), 400
     uid = int(user["id"])
@@ -1774,7 +1840,7 @@ def api_admin_message():
         target = int(data.get("user_id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    text = (data.get("text") or "").strip()[:2000]
+    text = _text(data.get("text"), 2000)
     if not text:
         return jsonify({"ok": False, "error": "empty"}), 400
     # Продавец пишет по своим заказам, а не всей базе покупателей: иначе с одной
@@ -2271,7 +2337,7 @@ def api_admin_add():
 
     city = data.get("city")
     category = data.get("category")
-    name = (data.get("name") or "").strip()
+    name = _text(data.get("name"))
     if city not in db.location_names() or category not in db.category_codes() or not name:
         return jsonify({"ok": False, "error": "bad_data"}), 400
     try:
@@ -2286,9 +2352,9 @@ def api_admin_add():
         cost = 0.0
 
     is_hit = 1 if data.get("is_hit") else 0
-    desc = (data.get("description") or "").strip()
-    brand = (data.get("brand") or "").strip()
-    strength = (data.get("strength") or "").strip()
+    desc = _text(data.get("description"))
+    brand = _text(data.get("brand"))
+    strength = _text(data.get("strength"))
 
     # Товар-модель со вкусами (одноразки/жидкости): список variants + свои поля.
     # Объём: у одноразок приходит как puffs (затяжки), у жидкостей как volume (мл).
@@ -2314,8 +2380,8 @@ def api_admin_add():
         stock = int(data.get("stock"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_number"}), 400
-    flavor = (data.get("flavor") or "").strip()
-    volume = (data.get("volume") or "").strip()
+    flavor = _text(data.get("flavor"))
+    volume = _text(data.get("volume"))
     pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc,
                          brand=brand, flavor=flavor, strength=strength, volume=volume, cost=cost)
     _save_specs(pid, category, data.get("specs"))
@@ -2767,7 +2833,8 @@ def api_admin_stats():
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
-    period = data.get("period", "30d")
+    # Период уходит в ключ кэша: списком или словарём он быть не может.
+    period = _text(data.get("period")) or "30d"
     # Тяжёлый расчёт (~15 запросов) — кэшируем на 60с. Сбрасывается при изменении заказов
     # (через _WRITE_PATHS), так что цифры остаются актуальными после реальных продаж.
     cached = _cache_get(f"stats:{period}")
@@ -2839,7 +2906,7 @@ def api_admin_stock_move():
         cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
     except (TypeError, ValueError):
         cost = 0.0
-    flavor = (data.get("flavor") or "").strip() or None
+    flavor = _text(data.get("flavor")) or None
     stock = db.move_stock(pid, delta, reason, flavor=flavor, cost=cost,
                           note=data.get("note"), admin_id=int(admin["id"]))
     return jsonify({"ok": True, "stock": stock})
@@ -2883,7 +2950,7 @@ def api_admin_promo_add():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    code = (data.get("code") or "").strip().upper()
+    code = _text(data.get("code")).upper()
     if not code or len(code) > 24 or " " in code:
         return jsonify({"ok": False, "error": "bad_code"}), 400
     kind = "fixed" if data.get("kind") == "fixed" else "percent"
@@ -2935,11 +3002,11 @@ def api_admin_point_add():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    city = (data.get("city") or "").strip()
-    address = (data.get("address") or "").strip()
+    city = _text(data.get("city"))
+    address = _text(data.get("address"))
     if not city or not address:
         return jsonify({"ok": False, "error": "bad_input"}), 400
-    db.add_pickup_point(city, address, (data.get("note") or "").strip()[:80],
+    db.add_pickup_point(city, address, _text(data.get("note"), 80),
                         int(data.get("sort") or 0))
     return jsonify({"ok": True})
 
@@ -2953,10 +3020,10 @@ def api_admin_point_update():
         pid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    address = (data.get("address") or "").strip()
+    address = _text(data.get("address"))
     if not address:
         return jsonify({"ok": False, "error": "bad_input"}), 400
-    db.update_pickup_point(pid, address, (data.get("note") or "").strip()[:80])
+    db.update_pickup_point(pid, address, _text(data.get("note"), 80))
     return jsonify({"ok": True})
 
 
@@ -3039,10 +3106,10 @@ def api_admin_staff_add():
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if uid <= 0:
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    city = (data.get("city") or "").strip()
+    city = _text(data.get("city"))
     if city and city not in CITIES and city not in {l["name"] for l in db.get_locations()}:
         return jsonify({"ok": False, "error": "bad_city"}), 400
-    db.add_staff(uid, city, (data.get("note") or "").strip()[:64], int(su["id"]))
+    db.add_staff(uid, city, _text(data.get("note"), 64), int(su["id"]))
     config.refresh_staff()       # права должны действовать сразу, а не через полминуты
     _bg(_notify_new_admin, uid, city)
     return jsonify({"ok": True})
@@ -3152,7 +3219,7 @@ def api_admin_settings_update():
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     if "payment_info" in data:
-        db.set_setting("payment_info", str(data.get("payment_info") or "").strip())
+        db.set_setting("payment_info", _text(data.get("payment_info")))
     if "confirm_minutes" in data:
         try:
             db.set_setting("confirm_minutes", max(1, int(data.get("confirm_minutes"))))
@@ -3184,7 +3251,7 @@ def api_admin_location_add():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    name = (data.get("name") or "").strip()
+    name = _text(data.get("name"))
     if not name:
         return jsonify({"ok": False, "error": "bad_name"}), 400
     lid = db.add_location(name)
@@ -3197,8 +3264,8 @@ def api_admin_delivery_add():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    city = (data.get("city") or "").strip()
-    name = (data.get("name") or "").strip()
+    city = _text(data.get("city"))
+    name = _text(data.get("name"))
     if not city or not name:
         return jsonify({"ok": False, "error": "bad_input"}), 400
     try:
@@ -3208,8 +3275,8 @@ def api_admin_delivery_add():
     db.add_delivery_method(
         city, name,
         bool(data.get("needs_address")),
-        (data.get("address_label") or "").strip(),
-        (data.get("pickup_address") or "").strip(),
+        _text(data.get("address_label")),
+        _text(data.get("pickup_address")),
         max(0.0, fee),
         bool(data.get("needs_payment", True)),
         int(data.get("sort") or 0),
@@ -3228,7 +3295,7 @@ def api_admin_delivery_update():
         mid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    name = (data.get("name") or "").strip()
+    name = _text(data.get("name"))
     if not name or not db.get_delivery_method(mid):
         return jsonify({"ok": False, "error": "bad_input"}), 400
     try:
@@ -3238,8 +3305,8 @@ def api_admin_delivery_update():
     db.update_delivery_method(
         mid, name,
         bool(data.get("needs_address")),
-        (data.get("address_label") or "").strip(),
-        (data.get("pickup_address") or "").strip(),
+        _text(data.get("address_label")),
+        _text(data.get("pickup_address")),
         max(0.0, fee),
         bool(data.get("needs_payment", True)),
         bool(data.get("needs_point")),
@@ -3290,7 +3357,7 @@ def api_admin_location_delete():
 
 @app.route("/api/brands")
 def api_brands():
-    category = request.args.get("category")
+    category = _text(request.args.get("category")) or None
     key = f"brands:{category or 'all'}"
     cached = _cache_get(key)
     if cached is not None:
@@ -3346,8 +3413,8 @@ def api_admin_model_save():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    category = (data.get("category") or "").strip()
-    name = (data.get("name") or "").strip()
+    category = _text(data.get("category"))
+    name = _text(data.get("name"))
     if category not in db.category_codes() or not name:
         return jsonify({"ok": False, "error": "bad_data"}), 400
     specs = _clean_specs(category, data.get("specs"))
@@ -3362,7 +3429,7 @@ def api_admin_model_save():
     # раздвоенная статистика: остатки и продажи разъедутся по двум карточкам.
     twin = next((m for m in db.list_models(category)
                  if m["name"].strip().lower() == name.lower()
-                 and (m["brand"] or "").strip().lower() == (data.get("brand") or "").strip().lower()
+                 and (m["brand"] or "").strip().lower() == _text(data.get("brand")).lower()
                  and (not mid or int(m["id"]) != int(mid))), None)
     if twin:
         return jsonify({"ok": False, "error": "exists", "name": twin["name"]}), 400
@@ -3458,7 +3525,7 @@ def api_admin_product_from_model():
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_data"}), 400
     m = db.get_model(mid)
-    city = (data.get("city") or "").strip()
+    city = _text(data.get("city"))
     if not m or city not in db.location_names():
         return jsonify({"ok": False, "error": "bad_data"}), 400
     # Завозить на свою точку продавец вправе — это его работа. На чужую нет.
@@ -3502,10 +3569,10 @@ def api_admin_brand():
     data = request.get_json(force=True, silent=True) or {}
     if not get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    name = (data.get("name") or "").strip()
+    name = _text(data.get("name"))
     # Пустая категория — бренд общий: Vaporesso делает и поды, и картриджи,
     # и заводить его в каждой категории заново незачем.
-    category = (data.get("category") or "").strip()
+    category = _text(data.get("category"))
     if not name or (category and category not in db.category_codes()):
         return jsonify({"ok": False, "error": "bad_data"}), 400
     # Вкусы храним без повторов и лишних пробелов: «Мята» и «мята » в фильтре

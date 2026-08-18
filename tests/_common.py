@@ -11,12 +11,25 @@ import os
 import sys
 import tempfile
 
-os.environ["DATABASE_URL"] = ""      # локальный SQLite (не Postgres)
+# Магазин работает на Postgres, а тесты по умолчанию — на SQLite: он не требует
+# установки и стартует мгновенно. Но диалекты расходятся (регистр в LIKE, строгий
+# GROUP BY, ON CONFLICT вместо INSERT OR IGNORE), и такое расхождение весь набор
+# тестов не увидит в принципе. Поэтому перед релизом тот же набор гоняется на
+# настоящем Postgres: TEST_DATABASE_URL=postgresql://... python tests/run_all.py
+_PG = os.environ.get("TEST_DATABASE_URL", "").strip()
+os.environ["DATABASE_URL"] = _PG     # пусто — локальный SQLite
 os.environ["DEV_MODE"] = "0"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import db                             # noqa: E402
-db.SQLITE_FILE = tempfile.mktemp(suffix=".db")
+if _PG:
+    # Чистим схему целиком: тесты рассчитывают на пустую базу, а прошлый прогон
+    # мог оставить и таблицы, и данные.
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    conn.commit(); conn.close()
+else:
+    db.SQLITE_FILE = tempfile.mktemp(suffix=".db")
 db.init_db()
 
 import server                        # noqa: E402

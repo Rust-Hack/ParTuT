@@ -2163,7 +2163,9 @@ def check_promo(code, user_id, subtotal):
 
     Считаем ЗДЕСЬ, а не на клиенте: скидка — это деньги, и присланную сумму
     принимать на веру нельзя."""
-    code = (code or "").strip().upper()
+    # Код приходит из запроса: строкой он быть обязан, но прислать могут что
+    # угодно, а промокод — это деньги, и падать здесь нельзя.
+    code = (code if isinstance(code, str) else "").strip().upper()
     if not code:
         return 0.0, None
     p = _promo_row(code)
@@ -2238,18 +2240,21 @@ def add_promo(code, kind, value, min_total=0, uses_left=None, once_per_user=True
 
 
 def set_promo_active(code, active):
+    code = (code if isinstance(code, str) else "").strip().upper()
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("UPDATE promos SET active = %s WHERE code = %s"),
-                (1 if active else 0, code.strip().upper()))
+                (1 if active else 0, code))
     conn.commit()
     conn.close()
 
 
 def delete_promo(code):
+    # Код может прийти чем угодно из запроса — промокоды правит человек руками.
+    code = (code if isinstance(code, str) else "").strip().upper()
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("DELETE FROM promos WHERE code = %s"), (code.strip().upper(),))
+    cur.execute(_q("DELETE FROM promos WHERE code = %s"), (code,))
     conn.commit()
     conn.close()
 
@@ -3275,6 +3280,21 @@ def get_checkout_data(user_id, product_ids, method_id):
             "variants": variants, "method": method, "points": points}
 
 
+class PromoGone(Exception):
+    """Промокод перестал действовать, пока покупатель оформлял заказ.
+
+    Проверка кода и его списание были двумя отдельными походами в базу, между
+    которыми успевал вклиниться другой заказ. Из-за этого код «один раз на
+    покупателя» срабатывал по нескольку раз подряд, а код на два применения —
+    сколько угодно. Теперь и проверка, и списание живут внутри транзакции
+    заказа, а если код уже разобрали — заказ честно отклоняется.
+    """
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class OutOfStock(Exception):
     """Товар разобрали, пока покупатель оформлял заказ. Несёт его название,
     чтобы человеку можно было сказать, что именно кончилось."""
@@ -3282,6 +3302,37 @@ class OutOfStock(Exception):
     def __init__(self, name):
         super().__init__(name)
         self.name = name
+
+
+def _reserve_promo(cur, code, user_id):
+    """Занять одно применение промокода. Вызывается ВНУТРИ транзакции заказа.
+
+    Сначала берём блокировку на строку кода: на Postgres — SELECT ... FOR UPDATE,
+    на SQLite её роль играет запись (она переводит транзакцию в режим writer, и
+    вторая ждёт). Без блокировки два одновременных заказа оба видят «код ещё не
+    использован» и оба его применяют.
+    """
+    code = (code if isinstance(code, str) else "").strip().upper()
+    if not code:
+        return
+    if USE_PG:
+        cur.execute("SELECT * FROM promos WHERE code = %s FOR UPDATE", (code,))
+    else:
+        cur.execute("UPDATE promos SET code = code WHERE code = ?", (code,))
+        cur.execute("SELECT * FROM promos WHERE code = ?", (code,))
+    row = cur.fetchone()
+    if not row or not row["active"]:
+        raise PromoGone("promo_unknown")
+    if row["once_per_user"]:
+        cur.execute(_q("SELECT COUNT(*) AS c FROM orders WHERE user_id = %s AND promo_code = %s "
+                       "AND status != 'canceled'"), (user_id, code))
+        if cur.fetchone()["c"]:
+            raise PromoGone("promo_once")
+    if row["uses_left"] is not None:
+        cur.execute(_q("UPDATE promos SET uses_left = uses_left - 1 "
+                       "WHERE code = %s AND uses_left > 0"), (code,))
+        if cur.rowcount < 1:
+            raise PromoGone("promo_used_up")
 
 
 def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins_to_spend,
@@ -3312,6 +3363,10 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
 
         discount = round(coins_used * coin_value, 2)
         promo_off = round(float(promo_discount or 0), 2)
+        # Промокод занимаем здесь же, одной транзакцией с заказом: иначе между
+        # проверкой и списанием успевает пройти чужой заказ.
+        if promo_code and promo_off > 0:
+            _reserve_promo(cur, promo_code, user_id)
         # Итог не может уйти в минус: скидка монетами плюс промокод могут
         # перекрыть стоимость товаров, но доставку покупатель платит всё равно.
         total = round(max(0.0, subtotal - discount - promo_off) + fee, 2)

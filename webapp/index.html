@@ -2198,6 +2198,25 @@
 
     const cartCount = () => Object.values(cart).reduce((s, it) => s + it.qty, 0);
     const cartTotal = () => Object.values(cart).reduce((s, it) => { const p = allProducts.find(x => x.id === it.product_id); return s + (p ? p.price * it.qty : 0); }, 0);
+    // Сервер отказал, потому что чего-то не хватило. Приводим корзину в
+    // соответствие с полкой: разобранное убираем, лишнее количество подрезаем.
+    // Иначе человек жмёт «Оформить» и получает тот же отказ снова и снова.
+    function reconcileCart(d) {
+      const key = (id, flavor) => Object.keys(cart).find(k => {
+        const it = cart[k];
+        return it.product_id === id && (it.flavor || null) === (flavor || null);
+      });
+      for (const g of (d.gone || [])) {
+        const k = key(g.id, g.flavor);
+        if (k) delete cart[k];
+      }
+      for (const sh of (d.short || [])) {
+        const k = key(sh.id, sh.flavor);
+        if (!k) continue;
+        if (sh.left > 0) cart[k].qty = sh.left; else delete cart[k];
+      }
+    }
+
     function renderCart() {
       const entries = Object.values(cart);
       if (!entries.length) { $("tab-cart").innerHTML = `<div class="empty"><div class="circ">🛒</div><h3>Корзина пуста</h3><p>Добавьте товары из ассортимента.</p></div>`; return; }
@@ -3435,9 +3454,18 @@
                         promo_min: "Промокод действует от большей суммы.", promo_once: "Этим промокодом вы уже пользовались." };
           // Товар мог кончиться, пока человек заполнял доставку: сервер честно
           // отказывает, а мы обновляем витрину, чтобы он видел это своими глазами.
+          // Промокод разобрали, пока человек оформлял. Сумма изменилась бы —
+          // молча оформлять нельзя, поэтому просим убрать код и повторить.
+          if (d.error === "promo_gone") {
+            selPromo = ""; promoOff = 0; promoErr = "";
+            renderDelivery();
+            alertMsg(d.message || "Промокод больше не действует.");
+            return;
+          }
           if (d.error === "sold_out") {
             await refreshProducts();
-            renderCart();
+            reconcileCart(d);        // без этого «Оформить» упирается в тот же отказ
+            renderCart(); renderNav();
             alertMsg(d.message || "Товар разобрали. Обновите корзину.");
             return;
           }
