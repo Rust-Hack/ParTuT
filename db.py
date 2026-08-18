@@ -1771,17 +1771,22 @@ def do_wheel_spin(user_id, prize_coins):
         conn.commit()
         conn.close()
         return (row["coins"], row["wheel_spins"]) if row else None
-    # SQLite (локально, быстро) — проверка + обновление в одном подключении
-    cur.execute("SELECT COALESCE(wheel_spins,0) AS s, COALESCE(coins,0) AS c FROM users WHERE user_id = ?", (user_id,))
-    r = cur.fetchone()
-    if not r or r["s"] <= 0:
+    # SQLite. Условие — В САМОМ UPDATE, как и в ветке Postgres: раньше здесь
+    # сначала читали остаток прокрутов, потом писали, и пять одновременных
+    # нажатий проходили втроём — счётчик уходил в минус, а монеты начислялись
+    # за прокруты, которых не было. Монеты — это скидка, то есть деньги.
+    cur.execute("UPDATE users SET wheel_spins = wheel_spins - 1, "
+                "coins = COALESCE(coins,0) + ? "
+                "WHERE user_id = ? AND COALESCE(wheel_spins,0) > 0", (prize_coins, user_id))
+    if cur.rowcount < 1:
+        conn.commit()
         conn.close()
         return None
-    new_coins = r["c"] + prize_coins
-    cur.execute("UPDATE users SET wheel_spins = wheel_spins - 1, coins = ? WHERE user_id = ?", (new_coins, user_id))
     conn.commit()
+    cur.execute("SELECT COALESCE(coins,0) AS c, COALESCE(wheel_spins,0) AS s FROM users WHERE user_id = ?", (user_id,))
+    r = cur.fetchone()
     conn.close()
-    return (new_coins, r["s"] - 1)
+    return (r["c"], r["s"]) if r else None
 
 
 def do_slot_spin(user_id, cost, prize_coins):
@@ -1797,16 +1802,20 @@ def do_slot_spin(user_id, cost, prize_coins):
         conn.commit()
         conn.close()
         return row["coins"] if row else None
-    cur.execute("SELECT COALESCE(coins,0) AS c FROM users WHERE user_id = ?", (user_id,))
-    r = cur.fetchone()
-    if not r or r["c"] < cost:
+    # Та же история, что и у колеса: проверка баланса живёт внутри UPDATE,
+    # иначе одновременные ставки списываются с устаревшего остатка.
+    cur.execute("UPDATE users SET coins = COALESCE(coins,0) - ? + ? "
+                "WHERE user_id = ? AND COALESCE(coins,0) >= ?",
+                (cost, prize_coins, user_id, cost))
+    if cur.rowcount < 1:
+        conn.commit()
         conn.close()
         return None
-    new_coins = r["c"] - cost + prize_coins
-    cur.execute("UPDATE users SET coins = ? WHERE user_id = ?", (new_coins, user_id))
     conn.commit()
+    cur.execute("SELECT COALESCE(coins,0) AS c FROM users WHERE user_id = ?", (user_id,))
+    r = cur.fetchone()
     conn.close()
-    return new_coins
+    return r["c"] if r else None
 
 
 def set_referrer_once(user_id, ref_id):
@@ -1818,8 +1827,14 @@ def set_referrer_once(user_id, ref_id):
     row = get_user_row(user_id)
     if row and row["referred_by"]:
         return False                      # реферер уже есть — второй раз не начисляем
-    if not get_user_row(ref_id):
+    ref_row = get_user_row(ref_id)
+    if not ref_row:
         return False                      # пригласивший должен существовать
+    # «Я привёл того, кто привёл меня» — так не бывает. Двое заводили друг друга
+    # по кругу и оба получали бонус за первый заказ: настоящей рекомендации тут
+    # нет, есть два аккаунта одного человека.
+    if ref_row["referred_by"] == user_id:
+        return False
     conn = connect()
     cur = conn.cursor()
     cur.execute(_q("UPDATE users SET referred_by = %s WHERE user_id = %s"), (ref_id, user_id))

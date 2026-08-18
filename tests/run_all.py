@@ -46,9 +46,13 @@ import test_cross_city
 import test_cart_shortage
 import test_junk_input
 import test_promo_race
+import test_privacy
+import test_games_race
+import test_referral_abuse
+import test_migration
 
 MODULES = [test_order_lifecycle, test_messaging, test_stats, test_delivery,
-           test_gzip, test_cache, test_order_submit, test_photos, test_staff, test_stock_alerts, test_backup, test_errors, test_repeat_reminder, test_prefill, test_pickup_points, test_profit, test_free_delivery, test_promos, test_stock_moves, test_customer_card, test_gallery, test_reviews, test_categories, test_upsell, test_specs, test_brands, test_models, test_seller_notify, test_permissions, test_order_edit, test_hidden, test_today, test_access_holes, test_race, test_user_names, test_card_order_notify, test_my_settings, test_unpaid_expire, test_cross_city, test_cart_shortage, test_junk_input, test_promo_race]
+           test_gzip, test_cache, test_order_submit, test_photos, test_staff, test_stock_alerts, test_backup, test_errors, test_repeat_reminder, test_prefill, test_pickup_points, test_profit, test_free_delivery, test_promos, test_stock_moves, test_customer_card, test_gallery, test_reviews, test_categories, test_upsell, test_specs, test_brands, test_models, test_seller_notify, test_permissions, test_order_edit, test_hidden, test_today, test_access_holes, test_race, test_user_names, test_card_order_notify, test_my_settings, test_unpaid_expire, test_cross_city, test_cart_shortage, test_junk_input, test_promo_race, test_privacy, test_games_race, test_referral_abuse, test_migration]
 
 
 def main():
