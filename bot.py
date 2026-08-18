@@ -193,24 +193,12 @@ def on_text(message):
 
 @bot.message_handler(content_types=["photo"])
 def on_photo(message):
-    """Фото нужны только админу — при добавлении товара или замене фото."""
+    """Фото товара грузятся в приложении: они принадлежат модели, а не точке."""
     user_id = message.from_user.id
     chat_id = message.chat.id
     if not (is_admin(user_id) and user_id in admin_state):
         return
-    file_id = message.photo[-1].file_id      # самый большой размер картинки
-    st = admin_state[user_id]
-
-    if st.get("action") == "add" and st.get("step") == "photo":
-        finalize_add(chat_id, user_id, photo_file_id=file_id)
-    elif st.get("action") == "editphoto":
-        product_id = st["product_id"]
-        db.update_field(product_id, "photo", file_id)
-        admin_state.pop(user_id, None)
-        bot.send_message(chat_id, "✅ Фото обновлено.")
-        show_product_card(chat_id, product_id)
-    else:
-        bot.send_message(chat_id, "Сейчас фото не жду. Откройте /admin.")
+    bot.send_message(chat_id, "Фото загружаются в приложении: 📚 Ассортимент → модель → «Главное фото».")
 
 
 # ============================================================
@@ -296,29 +284,22 @@ def _safe_send(user_id, text, parse_mode=None):
 # ============================================================
 
 def show_admin_menu(chat_id):
+    """Чат — это подстраховка, а не вторая админка.
+
+    Раньше отсюда можно было завести товар и переписать ему название и фото. Но
+    название, фото и характеристики принадлежат модели в «Ассортименте»: правка
+    из чата рвала связь, а следующее сохранение модели её же и затирало. Осталось
+    то, что у товара действительно своё на каждой точке, — цена и остаток.
+    """
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("➕ Добавить товар", callback_data="adm:add"))
-    kb.add(types.InlineKeyboardButton("📋 Товары / редактировать", callback_data="adm:list"))
-    bot.send_message(chat_id, "🛠 <b>Админка</b>\nЧто делаем с товарами?",
+    if WEBAPP_URL:
+        kb.add(types.InlineKeyboardButton("🛠 Открыть управление",
+                                          web_app=types.WebAppInfo(url=WEBAPP_URL + "#admin")))
+    kb.add(types.InlineKeyboardButton("⚡ Быстро: цена и остаток", callback_data="adm:list"))
+    bot.send_message(chat_id,
+                     "🛠 <b>Админка</b>\nВесь магазин — в приложении. Здесь только быстрая "
+                     "правка цены и остатка, если приложение под рукой не открыть.",
                      reply_markup=kb, parse_mode="HTML")
-
-
-def admin_city_keyboard():
-    kb = types.InlineKeyboardMarkup()
-    for loc in db.get_locations():
-        kb.add(types.InlineKeyboardButton(loc["name"], callback_data=f"admcity:{loc['id']}"))
-    kb.add(types.InlineKeyboardButton("✖️ Отмена", callback_data="adm:cancel"))
-    return kb
-
-
-def admin_cat_keyboard():
-    kb = types.InlineKeyboardMarkup()
-    # Категории живут в базе — владелец заводит их сам, и кнопки должны это видеть.
-    for c in db.list_categories():
-        title = f"{c['emoji']} {c['name']}".strip()
-        kb.add(types.InlineKeyboardButton(title, callback_data=f"admcat:{c['code']}"))
-    kb.add(types.InlineKeyboardButton("✖️ Отмена", callback_data="adm:cancel"))
-    return kb
 
 
 def handle_admin_callback(call, chat_id, user_id, data):
@@ -338,38 +319,13 @@ def handle_admin_callback(call, chat_id, user_id, data):
         return
 
     if data == "adm:add":
-        # Товар заводится в приложении: сначала модель в «Ассортименте», потом
-        # завоз на точку. Второй путь через бота создавал товар в обход модели —
-        # такой не обновлялся вместе с ней и жил своей жизнью.
+        # Кнопки такой больше нет, но старое сообщение в чате пережить нажатие должно.
         bot.answer_callback_query(call.id)
         bot.send_message(chat_id,
-                         "Товары теперь заводятся в приложении:\n\n"
+                         "Товары заводятся в приложении:\n\n"
                          "1. 📚 Ассортимент — описать модель (бренд, характеристики, вкусы, фото)\n"
                          "2. 📥 у модели — завезти её на точку: цена и остаток\n\n"
                          "Так описание модели одно на все точки и правится в одном месте.")
-        return
-
-    if data.startswith("admcity:"):
-        st = admin_state.get(user_id)
-        if not st or st.get("action") != "add":
-            bot.answer_callback_query(call.id)
-            return
-        loc = db.get_location(int(parts[1]))
-        st["draft"]["city"] = loc["name"] if loc else parts[1]
-        st["step"] = "category"
-        bot.answer_callback_query(call.id)
-        bot.send_message(chat_id, "Категория товара?", reply_markup=admin_cat_keyboard())
-        return
-
-    if data.startswith("admcat:"):
-        st = admin_state.get(user_id)
-        if not st or st.get("action") != "add":
-            bot.answer_callback_query(call.id)
-            return
-        st["draft"]["category"] = parts[1]
-        st["step"] = "name"
-        bot.answer_callback_query(call.id)
-        bot.send_message(chat_id, "Напишите <b>название</b> товара:", parse_mode="HTML")
         return
 
     if data == "adm:list":
@@ -383,23 +339,18 @@ def handle_admin_callback(call, chat_id, user_id, data):
         return
 
     if data.startswith("admset:"):
-        field = parts[1]           # price / stock / name
+        field = parts[1]           # только price / stock: остальное принадлежит модели
         product_id = int(parts[2])
+        if field not in ("price", "stock"):
+            bot.answer_callback_query(call.id, "Это правится в приложении")
+            return
         admin_state[user_id] = {"action": "edit", "field": field, "product_id": product_id}
         prompts = {
             "price": "Введите новую цену в BYN (например 18.5):",
             "stock": "Введите новый остаток (сколько штук):",
-            "name":  "Введите новое название:",
         }
         bot.answer_callback_query(call.id)
         bot.send_message(chat_id, prompts.get(field, "Введите значение:"))
-        return
-
-    if data.startswith("admphoto:"):
-        product_id = int(parts[1])
-        admin_state[user_id] = {"action": "editphoto", "product_id": product_id}
-        bot.answer_callback_query(call.id)
-        bot.send_message(chat_id, "Пришлите новое фото 📷 (или напишите «-», чтобы убрать текущее):")
         return
 
     if data.startswith("admhit:"):
@@ -436,18 +387,20 @@ def handle_admin_callback(call, chat_id, user_id, data):
 def show_admin_list(chat_id):
     products = db.get_all_products()
     if not products:
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("➕ Добавить товар", callback_data="adm:add"))
-        bot.send_message(chat_id, "Товаров пока нет.", reply_markup=kb)
+        bot.send_message(chat_id, "Товаров пока нет — заведите их в приложении: "
+                                  "📚 Ассортимент, затем 📥 завоз на точку.")
         return
 
+    # Сначала то, что кончается: список открывают, чтобы поправить именно такие.
+    products = sorted(products, key=lambda p: (p["stock"] > 3, p["stock"]))
     kb = types.InlineKeyboardMarkup()
-    for p in products:
+    for p in products[:40]:
         city = CITIES.get(p["city"], p["city"])
-        label = f"{city} · {p['name']} — {p['price']:.2f} (ост. {p['stock']})"
+        mark = "🔴 " if p["stock"] <= 0 else ("🟠 " if p["stock"] <= 3 else "")
+        label = f"{mark}{city} · {p['name']} — {p['price']:.2f} (ост. {p['stock']})"
         kb.add(types.InlineKeyboardButton(label, callback_data=f"admcard:{p['id']}"))
-    kb.add(types.InlineKeyboardButton("➕ Добавить товар", callback_data="adm:add"))
-    bot.send_message(chat_id, "📋 Товары (нажмите, чтобы изменить):", reply_markup=kb)
+    tail = "" if len(products) <= 40 else f"\nПоказаны первые 40 из {len(products)} — остальные в приложении."
+    bot.send_message(chat_id, "⚡ Цена и остаток (нажмите товар):" + tail, reply_markup=kb)
 
 
 def show_product_card(chat_id, product_id):
@@ -468,7 +421,9 @@ def show_product_card(chat_id, product_id):
         f"Остаток: {p['stock']} шт.\n"
         f"Хит: {hit}\n"
         f"Фото: {has_photo}\n"
-        f"Описание: {p['description'] or '—'}"
+        f"Описание: {p['description'] or '—'}\n\n"
+        f"<i>Название, фото и характеристики — в приложении, в «Ассортименте»: "
+        f"они общие для всех точек.</i>"
     )
     kb = types.InlineKeyboardMarkup()
     kb.add(
@@ -476,12 +431,8 @@ def show_product_card(chat_id, product_id):
         types.InlineKeyboardButton("📦 Остаток", callback_data=f"admset:stock:{product_id}"),
     )
     kb.add(
-        types.InlineKeyboardButton("✏️ Название", callback_data=f"admset:name:{product_id}"),
         types.InlineKeyboardButton("🔥 Хит вкл/выкл", callback_data=f"admhit:{product_id}"),
-    )
-    kb.add(
-        types.InlineKeyboardButton("🖼 Фото", callback_data=f"admphoto:{product_id}"),
-        types.InlineKeyboardButton("🗑 Удалить", callback_data=f"admdel:{product_id}"),
+        types.InlineKeyboardButton("🗑 Убрать с точки", callback_data=f"admdel:{product_id}"),
     )
     kb.add(types.InlineKeyboardButton("⬅️ К списку", callback_data="adm:list"))
 
@@ -491,87 +442,10 @@ def show_product_card(chat_id, product_id):
         bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
 
-def finalize_add(chat_id, user_id, photo_file_id=None):
-    """Сохраняет собранный товар в базу. Вызывается после шага фото (с фото или без)."""
-    st = admin_state.get(user_id)
-    if not st or st.get("action") != "add":
-        return
-    d = st["draft"]
-    new_id = db.add_product(
-        d["city"], d["category"], d["name"], d["price"], d["stock"],
-        is_hit=0, description=d.get("description", ""),
-    )
-    if photo_file_id:
-        db.update_field(new_id, "photo", photo_file_id)
-    admin_state.pop(user_id, None)
-    bot.send_message(chat_id, "✅ Товар добавлен!")
-    show_product_card(chat_id, new_id)
-
-
 def handle_admin_input(chat_id, user_id, raw_text):
-    """Обрабатывает ТЕКСТ, который админ вводит по шагам (название, цена, остаток...)."""
+    """Обрабатывает ТЕКСТ, который админ вводит после кнопки «Цена» или «Остаток»."""
     st = admin_state.get(user_id)
     if not st:
-        return
-
-    # ---------- Добавление нового товара ----------
-    if st["action"] == "add":
-        step = st["step"]
-        draft = st["draft"]
-
-        if step in ("city", "category"):
-            bot.send_message(chat_id, "Пожалуйста, выберите вариант кнопкой выше 👆")
-            return
-
-        if step == "name":
-            draft["name"] = raw_text
-            st["step"] = "price"
-            bot.send_message(chat_id, "Цена в BYN? Например 18.5")
-            return
-
-        if step == "price":
-            price = parse_number(raw_text)
-            if price is None or price < 0:
-                bot.send_message(chat_id, "Не понял цену. Напишите числом, например 18.5")
-                return
-            draft["price"] = price
-            st["step"] = "stock"
-            bot.send_message(chat_id, "Сколько штук в наличии?")
-            return
-
-        if step == "stock":
-            stock = parse_int(raw_text)
-            if stock is None or stock < 0:
-                bot.send_message(chat_id, "Не понял количество. Напишите целым числом, например 10")
-                return
-            draft["stock"] = stock
-            st["step"] = "description"
-            bot.send_message(chat_id, "Короткое описание (или напишите «-», чтобы пропустить):")
-            return
-
-        if step == "description":
-            draft["description"] = "" if raw_text.strip() == "-" else raw_text
-            st["step"] = "photo"
-            bot.send_message(chat_id, "Пришлите фото товара 📷 (или напишите «-», чтобы пропустить):")
-            return
-
-        if step == "photo":
-            if raw_text.strip() == "-":
-                finalize_add(chat_id, user_id)
-            else:
-                bot.send_message(chat_id, "Пришлите именно фото 📷 или «-», чтобы пропустить.")
-            return
-
-    # ---------- Замена фото у существующего товара ----------
-    if st["action"] == "editphoto":
-        if raw_text.strip() == "-":
-            product_id = st["product_id"]
-            db.update_field(product_id, "photo", None)
-            admin_state.pop(user_id, None)
-            bot.send_message(chat_id, "✅ Фото убрано.")
-            show_product_card(chat_id, product_id)
-        else:
-            bot.send_message(chat_id, "Пришлите фото 📷 или «-», чтобы убрать фото.")
         return
 
     # ---------- Изменение существующего товара ----------
@@ -581,16 +455,18 @@ def handle_admin_input(chat_id, user_id, raw_text):
 
         if field == "price":
             value = parse_number(raw_text)
-            if value is None or value < 0:
-                bot.send_message(chat_id, "Не понял цену. Напишите числом, например 18.5")
+            if value is None or value <= 0:
+                bot.send_message(chat_id, "Не понял цену. Напишите числом больше нуля, например 18.5")
                 return
         elif field == "stock":
             value = parse_int(raw_text)
             if value is None or value < 0:
                 bot.send_message(chat_id, "Не понял количество. Напишите целым числом.")
                 return
-        else:  # name
-            value = raw_text
+        else:
+            admin_state.pop(user_id, None)
+            bot.send_message(chat_id, "Это правится в приложении, в «Ассортименте».")
+            return
 
         db.update_field(product_id, field, value)
         admin_state.pop(user_id, None)

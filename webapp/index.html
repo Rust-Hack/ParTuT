@@ -496,6 +496,10 @@
     .uacts { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
     .superbadge { font-size: 10px; font-weight: 800; color: var(--brand-neon); border: 1px solid var(--brand-neon); border-radius: 6px; padding: 1px 5px; text-shadow: 0 0 6px var(--brand-glow); white-space: nowrap; }
     .reqbadge { display: inline-block; min-width: 18px; text-align: center; font-size: 11px; font-weight: 800; color: #fff; background: var(--danger); border-radius: 999px; padding: 1px 6px; margin-left: 4px; }
+    /* «Заканчивается» — не срочность, а напоминание: красный тут кричал бы наравне с заказами. */
+    .reqbadge.warn { background: var(--warn); }
+    .mgroup { font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--hint); margin: 8px 4px 6px; }
+    .prow + .mgroup { margin-top: 18px; }   /* воздух только между группами, не над первой */
     .uprotected { font-size: 12px; color: var(--hint); font-style: italic; }
     /* Карточка покупателя: сначала цифры, потом история */
     .cctiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 4px 0 12px; }
@@ -926,19 +930,28 @@
   <div class="view" id="adminView">
     <div class="viewhead"><h2>🛠 Управление</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="adminClose">Закрыть</button></div>
+    <!-- Порядок — по частоте: заказы продавец открывает каждый день, категории —
+         раз в полгода. Без групп всё это лежало вперемешку одним списком из 13 строк. -->
+    <div class="mgroup">Каждый день</div>
     <div class="prow" id="mRequests" style="display:none"><span>📥 Заявки на подтверждение <b id="reqBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
-    <div class="prow" id="mOrders"><span>📦 Заказы</span><span>›</span></div>
-    <div class="prow" id="mProducts"><span>🛍 Товары</span><span>›</span></div>
-    <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
-    <div class="prow" id="mCats"><span>🗂 Категории товара</span><span>›</span></div>
+    <div class="prow" id="mOrders"><span>📦 Заказы <b id="ordBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
+    <div class="prow" id="mProducts"><span>🛍 Товары <b id="lowBadge" class="reqbadge warn" style="display:none">0</b></span><span>›</span></div>
+    <div class="prow" id="mReviews"><span>⭐ Отзывы <b id="revBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
+
+    <div class="mgroup">Что мы продаём</div>
     <div class="prow" id="mModels"><span>📚 Ассортимент</span><span>›</span></div>
     <div class="prow" id="mBrands"><span>🏷 Бренды</span><span>›</span></div>
+    <div class="prow" id="mCats"><span>🗂 Категории товара</span><span>›</span></div>
+
+    <div class="mgroup">Магазин</div>
     <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
-    <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
     <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
-    <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
     <div class="prow" id="mPromos"><span>🎟 Промокоды</span><span>›</span></div>
-    <div class="prow" id="mReviews"><span>⭐ Отзывы <b id="revBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
+    <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
+
+    <div class="mgroup">Настройка</div>
+    <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
+    <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
     <div class="prow" id="mStaff" style="display:none"><span>🔑 Доступ продавцов</span><span>›</span></div>
   </div>
 
@@ -1180,6 +1193,7 @@
         <input id="admSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
         <div class="ochips" id="admCatChips"></div>
         <div class="ochips" id="admLocChips"></div>
+        <div class="ochips" id="admStockChips"></div>
         <div id="adminList"></div>
       </div>
     </details>
@@ -1654,8 +1668,19 @@
         remindersOn = me.reminders_on !== false;
         renderNav();
         // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
-        if (me.age_ok) loadCatalog().then(prefetchBonuses); else $("ageView").classList.add("show");
+        if (me.age_ok) loadCatalog().then(prefetchBonuses).then(openDeepLink); else $("ageView").classList.add("show");
       } catch (e) { alertMsg("Сеть недоступна."); }
+    }
+
+    // Продавец приходит сюда из уведомления о заказе — кнопка в чате ведёт на
+    // #orders, и приложение открывает нужный экран само, без похода по меню.
+    async function openDeepLink() {
+      if (!me || !me.is_admin) return;
+      const to = (location.hash || "").replace("#", "");
+      if (to !== "orders") return;
+      showTab("profile");
+      await openAdmin();
+      openOrders();
     }
     function prefetchBonuses() { prefetchDelivery(); fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle(); }
     $("ageYes").onclick = async () => {
@@ -3391,8 +3416,29 @@
       if ($("mStaff")) $("mStaff").style.display = (me && me.is_super) ? "" : "none";
       if (me && me.is_super) loadReqBadge();
       loadPendingReviews(true);          // счётчик отзывов — без открытия раздела
+      loadOrdersBadge();                 // сколько заказов ждут продавца
+      renderLowBadge();                  // сколько позиций надо завезти
       await fetchBrands();               // нужно разделам «Товары» и «Бренды»
       $("adminView").classList.add("show");
+    }
+
+    // Заказы и остаток — то, ради чего сюда заходят. Без счётчиков в оба раздела
+    // приходилось заглядывать вслепую, чтобы узнать, есть ли вообще работа.
+    async function loadOrdersBadge() {
+      try {
+        const r = await fetch("/api/admin/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+        const d = await r.json();
+        adminOrders = d.orders || [];
+        // Ждут ИМЕННО продавца: 'new' — это заказ картой без чека, там ход клиента.
+        setBadge("ordBadge", adminOrders.filter(o => o.status === "paid").length);
+      } catch (e) {}
+    }
+    function renderLowBadge() {
+      setBadge("lowBadge", allProducts.filter(p => stockState(p) !== "ok").length);
+    }
+    function setBadge(id, n) {
+      const b = $(id); if (!b) return;
+      b.textContent = n; b.style.display = n ? "" : "none";
     }
     async function loadReqBadge() {
       try {
@@ -3445,7 +3491,8 @@
     $("adminClose").onclick = () => $("adminView").classList.remove("show");
 
     // --- Разделы админки (открываются поверх хаба, «Назад» возвращает в меню) ---
-    $("mOrders").onclick = () => { $("ordersView").classList.add("show"); loadAdminOrders(); };
+    function openOrders() { $("ordersView").classList.add("show"); loadAdminOrders(); }
+    $("mOrders").onclick = openOrders;
     $("mProducts").onclick = openProducts;
     $("mLocations").onclick = openLocations;
     $("mBrands").onclick = openBrands;
@@ -3582,8 +3629,11 @@
             const v = (m.specs || {})[s.key];
             return (v === undefined || String(v).trim() === "") ? null : `${s.label}: ${withUnit(v, s.unit)}`;
           }).filter(Boolean).join(" · ");
-          const where = m.products
-            ? `${m.products} ${plural(m.products, "точка", "точки", "точек")}`
+          // «1 точка» не отвечало на вопрос, ради которого сюда и заходят: где
+          // эта модель лежит и сколько её там. Показываем точки с остатком.
+          const mine = allProducts.filter(p => p.model_id === m.id);
+          const where = mine.length
+            ? mine.map(p => `${esc(p.city)} <b style="color:${p.stock <= 0 ? "var(--danger)" : p.stock <= LOW_STOCK ? "var(--warn)" : "inherit"}">${p.stock}</b>`).join(" · ")
             : `<span style="color:var(--danger)">нет ни на одной точке</span>`;
           return `<div class="admrow">
             <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
@@ -3697,7 +3747,10 @@
     }
 
     // Фильтры админ-списка товаров
-    let admSearch = "", admCatFilter = "all", admLocFilter = "all";
+    let admSearch = "", admCatFilter = "all", admLocFilter = "all", admStockFilter = "all";
+    // Тот же порог, что и в «Статистике», иначе списки «мало» разойдутся между экранами.
+    const LOW_STOCK = 3;
+    const stockState = (p) => p.stock <= 0 ? "out" : (p.stock <= LOW_STOCK ? "low" : "ok");
 
     function renderAdmFilters() {
       const cats = [["all", "Все"], ...CAT_OPTS];
@@ -3706,10 +3759,20 @@
       const locs = [["all", "Все точки"], ...locations.map(l => [l.name, l.name])];
       $("admLocChips").innerHTML = locs.map(([c, n]) =>
         `<button class="ochip ${admLocFilter === c ? 'active' : ''}" data-al="${esc(c)}">${esc(n)}</button>`).join("");
+      // «Что довезти» — главный вопрос к этому списку, а раньше на него отвечали
+      // прокруткой всех точек подряд.
+      const nOut = allProducts.filter(p => stockState(p) === "out").length;
+      const nLow = allProducts.filter(p => stockState(p) === "low").length;
+      const st = [["all", "Любой остаток"], ["need", `Надо завезти${nOut + nLow ? ` · ${nOut + nLow}` : ""}`],
+                  ["out", `Кончились${nOut ? ` · ${nOut}` : ""}`]];
+      $("admStockChips").innerHTML = st.map(([c, n]) =>
+        `<button class="ochip ${admStockFilter === c ? 'active' : ''}" data-as="${c}">${n}</button>`).join("");
       $("admCatChips").querySelectorAll("[data-ac]").forEach(b =>
         b.onclick = () => { admCatFilter = b.dataset.ac; renderAdmFilters(); renderAdminList(); });
       $("admLocChips").querySelectorAll("[data-al]").forEach(b =>
         b.onclick = () => { admLocFilter = b.dataset.al; renderAdmFilters(); renderAdminList(); });
+      $("admStockChips").querySelectorAll("[data-as]").forEach(b =>
+        b.onclick = () => { admStockFilter = b.dataset.as; renderAdmFilters(); renderAdminList(); });
     }
     $("admSearch").oninput = () => { admSearch = $("admSearch").value; renderAdminList(); };
 
@@ -4872,6 +4935,7 @@
         const d = await r.json();
         adminOrders = d.orders || [];
       } catch (e) { adminOrders = []; }
+      setBadge("ordBadge", adminOrders.filter(o => o.status === "paid").length);
       renderOrdersFilter();
       renderOrders();
     }
@@ -5347,14 +5411,24 @@
       const list = allProducts.filter(p => {
         if (admCatFilter !== "all" && p.category !== admCatFilter) return false;
         if (admLocFilter !== "all" && p.city !== admLocFilter) return false;
+        const st = stockState(p);
+        if (admStockFilter === "need" && st === "ok") return false;
+        if (admStockFilter === "out" && st !== "out") return false;
         if (q && !(`${p.name} ${p.brand || ""} ${p.flavor || ""}`.toLowerCase().includes(q))) return false;
         return true;
       });
-      if (!list.length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Ничего не найдено.</p>`; return; }
+      if (!list.length) {
+        const msg = admStockFilter === "out" ? "Ничего не кончилось — на всех точках есть остаток."
+                  : admStockFilter === "need" ? "Завозить нечего: везде больше " + LOW_STOCK + " шт."
+                  : "Ничего не найдено.";
+        $("adminList").innerHTML = `<p style="color:var(--hint)">${msg}</p>`; return;
+      }
       $("adminList").innerHTML = list.map(p => {
         // Закончившийся товар и число ждущих — то, ради чего в этот список
         // заходят чаще всего: он отвечает на вопрос «что срочно завезти».
-        const out = p.stock <= 0 ? `<span class="tagbadge out">нет</span>` : "";
+        const st = stockState(p);
+        const out = st === "out" ? `<span class="tagbadge out">нет</span>`
+                  : st === "low" ? `<span class="tagbadge warn">осталось ${p.stock}</span>` : "";
         const wait = p.waiting ? `<span class="tagbadge warn">ждут ${p.waiting}</span>` : "";
         const marks = (out || wait) ? `<div class="admmarks">${out}${wait}</div>` : "";
         const tail = `<button class="iconbtn" data-move="${p.id}" title="Приход или списание">📦</button>

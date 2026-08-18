@@ -12,7 +12,22 @@ import json
 from telebot import types
 
 import db
-from config import CITIES, admins_for_city
+from config import CITIES, WEBAPP_URL, admins_for_city
+
+
+def _orders_kb():
+    """Кнопка «открыть заказы» прямо под уведомлением.
+
+    Без неё продавец читал в сообщении «Управление → Заказы» и шёл туда руками:
+    открыть приложение, профиль, управление, заказы — четыре тапа на каждый заказ.
+    Хэш читает приложение при запуске и сразу открывает нужный экран.
+    """
+    if not WEBAPP_URL:
+        return None
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("📦 Открыть заказы",
+                                      web_app=types.WebAppInfo(url=WEBAPP_URL + "#orders")))
+    return kb
 
 
 def notify_sellers(bot, order_id):
@@ -52,16 +67,16 @@ def notify_sellers(bot, order_id):
     comment = (order["comment"] or "").strip() if "comment" in order.keys() else ""
     if comment:
         lines.append(f"💬 Комментарий: {comment}")
-    lines.append("")
-    lines.append("🔧 Обработайте в приложении: Управление → Заказы")
     text = "\n".join(lines)
+    kb = _orders_kb()
 
     for admin_id in admins_for_city(order["city"]):
         try:
             if order["receipt_file_id"]:
-                bot.send_photo(admin_id, order["receipt_file_id"], caption=text, parse_mode="HTML")
+                bot.send_photo(admin_id, order["receipt_file_id"], caption=text,
+                               parse_mode="HTML", reply_markup=kb)
             else:
-                bot.send_message(admin_id, text, parse_mode="HTML")
+                bot.send_message(admin_id, text, parse_mode="HTML", reply_markup=kb)
         except Exception as e:
             print(f"Не смог отправить заказ #{order_id} админу {admin_id}: {e}")
     db.touch_order_reminded(order_id)     # запускаем отсчёт до напоминания
@@ -73,11 +88,11 @@ def remind_sellers(bot, order):
     st = "ждёт вашего подтверждения"
     text = (f"⏰ <b>Напоминание: заказ #{order['id']} {st}</b>\n"
             f"🏙 {CITIES.get(order['city'], order['city'])} · {order['total']:.2f} BYN"
-            + (f" · {method}" if method else "")
-            + "\n\n🔧 Обработайте в приложении: Управление → Заказы")
+            + (f" · {method}" if method else ""))
+    kb = _orders_kb()
     for admin_id in admins_for_city(order["city"]):
         try:
-            bot.send_message(admin_id, text, parse_mode="HTML")
+            bot.send_message(admin_id, text, parse_mode="HTML", reply_markup=kb)
         except Exception as e:
             print(f"Не смог напомнить о заказе #{order['id']} админу {admin_id}: {e}")
     db.touch_order_reminded(order["id"])
