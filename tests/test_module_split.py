@@ -12,6 +12,7 @@ db.py вырос до 4787 строк, и его режут по кускам. �
 from _common import db, Checker
 
 import db_games
+import db_photos
 import db_raffles
 
 # Модули, вынесенные из db.py, и что именно из них переехало.
@@ -20,6 +21,8 @@ import db_raffles
                   "get_raffle_state", "claim_raffle_draw", "spent_since"]),
     (db_games, ["get_wheel", "add_spins", "do_wheel_spin", "do_slot_spin",
                 "wheel_step", "get_game_stats"]),
+    (db_photos, ["get_photo_blob", "save_photo_blob", "is_shop_photo",
+                 "purge_orphan_photos", "add_product_photo", "photo_blob_stats"]),
 ]
 
 # Примитивы, которые вынесенные модули обязаны брать через db.
@@ -54,6 +57,7 @@ def run():
     try:
         db.get_active_raffle()          # живёт в db_raffles
         db.get_game_stats()             # живёт в db_games
+        db.photo_blob_stats()           # живёт в db_photos
     finally:
         db.connect = настоящий
     c3("вынесенный модуль сходил через подменённый db.connect", считано["n"] > 0)
