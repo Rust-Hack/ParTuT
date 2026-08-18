@@ -124,6 +124,71 @@ if __name__ == "__main__":
     sys.exit(1 if run() else 0)
 
 
+def run_empty_restore():
+    """Копию разворачивают в ПУСТУЮ базу — там, где магазина ещё нет.
+
+    Обычная проверка восстановления заливает копию туда, где таблицы уже есть.
+    Настоящая беда выглядит иначе: базы нет вовсе, и всё — схему и данные —
+    надо поднять с нуля. Именно этот случай и наступает в тот единственный день,
+    ради которого копии и снимают.
+
+    Проверено и вживую, на настоящей копии из бота, залитой в отдельную пустую
+    базу Postgres (порядок — в tests/README.md). Здесь то же самое, но само и
+    на каждый пуск.
+    """
+    import tempfile
+
+    c = Checker("Восстановление в пустую базу")
+    данные = db.export_tables()
+    было = {t: len(rows) for t, rows in данные.items()}
+    c("копия непустая", sum(было.values()) > 0)
+
+    if db.USE_PG:
+        # Второй пустой базы под рукой нет — на Postgres этот случай проверяется
+        # вживую, руками, по порядку из README. Молчать об этом нельзя, иначе
+        # пропуск выглядел бы как успех.
+        c("на Postgres проверяется вживую — здесь пропущено", True)
+        return c.fails
+
+    прежний = db.SQLITE_FILE
+    db.SQLITE_FILE = tempfile.mktemp(suffix=".db")
+    try:
+        db.init_db()                       # схема с нуля, как при первом запуске
+        conn = db.connect(); cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS n FROM products")
+        c("новая база и правда пуста", int(cur.fetchone()["n"]) == 0)
+        conn.close()
+
+        db.import_tables(данные, wipe=True)
+        conn = db.connect(); cur = conn.cursor()
+        расхождения = []
+        for таблица, сколько in было.items():
+            try:
+                cur.execute(f"SELECT COUNT(*) AS n FROM {таблица}")
+                стало = int(cur.fetchone()["n"])
+            except Exception as e:
+                расхождения.append(f"{таблица}: не читается ({e})")
+                continue
+            if стало != сколько:
+                расхождения.append(f"{таблица}: было {сколько}, стало {стало}")
+        conn.close()
+        c("всё содержимое доехало" + ("" if not расхождения else ": " + "; ".join(расхождения[:3])),
+          not расхождения)
+
+        # И главное: магазин на этой базе отвечает.
+        from _common import client
+        c("магазин на восстановленной базе работает",
+          client.get("/api/products").status_code == 200)
+    finally:
+        import os
+        try:
+            os.unlink(db.SQLITE_FILE)
+        except OSError:
+            pass
+        db.SQLITE_FILE = прежний
+    return c.fails
+
+
 def run_handler_order():
     """Команды обязаны быть объявлены выше общего обработчика.
 
