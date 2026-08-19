@@ -30,14 +30,12 @@ import requests
 import telebot
 from flask import Flask, g, jsonify, request, Response
 
-import config
 import db
 import errors
 import notifications
 from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, admin_city, admin_role, all_admin_ids)
 
-db.init_db()
-config.seed_admins_from_env()   # разовый перенос админов из окружения в базу
+db.init_db()      # схема, разовые переносы и права из окружения — внутри
 
 # Отдельный экземпляр бота — ТОЛЬКО чтобы отправлять сообщения/картинки.
 tg = telebot.TeleBot(BOT_TOKEN)

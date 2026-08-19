@@ -46,8 +46,7 @@ def _category_title(code):
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-db.init_db()
-config.seed_admins_from_env()   # разовый перенос админов из окружения в базу
+db.init_db()      # схема, разовые переносы и права из окружения — внутри
 
 # Если задан адрес Mini App — ставим кнопку «🛍 Магазин» рядом с полем ввода.
 if WEBAPP_URL:

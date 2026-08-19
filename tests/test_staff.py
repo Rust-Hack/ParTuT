@@ -96,7 +96,8 @@ def run():
     # из приложения вовсе. Теперь его переносят в базу — и он снимается как все.
     c2 = Checker("Перенос админов из настроек сервера")
     conn = db.connect(); cur = conn.cursor()
-    cur.execute("DELETE FROM staff"); cur.execute(_q_del()); conn.commit(); conn.close()
+    cur.execute("DELETE FROM staff"); conn.commit(); conn.close()
+    _забыть_перенос()
     config.refresh_staff()
 
     env_admin = next(iter(config.ADMIN_IDS - config.SUPER_ADMIN_IDS), None)
@@ -104,7 +105,7 @@ def run():
         env_admin = 555444
         config.ADMIN_IDS = set(config.ADMIN_IDS) | {env_admin}
 
-    config.seed_admins_from_env()
+    _перенести()
     ids = {int(r["user_id"]) for r in db.list_staff()}
     c2("админ из окружения попал в базу", env_admin in ids)
     c2("и остался админом", config.is_admin(env_admin))
@@ -117,8 +118,9 @@ def run():
     c2("сняли перенесённого", (r.get_json() or {}).get("ok"))
     c2("права отозваны", not config.is_admin(env_admin))
 
-    # Перезапуск сервиса не должен воскрешать снятых.
-    config.seed_admins_from_env()
+    # Перезапуск сервиса не должен воскрешать снятых: летопись помнит, что
+    # перенос уже был, и второй раз он не выполняется.
+    _перенести()
     config.refresh_staff()
     c2("после перезапуска НЕ вернулся", not config.is_admin(env_admin))
 
@@ -129,14 +131,31 @@ def run():
     c2("владелец админ и с пустой таблицей", config.is_admin(SUPER))
 
     conn = db.connect(); cur = conn.cursor()
-    cur.execute("DELETE FROM staff"); cur.execute(_q_del()); conn.commit(); conn.close()
+    cur.execute("DELETE FROM staff"); conn.commit(); conn.close()
+    _забыть_перенос()
     config.refresh_staff()
     return c.fails + c2.fails
 
 
-def _q_del():
-    """Сбрасывает отметку о переносе, чтобы его можно было проверить заново."""
-    return db._q("DELETE FROM settings WHERE key = 'staff_seeded'")
+ПЕРЕНОС = "0004-админы-из-окружения-в-базу"
+
+
+def _забыть_перенос():
+    """Стереть память о переносе, чтобы проверить его заново.
+
+    Память теперь ведёт летопись схемы (schema_migrations), а не отметка в
+    настройках — но старую отметку тоже чистим: на живой базе она уже стоит, и
+    летопись, увидев её, засчитала бы перенос без работы.
+    """
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("DELETE FROM schema_migrations WHERE name = %s"), (ПЕРЕНОС,))
+    cur.execute(db._q("DELETE FROM settings WHERE key = %s"), ("staff_seeded",))
+    conn.commit(); conn.close()
+
+
+def _перенести():
+    """Ровно то, что делает запуск магазина."""
+    db._migrate(ПЕРЕНОС, db._seed_admins_from_env)
 
 
 if __name__ == "__main__":
