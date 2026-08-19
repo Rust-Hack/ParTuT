@@ -5,7 +5,9 @@
 рисовать себе прибыль, которой нет, и решения о закупке станут хуже, чем
 вообще без цифры.
 """
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import cache
 
 
 BUYER = 9501
@@ -16,7 +18,7 @@ def _clean():
     cur.execute("DELETE FROM orders")
     cur.execute("DELETE FROM products")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _sell(pid, name, price, cost, qty=1, coins=0, promo=0.0):
@@ -47,7 +49,7 @@ def run():
     pid = (r.get_json() or {}).get("id")
     c("закупка сохранена", abs(float(db.get_product(pid)["cost"]) - 12.0) < 0.001)
 
-    server._cache_bust()
+    cache.bust()
     prod = next(p for p in client.post("/api/admin/products", json={"initData": "x"}).get_json()["products"]
                 if p["id"] == pid)
     c("админка видит закупку", abs(prod["cost"] - 12.0) < 0.001)

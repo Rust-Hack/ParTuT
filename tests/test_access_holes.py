@@ -11,6 +11,10 @@ from urllib.parse import urlencode
 
 from _common import db, client, server, Checker, as_admin, REAL_GET_USER, real_auth
 
+import auth
+
+import cache
+
 import config
 import server_orders
 
@@ -23,7 +27,7 @@ def _clean():
     for t in ("products", "orders", "models"):
         cur.execute(f"DELETE FROM {t}")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _init_data(uid, when=None):
@@ -41,29 +45,38 @@ def run():
     _clean()
     real_auth()
 
-    c("правильная подпись принимается", server.validate_init_data(_init_data(BUYER))["id"] == BUYER)
-    c("подделанная — нет", server.validate_init_data(_init_data(BUYER)[:-4] + "0000") is None)
-    c("пустая — нет", server.validate_init_data("") is None)
-    c("без hash — нет", server.validate_init_data("user=%7B%22id%22%3A1%7D&auth_date=1") is None)
+    c("правильная подпись принимается", auth.validate_init_data(_init_data(BUYER))["id"] == BUYER)
+    c("подделанная — нет", auth.validate_init_data(_init_data(BUYER)[:-4] + "0000") is None)
+    c("пустая — нет", auth.validate_init_data("") is None)
+    c("без hash — нет", auth.validate_init_data("user=%7B%22id%22%3A1%7D&auth_date=1") is None)
     # Подпись верна вечно, поэтому одна утёкшая строка работала бы всегда.
-    old = time.time() - server.INIT_DATA_MAX_AGE - 60
-    c("вчерашняя подпись не годится", server.validate_init_data(_init_data(BUYER, old)) is None)
+    old = time.time() - auth.INIT_DATA_MAX_AGE - 60
+    c("вчерашняя подпись не годится", auth.validate_init_data(_init_data(BUYER, old)) is None)
     c("свежая — годится",
-      server.validate_init_data(_init_data(BUYER, time.time() - 60))["id"] == BUYER)
+      auth.validate_init_data(_init_data(BUYER, time.time() - 60))["id"] == BUYER)
 
     # --- Вход без Telegram ---
     c2 = Checker("DEV_MODE")
     # DEV_MODE подставляет владельца любому, кто открыл страницу. На боевой базе
     # это была бы админка без пароля для всего интернета.
+    # Проверяем правило, а не текст файла: раньше здесь искали строку
+    # «not _IS_PRODUCTION» в исходнике server.py, и проверка сломалась, как
+    # только настройка переехала в config. Теперь правило — обычная функция,
+    # и спросить её можно прямо, ничего не перезапуская.
     c2("на боевой базе выключен намертво",
-      "not _IS_PRODUCTION" in open("server.py").read().split("DEV_MODE = ")[1][:60])
-    c2("сейчас (тестовая база) он и так выключен", server.DEV_MODE is False)
-    c2("без подписи пользователя нет", server.get_user("") is None)
+       config.dev_mode_allowed("1", "postgresql://кто-то@боевая/база") is False)
+    c2("и на любой непустой строке подключения",
+       config.dev_mode_allowed("1", "   postgres://x   ") is False)
+    c2("без боевой базы включается по флагу",
+       config.dev_mode_allowed("1", "") is True)
+    c2("без флага не включается", config.dev_mode_allowed(None, "") is False)
+    c2("сейчас (тестовая база) он и так выключен", config.DEV_MODE is False)
+    c2("без подписи пользователя нет", auth.get_user("") is None)
 
     # --- Что видно на витрине ---
     c3 = Checker("Витрина без входа")
     pid = db.add_product("Минск", "disposable", "Elf Bar", 10.0, 5, cost=6.0)
-    server._cache_bust()
+    cache.bust()
     shop = client.get("/api/products").get_json()
     c3("товар виден всем — это витрина", any(p["id"] == pid for p in shop))
     c3("закупка не приходит", all("cost" not in p for p in shop))
@@ -119,7 +132,7 @@ def run():
     db.remove_staff(SELLER)
     config.refresh_staff()
     as_admin()
-    server.get_user = REAL_GET_USER
+    auth.get_user = REAL_GET_USER
     _clean()
     return c.fails + c2.fails + c3.fails + c4.fails + c5.fails
 

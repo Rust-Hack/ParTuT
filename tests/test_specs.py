@@ -7,7 +7,9 @@
 Отдельно проверяем, что старые товары не пострадали: крепость и объём
 по-прежнему лежат в своих колонках — по ним живут прежние карточки и бот.
 """
-from _common import db, client, server, Checker, as_admin, deny_admin
+from _common import db, client, Checker, as_admin, deny_admin
+
+import cache
 
 
 def _clean():
@@ -16,7 +18,7 @@ def _clean():
     cur.execute(db._q("DELETE FROM category_specs WHERE category = %s"), ("coils",))
     conn.commit(); conn.close()
     db.seed_category_specs()
-    server._cache_bust()
+    cache.bust()
 
 
 def _cat(code):
@@ -24,7 +26,7 @@ def _cat(code):
 
 
 def _product(pid):
-    server._cache_bust()
+    cache.bust()
     return next(p for p in client.get("/api/products").get_json() if p["id"] == pid)
 
 

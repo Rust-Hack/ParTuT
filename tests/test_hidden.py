@@ -8,7 +8,9 @@
 витрину, ни в заказ. Полагаться на то, что каждый экран не забудет фильтр,
 нельзя, поэтому фильтрует сервер.
 """
-from _common import db, client, server, Checker, as_user, as_admin, deny_admin
+from _common import db, client, Checker, as_user, as_admin, deny_admin
+
+import cache
 
 
 BUYER = 9401
@@ -20,16 +22,16 @@ def _clean():
     cur.execute("DELETE FROM models")
     cur.execute("DELETE FROM orders")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _catalog():
-    server._cache_bust()
+    cache.bust()
     return client.get("/api/products").get_json()
 
 
 def _admin_list():
-    server._cache_bust()
+    cache.bust()
     return client.post("/api/admin/products", json={"initData": "x"}).get_json()["products"]
 
 
@@ -69,7 +71,7 @@ def run():
 
     # Снятое в корзине не должно ронять заказ целиком — остальное продаём.
     live = db.add_product("Минск", "disposable", "Другой", 12.0, 5)
-    server._cache_bust()
+    cache.bust()
     r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid_d,
                                         "payment_method": "cash",
                                         "items": [{"id": pid, "qty": 1}, {"id": live, "qty": 1}]})

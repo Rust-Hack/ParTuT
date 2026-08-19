@@ -10,11 +10,13 @@ server_admin.py — экран владельца: настройки магаз
 сотрёт реквизиты по-настоящему. На этом уже спотыкались, поэтому умолчания
 живут прямо здесь, рядом с чтением, а не разбросаны по коду.
 
-Помощники берутся ЧЕРЕЗ модуль (server.get_admin(), server._super()).
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), server._super()).
 """
 
 from flask import jsonify, request
 
+import cache
+import auth
 import db
 import server
 from config import CONFIRM_MINUTES, PAYMENT_INFO, is_super_admin
@@ -24,14 +26,14 @@ PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "all": None}
 def api_admin_stats():
     """Бизнес-аналитика для админа за период: KPI, графики, товары, юзеры, монеты, склад, игры."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
     # Период уходит в ключ кэша: списком или словарём он быть не может.
     period = server._text(data.get("period")) or "30d"
     # Тяжёлый расчёт (~15 запросов) — кэшируем на 60с. Сбрасывается при изменении заказов
     # (через _WRITE_PATHS), так что цифры остаются актуальными после реальных продаж.
-    cached = server._cache_get(f"stats:{period}")
+    cached = cache.get(f"stats:{period}")
     if cached is not None:
         return jsonify({"ok": True, "stats": cached})
 
@@ -61,7 +63,7 @@ def api_admin_stats():
     except Exception as e:
         stats["losses"] = []
         print(f"Не удалось посчитать списания: {e}")
-    server._cache_set(f"stats:{period}", stats, 60)
+    cache.put(f"stats:{period}", stats, 60)
     return jsonify({"ok": True, "stats": stats})
 
 
@@ -69,7 +71,7 @@ def api_admin_stats():
 def api_admin_stats_reset():
     """Сброс тестовой статистики (заказы + счётчики игр) — только супер-админ."""
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id") or not is_super_admin(int(user["id"])):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     res = db.reset_statistics()
@@ -109,7 +111,7 @@ def _num(value, default, as_int=False):
 def api_admin_settings():
     """Текущие настройки магазина для админ-панели."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     # Все настройки — одним запросом. По одному ключу за раз это было восемь
     # походов в базу подряд ради восьми строк из одной маленькой таблицы.
@@ -149,7 +151,7 @@ def api_admin_settings():
 def api_admin_settings_update():
     """Сохранить настройки магазина (реквизиты оплаты, время подтверждения)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     if "payment_info" in data:
         db.set_setting("payment_info", server._text(data.get("payment_info")))

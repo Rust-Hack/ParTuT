@@ -7,7 +7,9 @@
 совпадение, а не закономерность. Если советовать по ней, магазин будет
 уверенно рекомендовать случайность.
 """
-from _common import db, client, server, Checker
+from _common import db, client, Checker
+
+import cache
 
 
 def _clean():
@@ -15,7 +17,7 @@ def _clean():
     cur.execute("DELETE FROM orders")
     cur.execute("DELETE FROM products")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _order(items, status="issued"):
@@ -51,7 +53,7 @@ def run():
     _order([liq, coil])
     _order([liq, coil])
     _order([pod, liq])
-    server._cache_bust()
+    cache.bust()
     data = client.get("/api/also-bought").get_json()
     c("новая пара появилась", coil in data.get(str(liq), []))
     c("частая пара идёт первой", data[str(liq)][0] == pod)
@@ -60,7 +62,7 @@ def run():
     c2 = Checker("Подсказки не мешают магазину")
     c2("ответ — словарь, даже когда заказов нет", isinstance(data, dict))
     _clean()
-    server._cache_bust()
+    cache.bust()
     c2("без заказов подсказок нет, но ошибки тоже", client.get("/api/also-bought").get_json() == {})
 
     return c.fails + c2.fails

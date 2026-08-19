@@ -11,7 +11,9 @@
 негде. Единственным способом перестать получать сообщения о товаре, который
 уже не нужен, оставалось заблокировать бота — и заодно потерять покупателя.
 """
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import cache
 
 
 def _clean():
@@ -20,7 +22,7 @@ def _clean():
     cur.execute("DELETE FROM stock_alerts")
     cur.execute("DELETE FROM users WHERE user_id >= 9600 AND user_id < 9700")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _save(**kw):
@@ -49,7 +51,7 @@ def run():
     # --- Подписки на поступление ---
     c2 = Checker("Жду поступления")
     pid = db.add_product("Минск", "disposable", "Кончился", 20.0, 0)
-    server._cache_bust()
+    cache.bust()
 
     def notify(**kw):
         body = {"initData": "x", "product_id": pid}
@@ -70,7 +72,7 @@ def run():
     # висит до самой рассылки, и человек получает сообщение о ненужном товаре.
     notify()
     db.change_stock(pid, 5)
-    server._cache_bust()
+    cache.bust()
     notify(off=True)
     c2("от завезённого товара тоже можно отписаться", db.alerts_of_user(9601) == [])
 

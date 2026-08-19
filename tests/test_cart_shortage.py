@@ -13,7 +13,9 @@
 Теперь сервер отказывает и говорит, что именно изменилось, а приложение по
 этому ответу правит корзину — иначе «Оформить» упиралось бы в тот же отказ.
 """
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import cache
 
 
 def _clean():
@@ -22,7 +24,7 @@ def _clean():
         cur.execute(f"DELETE FROM {t}")
     cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _method():
@@ -45,7 +47,7 @@ def run():
     # --- Единственный товар разобрали ---
     pid = db.add_product("Минск", "disposable", "Последняя", 10.0, 1)
     db.change_stock(pid, -1)                  # кто-то забрал последнюю
-    server._cache_bust()
+    cache.bust()
     r = order([{"id": pid, "qty": 1}])
     d = r.get_json()
     c("заказ не оформлен", not d.get("ok"))
@@ -59,7 +61,7 @@ def run():
     # --- Просят больше, чем осталось ---
     c2 = Checker("Осталось меньше, чем просят")
     db.change_stock(pid, 2)                   # завезли две
-    server._cache_bust()
+    cache.bust()
     r = order([{"id": pid, "qty": 5}])
     d = r.get_json()
     c2("заказ не проходит втихую", not d.get("ok") and d.get("error") == "sold_out")
@@ -79,7 +81,7 @@ def run():
     mid = _method()
     есть = db.add_product("Минск", "disposable", "Есть", 10.0, 5)
     нету = db.add_product("Минск", "disposable", "Нету", 10.0, 0)
-    server._cache_bust()
+    cache.bust()
     r = order([{"id": есть, "qty": 1}, {"id": нету, "qty": 1}])
     d = r.get_json()
     c3("заказ целиком отклонён, а не урезан", not d.get("ok") and d.get("error") == "sold_out")
@@ -103,7 +105,7 @@ def run():
     db.add_variant(fp, "Мята", 0)
     db.add_variant(fp, "Вишня", 3)
     db.recalc_product_stock(fp)
-    server._cache_bust()
+    cache.bust()
     r = order([{"id": fp, "flavor": "Мята", "qty": 1}])
     d = r.get_json()
     c5("кончившийся вкус не продаём молча", d.get("error") == "sold_out")

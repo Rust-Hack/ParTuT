@@ -6,7 +6,9 @@
 Галерея принадлежит МОДЕЛИ, а не наличию на точке: на всех точках это одна
 и та же коробка, и держать три копии одних снимков незачем.
 """
-from _common import db, client, server, Checker, as_admin, deny_admin
+from _common import db, client, Checker, as_admin, deny_admin
+
+import cache
 
 
 def _clean():
@@ -14,7 +16,7 @@ def _clean():
     cur.execute("DELETE FROM product_photos")
     cur.execute("DELETE FROM products")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _upload(pid, path="/api/admin/photo/add", model_id=None):
@@ -28,7 +30,7 @@ def _upload(pid, path="/api/admin/photo/add", model_id=None):
 
 
 def _product(pid):
-    server._cache_bust()
+    cache.bust()
     return next(p for p in client.get("/api/products").get_json() if p["id"] == pid)
 
 
@@ -102,7 +104,7 @@ def run():
     # --- Галерея одна на все точки ---
     c2 = Checker("Галерея принадлежит модели")
     pid2 = db.add_product_from_model(mid, "Туров", 32.0, stock=2)
-    server._cache_bust()
+    cache.bust()
     a, b = _product(pid), _product(pid2)
     c2("вторая точка видит те же фото", len(a["photos"]) == len(b["photos"]) > 1)
     c2("и это ровно главное фото модели плюс её галерея", len(db.model_photos(mid)) + 1 == len(b["photos"]))

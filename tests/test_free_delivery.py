@@ -7,7 +7,9 @@
 покупатель дотягивается до бесплатной доставки своими же монетами, а за дорогу
 платит магазин.
 """
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import cache
 
 
 BUYER = 9601
@@ -20,7 +22,7 @@ def _clean():
     cur.execute("DELETE FROM products")
     conn.commit(); conn.close()
     db.set_setting("free_delivery_from", 0)
-    server._cache_bust()
+    cache.bust()
 
 
 def run():
@@ -32,7 +34,7 @@ def run():
     pid = db.add_product("Минск", "pods", "ПорогПод", 20.0, 50)
     db.set_age_ok(BUYER)
     as_user(BUYER, "buyer")
-    server._cache_bust()
+    cache.bust()
 
     def заказать(qty, use_coins=False):
         return client.post("/api/order", json={
@@ -46,7 +48,7 @@ def run():
 
     # --- Ставим порог 50 ---
     db.set_setting("free_delivery_from", 50)
-    server._cache_bust()
+    cache.bust()
 
     d = заказать(2)                       # 40 Br товаров — не дотянул
     c("ниже порога доставка платная", abs(d["total"] - 45.0) < 0.01)
@@ -56,13 +58,13 @@ def run():
 
     # Ровно на границе тоже бесплатно.
     db.set_setting("free_delivery_from", 40)
-    server._cache_bust()
+    cache.bust()
     d = заказать(2)
     c("ровно на границе — бесплатно", abs(d["total"] - 40.0) < 0.01)
 
     # --- Монеты не должны «дотягивать» до порога ---
     db.set_setting("free_delivery_from", 50)
-    server._cache_bust()
+    cache.bust()
     db.add_coins(BUYER, 5000)             # 50 Br монетами
     d = заказать(2, use_coins=True)       # товаров на 40 — порог НЕ взят
     c("заказ со списанием прошёл", d.get("ok"))
@@ -107,7 +109,7 @@ def run_trust():
     """Счётчик выполненных заказов: доверие новичку, но без вранья."""
     c = Checker("Сколько заказов магазин выполнил")
     _clean()
-    server._cache_bust()
+    cache.bust()
 
     pid = db.add_product("Минск", "pods", "ДовериеПод", 10.0, 200)
     db.add_delivery_method("Минск", "Самовывоз", False, "", "", 0, True, 0)
@@ -121,12 +123,12 @@ def run_trust():
             conn.commit(); conn.close()
 
     выдать(3)
-    server._cache_bust()
+    cache.bust()
     d = client.get("/api/delivery?city=Минск").get_json()
     c("при трёх заказах счётчик молчит", d["orders_done"] == 0)
 
     выдать(20)
-    server._cache_bust()
+    cache.bust()
     d = client.get("/api/delivery?city=Минск").get_json()
     c("при двадцати трёх — показывает", d["orders_done"] == 23)
 

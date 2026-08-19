@@ -32,6 +32,7 @@ else:
     db.SQLITE_FILE = tempfile.mktemp(suffix=".db")
 db.init_db()
 
+import auth                          # noqa: E402
 import server                        # noqa: E402
 import notifications                 # noqa: E402
 
@@ -82,19 +83,19 @@ def reset_sent():
 
 # Настоящие проверки прав — до того, как их подменит as_admin(). Тест про
 # права обязан звать именно их, иначе он проверяет заглушку.
-REAL_GET_ADMIN = server.get_admin
-REAL_GET_USER = server.get_user
+REAL_GET_ADMIN = auth.get_admin
+REAL_GET_USER = auth.get_user
 
 
 def real_auth():
     """Вернуть подлинную проверку прав (для тестов доступа)."""
-    server.get_admin = REAL_GET_ADMIN
-    server.get_user = REAL_GET_USER
+    auth.get_admin = REAL_GET_ADMIN
+    auth.get_user = REAL_GET_USER
 
 
 def as_user(uid, username=None, first_name=None):
     """Следующие запросы будут «от» этого клиента."""
-    server.get_user = lambda init: {"id": uid, "username": username, "first_name": first_name}
+    auth.get_user = lambda init: {"id": uid, "username": username, "first_name": first_name}
 
 
 def as_admin(uid=100, username="owner", role="owner", city=""):
@@ -103,14 +104,14 @@ def as_admin(uid=100, username="owner", role="owner", city=""):
     По умолчанию — владелец: большинство тестов проверяют операции магазина.
     Роль обязана быть в заглушке, иначе проверка прав увидит админа без роли
     и откажет — а тест решит, что сломалась сама операция."""
-    server.get_admin = lambda init: {"id": uid, "username": username, "role": role, "city": city}
+    auth.get_admin = lambda init: {"id": uid, "username": username, "role": role, "city": city}
 
 
 def deny_admin():
     """Снять права админа. Нужен всегда, когда проверяем «постороннего»:
     as_admin() подменяет проверку НАВСЕГДА, и без этого тест на запрет проходит
     от имени админа — то есть проверяет не то, что написано."""
-    server.get_admin = lambda init: None
+    auth.get_admin = lambda init: None
 
 
 class Checker:

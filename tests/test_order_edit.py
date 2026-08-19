@@ -7,7 +7,9 @@
 Цена ошибки здесь высокая: правка двигает и склад, и деньги. Если они разъедутся,
 магазин отдаст товар бесплатно или спишет то, чего не продавал.
 """
-from _common import db, client, server, Checker, as_admin, deny_admin, SENT, reset_sent
+from _common import db, client, Checker, as_admin, deny_admin, SENT, reset_sent
+
+import cache
 
 
 BUYER = 9601
@@ -19,7 +21,7 @@ def _clean():
     cur.execute("DELETE FROM products")
     cur.execute("DELETE FROM product_variants")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _order(items, total, status="paid", **kw):

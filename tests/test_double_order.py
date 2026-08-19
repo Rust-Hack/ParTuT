@@ -14,7 +14,9 @@
 import datetime
 import threading
 
-from _common import db, client, server, Checker, as_user, as_admin, SENT, reset_sent
+from _common import db, client, Checker, as_user, as_admin, SENT, reset_sent
+
+import cache
 
 UID = 8801
 
@@ -26,7 +28,7 @@ def _clean():
     cur.execute(db._q("DELETE FROM users WHERE user_id = %s"), (UID,))
     cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _count_orders():
@@ -44,7 +46,7 @@ def run():
     pid = db.add_product("Минск", "pods", "Под", 25.0, 2)
     db.set_age_ok(UID)
     db.add_coins(UID, 100, "other")
-    server._cache_bust()
+    cache.bust()
     as_user(UID, "спешит")
 
     def order(token, qty=2, coins=False):
@@ -78,7 +80,7 @@ def run():
     mid = db.get_delivery_methods("Минск")[0]["id"]
     pid = db.add_product("Минск", "pods", "Под", 25.0, 20)
     db.set_age_ok(UID)
-    server._cache_bust()
+    cache.bust()
 
     ответы = []
     потоки = [threading.Thread(target=lambda: ответы.append(order("попытка-2"))) for _ in range(6)]

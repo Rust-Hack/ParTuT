@@ -9,13 +9,15 @@ Telegram присылает имя при каждом открытии прил
 """
 from _common import db, client, server, Checker, as_user, as_admin
 
+import cache
+
 
 def _clean():
     conn = db.connect(); cur = conn.cursor()
     cur.execute("DELETE FROM orders")
     cur.execute("DELETE FROM users WHERE user_id >= 9700 AND user_id < 9800")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _list():

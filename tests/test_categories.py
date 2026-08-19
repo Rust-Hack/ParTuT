@@ -6,7 +6,9 @@
 иначе товары остались бы в разделе, которого нет, и пропали бы из витрины
 молча.
 """
-from _common import db, client, server, Checker, as_admin, deny_admin
+from _common import db, client, Checker, as_admin, deny_admin
+
+import cache
 
 
 def _clean():
@@ -15,7 +17,7 @@ def _clean():
     cur.execute(db._q("DELETE FROM categories WHERE code NOT IN (%s, %s, %s, %s, %s, %s)"),
                 tuple(c[0] for c in db.CATEGORY_SEED))
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def run():
@@ -52,7 +54,7 @@ def run():
                                                 "cost": "5"})
     c("товар заводится в новой категории", (r.get_json() or {}).get("ok"))
     pid = r.get_json()["id"]
-    server._cache_bust()
+    cache.bust()
     c("товар виден витрине",
       any(p["id"] == pid for p in client.get("/api/products").get_json()))
     c("выдуманная категория отклонена",
@@ -78,7 +80,7 @@ def run():
     c("непустую категорию не удалить", r.status_code == 400 and r.get_json()["error"] == "has_products")
     c("и сказано, сколько там товаров", r.get_json()["count"] == 1)
     db.delete_product(pid)
-    server._cache_bust()
+    cache.bust()
     c("пустая удаляется",
       client.post("/api/admin/category/delete", json={"initData": "x", "code": new_code}).get_json()["ok"])
     c("её больше нет", new_code not in db.category_codes())
@@ -101,7 +103,7 @@ def run():
     conn = db.connect(); cur = conn.cursor()
     cur.execute(db._q("DELETE FROM categories WHERE code != %s"), ("liquid",))
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
     r = client.post("/api/admin/category/delete", json={"initData": "x", "code": "liquid"})
     c2("без категорий остаться нельзя", r.status_code == 400 and r.get_json()["error"] == "last_one")
 
@@ -112,7 +114,7 @@ def run():
             cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort) VALUES (%s, %s, %s, %s)"),
                         (code, name, emoji, sort))
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
     c2("стартовый набор восстановлен", len(db.category_codes()) == len(db.CATEGORY_SEED))
 
     _clean()

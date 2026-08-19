@@ -10,7 +10,11 @@
 import json
 import threading
 
-from _common import db, client, server, Checker, as_admin
+from _common import db, client, Checker, as_admin
+
+import auth
+
+import cache
 
 
 def _clean():
@@ -18,7 +22,7 @@ def _clean():
     for t in ("products", "orders", "product_variants"):
         cur.execute(f"DELETE FROM {t}")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _method():
@@ -36,7 +40,7 @@ def _buy_parallel(pid, mid, buyers, flavor=None):
     """Все жмут «Оформить» одновременно."""
     out = []
     def buy(uid):
-        server.get_user = lambda init, u=uid: {"id": u, "username": f"u{u}"}
+        auth.get_user = lambda init, u=uid: {"id": u, "username": f"u{u}"}
         item = {"id": pid, "qty": 1}
         if flavor:
             item["flavor"] = flavor
@@ -59,7 +63,7 @@ def run():
         db.set_age_ok(uid)
 
     pid = db.add_product("Минск", "disposable", "Последняя", 10.0, 1)
-    server._cache_bust()
+    cache.bust()
     res = _buy_parallel(pid, mid, (8801, 8802))
     ok = [r for r in res if r[1].get("ok")]
     no = [r for r in res if not r[1].get("ok")]
@@ -78,7 +82,7 @@ def run():
     db.add_variant(fp, "Мята", 1)
     db.add_variant(fp, "Вишня", 5)
     db.recalc_product_stock(fp)
-    server._cache_bust()
+    cache.bust()
     res = _buy_parallel(fp, mid, (8801, 8802), flavor="Мята")
     c2("по вкусу тоже продана одна", sum(1 for r in res if r[1].get("ok")) == 1)
     stocks = {v["flavor"]: v["stock"] for v in db.get_variants(fp)}
@@ -91,12 +95,12 @@ def run():
     _clean()
     pid = db.add_product("Минск", "disposable", "Одна", 10.0, 1)
     db.add_coins(8803, 500)
-    server._cache_bust()
+    cache.bust()
     coins_before = db.get_coins(8803)
-    server.get_user = lambda init: {"id": 8803, "username": "u8803"}
+    auth.get_user = lambda init: {"id": 8803, "username": "u8803"}
     # Забираем последнюю штуку «из-под носа» и пробуем оформить на неё заказ.
     db.change_stock(pid, -1)
-    server._cache_bust()
+    cache.bust()
     r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
                                         "payment_method": "cash", "use_coins": True,
                                         "items": [{"id": pid, "qty": 1}]})

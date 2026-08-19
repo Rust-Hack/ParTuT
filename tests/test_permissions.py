@@ -12,7 +12,11 @@
 Здесь проверяются НАСТОЯЩИЕ проверки прав, а не заглушка as_admin(): иначе
 тест про доступ проверял бы сам себя.
 """
-from _common import (db, client, server, Checker, as_admin, real_auth, REAL_GET_USER)
+from _common import (db, client, Checker, as_admin, real_auth, REAL_GET_USER)
+
+import auth
+
+import cache
 
 import config
 
@@ -26,7 +30,7 @@ BUYER = 7304         # обычный покупатель
 def _as(uid):
     """Запросы идут от этого человека — через настоящую проверку прав."""
     real_auth()
-    server.get_user = lambda init: {"id": uid, "username": f"u{uid}"}
+    auth.get_user = lambda init: {"id": uid, "username": f"u{uid}"}
 
 
 def _clean():
@@ -34,7 +38,7 @@ def _clean():
     for t in ("products", "models", "orders", "admin_log", "reviews"):
         cur.execute(f"DELETE FROM {t}")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _post(path, **body):
@@ -131,7 +135,7 @@ def run():
         only_minsk = db.add_model("liquid", "Только Минск")
         mp = db.add_product_from_model(only_minsk, "Минск", 10.0, stock=1)
         alien = db.add_review(mp, BUYER + 1, 2, "Не понравилось", "petya")
-        server._cache_bust()
+        cache.bust()
         _as(SELLER)
         seen = {r["id"] for r in _post("/api/admin/reviews", status="all").get_json()["reviews"]}
         c4("видит отзыв о том, чем торгует", rid in seen)
@@ -201,7 +205,7 @@ def run():
         db.remove_staff(ROAMER)
         config.refresh_staff()
         as_admin()                 # вернуть общий стенд в исходное состояние
-        server.get_user = REAL_GET_USER
+        auth.get_user = REAL_GET_USER
         _clean()
     return fails
 

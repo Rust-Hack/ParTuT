@@ -7,7 +7,7 @@ server_games.py — ручки развлечений: колесо, слот, �
 Маршруты регистрируются на том же приложении (server.app), права проверяет тот
 же общий страж — переезд для магазина невидим.
 
-Помощники берутся ЧЕРЕЗ модуль (server.get_user(), server.db), а не копиями
+Помощники берутся ЧЕРЕЗ модуль (auth.get_user(), server.db), а не копиями
 имён: копия не заметила бы подмены в тестах. То же правило, что и у модулей
 базы, — см. db_raffles.py.
 """
@@ -17,6 +17,7 @@ import random
 
 from flask import jsonify, request
 
+import auth
 import db
 import notifications
 import server
@@ -42,7 +43,7 @@ WHEEL_SECTORS = [
 def api_wheel():
     """Состояние колеса: секторы, доступные прокруты, прогресс."""
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -56,7 +57,7 @@ def api_wheel():
 def api_wheel_spin():
     """Прокрут колеса: списываем прокрут, выбираем приз по весам, начисляем монеты."""
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -153,7 +154,7 @@ def _slot_grid(win_emoji, line_idx):
 @server.app.route("/api/slot", methods=["POST"])
 def api_slot():
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -165,7 +166,7 @@ def api_slot():
 @server.app.route("/api/slot/spin", methods=["POST"])
 def api_slot_spin():
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -261,7 +262,7 @@ def _raffle_public_from_state(st):
 @server.app.route("/api/raffle", methods=["POST"])
 def api_raffle():
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -282,7 +283,7 @@ def api_raffle():
 @server.app.route("/api/raffle/join", methods=["POST"])
 def api_raffle_join():
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -302,7 +303,7 @@ def api_raffle_join():
 def api_admin_raffle():
     """Текущий розыгрыш для настройки."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     _close_expired_raffle()
     r = db.get_active_raffle()
@@ -319,7 +320,7 @@ def api_admin_raffle():
 @server.app.route("/api/admin/raffle/update", methods=["POST"])
 def api_admin_raffle_update():
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     _close_expired_raffle()
     r = db.get_active_raffle()
@@ -349,7 +350,7 @@ def api_admin_raffle_start():
     и вкладка «Розыгрыши» висела у покупателей всегда, даже когда магазин
     ничего не разыгрывал."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     if db.get_active_raffle():
         return jsonify({"ok": False, "error": "already"}), 409     # двух сразу не бывает
@@ -381,7 +382,7 @@ def api_admin_raffle_photo():
     Картинка получает file_id тем же способом, что и фото товара: отправляем её
     в чат владельцу тихо и забираем идентификатор. Второго способа хранить
     картинки в магазине нет, и заводить его ради розыгрыша незачем."""
-    user = server.get_admin(request.form.get("initData", ""))
+    user = auth.get_admin(request.form.get("initData", ""))
     if not user:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     r = db.get_active_raffle()
@@ -407,7 +408,7 @@ def api_admin_raffle_draw():
 
     Нового не заводим: решать, идёт ли розыгрыш, — дело владельца."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     r = db.get_active_raffle()
     if not r:
@@ -427,7 +428,7 @@ def _mask_id(uid):
 def api_admin_wheel_grant():
     """Тест: начислить админу 3 прокрута колеса."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     uid = int(admin["id"])

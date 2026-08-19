@@ -5,6 +5,8 @@
 """
 from _common import db, client, server, Checker, as_user, as_admin, SENT, reset_sent
 
+import cache
+
 
 BUYER = 660001
 BUYER2 = 660002
@@ -14,7 +16,7 @@ def run():
     c = Checker("Сообщить о поступлении")
 
     conn = db.connect(); conn.cursor().execute("DELETE FROM stock_alerts"); conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
     # Рассылка уходит в фоновом потоке — в тесте выполняем сразу, иначе проверка
     # обгонит поток и результат будет случайным.
     real_bg = server._bg

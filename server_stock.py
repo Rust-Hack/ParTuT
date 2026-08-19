@@ -8,11 +8,12 @@ server_stock.py — движение склада: приход, списани�
 разные права. Ассортимент ведёт владелец, а списать разбитый под может
 продавец своей точки, и каждое такое движение остаётся в журнале с именем.
 
-Помощники берутся ЧЕРЕЗ модуль (server.get_admin(), server.deny_city()).
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), auth.deny_city()).
 """
 
 from flask import jsonify, request
 
+import auth
 import db
 import server
 @server.app.route("/api/admin/stock/move", methods=["POST"])
@@ -20,7 +21,7 @@ def api_admin_stock_move():
     """Приход или списание с причиной. Остаток меняется только так — тогда на
     любой вопрос «куда делось» есть ответ с именем и датой."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -35,7 +36,7 @@ def api_admin_stock_move():
         return jsonify({"ok": False, "error": "bad_reason"}), 400
     if not db.get_product(pid):
         return jsonify({"ok": False, "error": "not_found"}), 404
-    deny = server.deny_product(admin, pid)
+    deny = auth.deny_product(admin, pid)
     if deny:
         return deny
 
@@ -55,7 +56,7 @@ def api_admin_stock_move():
 @server.app.route("/api/admin/stock/moves", methods=["POST"])
 def api_admin_stock_moves():
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -65,7 +66,7 @@ def api_admin_stock_moves():
     if pid:
         # История чужой точки — тоже чужая: по ней видно завоз, списания и
         # закупочные цены соседей.
-        deny = server.deny_product(admin, pid)
+        deny = auth.deny_product(admin, pid)
         if deny:
             return deny
     # Без товара в запросе это «вся история магазина» — продавцу отдаём только

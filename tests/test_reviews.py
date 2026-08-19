@@ -9,6 +9,8 @@
 """
 from _common import db, client, server, Checker, as_user, as_admin, deny_admin, SENT, reset_sent
 
+import cache
+
 
 BUYER = 9801
 STRANGER = 9802
@@ -21,7 +23,7 @@ def _clean():
     cur.execute("DELETE FROM products")
     cur.execute("DELETE FROM models")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _buy(uid, pid, name, status="issued"):
@@ -33,7 +35,7 @@ def _buy(uid, pid, name, status="issued"):
 
 
 def _product(pid):
-    server._cache_bust()
+    cache.bust()
     return next(p for p in client.get("/api/products").get_json() if p["id"] == pid)
 
 
@@ -230,7 +232,7 @@ def run_model_reviews():
     # --- Снятие с точки не стирает отзывы ---
     as_admin()
     db.delete_product(minsk)
-    server._cache_bust()
+    cache.bust()
     c("отзыв пережил снятие товара с точки",
       len(client.get(f"/api/reviews?product_id={turov}").get_json()["reviews"]) == 1)
     c("и оценка на оставшейся точке цела", _product(turov)["rating"]["count"] == 1)
@@ -240,7 +242,7 @@ def run_model_reviews():
     # --- Разные модели не смешиваются ---
     other = db.add_model("liquid", "Другая", brand="Husky")
     op = db.add_product_from_model(other, "Минск", 15.0, stock=3)
-    server._cache_bust()
+    cache.bust()
     c("у чужой модели своя оценка", _product(op)["rating"] == {"avg": 0, "count": 0})
 
     _clean()

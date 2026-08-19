@@ -4,7 +4,9 @@
 нельзя применить дважды, что он не уводит заказ в минус и что статистика
 отвечает на главный вопрос владельца: сработал пост в группе или нет.
 """
-from _common import db, client, server, Checker, as_user, as_admin, deny_admin
+from _common import db, client, Checker, as_user, as_admin, deny_admin
+
+import cache
 
 
 BUYER = 9701
@@ -18,7 +20,7 @@ def _clean():
     cur.execute("DELETE FROM delivery_methods")
     cur.execute("DELETE FROM products")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def run():
@@ -51,7 +53,7 @@ def run():
     method = db.get_delivery_methods("Минск")[0]
     pid = db.add_product("Минск", "pods", "ПромоПод", 50.0, 30)
     db.set_age_ok(BUYER); db.set_age_ok(OTHER)
-    server._cache_bust()
+    cache.bust()
     as_user(BUYER, "buyer")
 
     def заказать(qty=1, code=None, use_coins=False):

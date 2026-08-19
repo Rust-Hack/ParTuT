@@ -8,18 +8,19 @@ server_promos.py — промокоды: ручки админки.
 заказа, потому что код надо не только узнать, но и списать — одной транзакцией
 вместе с самим заказом.
 
-Помощники берутся ЧЕРЕЗ модуль (server.get_admin(), server._text()).
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), server._text()).
 """
 
 from flask import jsonify, request
 
+import auth
 import db
 import server
 @server.app.route("/api/admin/promos", methods=["POST"])
 def api_admin_promos():
     """Коды со статистикой: сколько заказов и выручки принёс каждый."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     return jsonify({"ok": True, "promos": db.list_promos()})
 
@@ -27,7 +28,7 @@ def api_admin_promos():
 @server.app.route("/api/admin/promo", methods=["POST"])
 def api_admin_promo_add():
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     code = server._text(data.get("code")).upper()
     if not code or len(code) > 24 or " " in code:
@@ -58,7 +59,7 @@ def api_admin_promo_add():
 def api_admin_promo_toggle():
     """Выключить код, не удаляя: статистика по нему должна остаться."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     db.set_promo_active((data.get("code") or ""), bool(data.get("active")))
     return jsonify({"ok": True})
@@ -67,7 +68,7 @@ def api_admin_promo_toggle():
 @server.app.route("/api/admin/promo/delete", methods=["POST"])
 def api_admin_promo_delete():
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     db.delete_promo((data.get("code") or ""))
     return jsonify({"ok": True})

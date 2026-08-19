@@ -13,6 +13,8 @@
 import importlib
 
 from _common import db, client, server, Checker, as_user, as_admin
+
+import cache
 import config
 import notifications
 import server_orders
@@ -24,7 +26,7 @@ def _clean():
         cur.execute(f"DELETE FROM {t}")
     cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def run():
@@ -47,7 +49,7 @@ def run():
         pid = db.add_product("Минск", "disposable", "Карточный", 30.0, 5)
         db.set_age_ok(6601)
         as_user(6601, "buyer")
-        server._cache_bust()
+        cache.bust()
 
         r = client.post("/api/order", json={"initData": "x", "city": "Минск",
                                             "delivery_method_id": mid,

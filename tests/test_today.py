@@ -8,7 +8,11 @@
 Числа обязаны совпадать с теми разделами, куда ведут плитки: сводка, которая
 расходится со списком, хуже, чем её отсутствие.
 """
-from _common import db, client, server, Checker, as_admin, deny_admin, real_auth, REAL_GET_USER
+from _common import db, client, Checker, as_admin, deny_admin, real_auth, REAL_GET_USER
+
+import auth
+
+import cache
 
 import config
 
@@ -20,7 +24,7 @@ def _clean():
     cur.execute("DELETE FROM orders")
     cur.execute("DELETE FROM products")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _order(city, status, total, when=None):
@@ -65,7 +69,7 @@ def run():
     db.add_product("Минск", "disposable", "Кончился", 10.0, 0)
     db.add_product("Минск", "disposable", "Мало", 10.0, 2)
     db.add_product("Минск", "disposable", "Хватает", 10.0, 50)
-    server._cache_bust()
+    cache.bust()
     t = _today()
     c2("кончившиеся посчитаны", t["out_stock"] == 1)
     c2("заканчивающиеся — тоже", t["low_stock"] == 1)
@@ -80,7 +84,7 @@ def run():
     db.add_staff(SELLER, "Туров", "продавец")
     config.refresh_staff()
     real_auth()
-    server.get_user = lambda init: {"id": SELLER, "username": "seller"}
+    auth.get_user = lambda init: {"id": SELLER, "username": "seller"}
     t = _today()
     c3("город назван", t["city"] == "Туров")
     c3("считаются только свои ждущие", t["waiting"] == 1)
@@ -89,7 +93,7 @@ def run():
 
     db.remove_staff(SELLER)
     config.refresh_staff()
-    server.get_user = REAL_GET_USER
+    auth.get_user = REAL_GET_USER
     as_admin()
 
     deny_admin()

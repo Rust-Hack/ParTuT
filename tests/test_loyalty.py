@@ -15,7 +15,9 @@
    уже не лежат, и раздача выглядела бы меньше, чем есть. Поэтому каждое
    движение пишется в летопись.
 """
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import cache
 
 
 def _clean():
@@ -25,7 +27,7 @@ def _clean():
     cur.execute(db._q("DELETE FROM users WHERE user_id BETWEEN %s AND %s"), (8700, 8799))
     cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 UID = 8701
@@ -40,7 +42,7 @@ def run():
     mid = db.get_delivery_methods("Минск")[0]["id"]
     cheap = db.add_product("Минск", "disposable", "Дешёвый", 8.0, 99)
     db.set_age_ok(UID)
-    server._cache_bust()
+    cache.bust()
 
     def buy(pid, qty):
         as_user(UID, "u")

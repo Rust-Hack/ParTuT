@@ -2,6 +2,8 @@
 import gzip
 from _common import client, Checker
 
+import cache
+
 
 def run():
     c = Checker("Gzip-сжатие ответов")
@@ -58,16 +60,16 @@ def run_etag():
 
     # Данные поменялись — старая версия больше не подходит, иначе витрина
     # застынет на позавчерашних остатках.
-    import db, server
+    import db
     before = client.get("/api/products").headers.get("ETag")
     pid = db.add_product("Минск", "disposable", "ETag-проверка", 11.0, 3)
-    server._cache_bust()
+    cache.bust()
     after = client.get("/api/products").headers.get("ETag")
     c2("после правки витрины версия сменилась", before != after)
     conn = db.connect(); cur = conn.cursor()
     cur.execute(db._q("DELETE FROM products WHERE id = %s"), (pid,))
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
     return c.fails + c2.fails
 

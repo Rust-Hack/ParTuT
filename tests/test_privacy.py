@@ -13,6 +13,10 @@ import io
 
 from _common import db, client, server, Checker, as_user, as_admin, real_auth, deny_admin
 
+import auth
+
+import cache
+
 
 def _clean():
     conn = db.connect(); cur = conn.cursor()
@@ -20,7 +24,7 @@ def _clean():
         cur.execute(f"DELETE FROM {t}")
     cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 ALICE, BOB = 8101, 8102
@@ -33,7 +37,7 @@ def run():
     pid = db.add_product("Минск", "disposable", "Товар", 10.0, 50)
     for uid in (ALICE, BOB):
         db.set_age_ok(uid)
-    server._cache_bust()
+    cache.bust()
 
     # Заказ Алисы с чеком.
     as_user(ALICE, "alice")
@@ -76,7 +80,7 @@ def run():
     # --- Админские адреса покупателю ---
     c4 = Checker("Админское — не покупателю")
     real_auth()
-    server.get_user = lambda init: {"id": BOB, "username": "bob"}
+    auth.get_user = lambda init: {"id": BOB, "username": "bob"}
     deny_admin()
     for path in ("/api/admin/orders", "/api/admin/customer", "/api/admin/users",
                  "/api/admin/stats", "/api/admin/log"):

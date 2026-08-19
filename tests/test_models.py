@@ -5,7 +5,9 @@
 в модели, а у товара остаётся то, что у каждой точки своё: цена, закупка и
 остаток.
 """
-from _common import db, client, server, Checker, as_admin, deny_admin
+from _common import db, client, Checker, as_admin, deny_admin
+
+import cache
 
 
 def _clean():
@@ -13,7 +15,7 @@ def _clean():
     cur.execute("DELETE FROM products")
     cur.execute("DELETE FROM models")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _models():
@@ -21,7 +23,7 @@ def _models():
 
 
 def _product(pid):
-    server._cache_bust()
+    cache.bust()
     return next(p for p in client.get("/api/products").get_json() if p["id"] == pid)
 
 

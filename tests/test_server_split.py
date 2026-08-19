@@ -8,7 +8,7 @@
 
 2. Модуль скопировал себе помощника (`from server import get_admin`) вместо
    обращения через модуль. Копия не заметит подмены — а весь тестовый стенд
-   стоит на подмене server.get_admin: проверки прав начнут проходить вхолостую.
+   стоит на подмене auth.get_admin: проверки прав начнут проходить вхолостую.
 
 3. Приписка префикса задела чужое поле: db.REFERRAL_BONUS превращался в
    db.server.REFERRAL_BONUS. Ruff такое не видит — это обращение к атрибуту,
@@ -19,6 +19,8 @@ import os
 import re
 
 from _common import server, Checker
+
+import auth
 
 КОРЕНЬ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -72,16 +74,16 @@ def run():
     c4("один путь — одна ручка" + ("" if not дубли else f": {list(дубли)[:3]}"), not дубли)
     c4(f"ручек всего ({len(пути)})", len(пути) > 100)
 
-    # Подмена server.get_admin обязана доходить до вынесенных модулей.
+    # Подмена auth.get_admin обязана доходить до вынесенных модулей.
     c5 = Checker("Подмена доходит до вынесенного кода")
     звонков = {"n": 0}
-    настоящий = server.get_admin
+    настоящий = auth.get_admin
 
     def счётчик(*a, **k):
         звонков["n"] += 1
         return настоящий(*a, **k)
 
-    server.get_admin = счётчик
+    auth.get_admin = счётчик
     try:
         from _common import client
         client.post("/api/admin/promos", json={"initData": "x"})      # server_promos
@@ -89,8 +91,8 @@ def run():
         client.post("/api/admin/orders", json={"initData": "x"})      # server_orders
         client.post("/api/admin/users", json={"initData": "x"})       # server_customers
     finally:
-        server.get_admin = настоящий
-    c5("вынесенные модули сходили через подменённый server.get_admin",
+        auth.get_admin = настоящий
+    c5("вынесенные модули сходили через подменённый auth.get_admin",
        звонков["n"] >= 4)
 
     return c.fails + c2.fails + c3.fails + c4.fails + c5.fails

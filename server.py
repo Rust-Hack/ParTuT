@@ -24,16 +24,17 @@ import html
 import json
 import threading
 import time
-from urllib.parse import parse_qsl
 
 import requests
 import telebot
 from flask import Flask, g, jsonify, request, Response
 
+import auth
+import cache
 import db
 import errors
 import notifications
-from config import (BOT_TOKEN, PAYMENT_INFO, ADMIN_IDS, SUPER_ADMIN_IDS, SUPPORT_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, admin_city, admin_role, all_admin_ids)
+from config import (BOT_TOKEN, PAYMENT_INFO, SUPER_ADMIN_IDS, SUPPORT_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, admin_city, admin_role, all_admin_ids)
 
 db.init_db()      # схема, разовые переносы и права из окружения — внутри
 
@@ -54,6 +55,9 @@ LOW_STOCK = 3              # с этого остатка товар счита�
 
 
 app = Flask(__name__, static_folder="webapp", static_url_path="")
+# Права проверяет auth, а вешает страж на приложение — тот, у кого приложение
+# есть. Так auth не знает про сервер, и граф импортов остаётся деревом.
+app.before_request(auth.guard_owner_only)
 
 # DEV_MODE=1 — разрешить пользоваться из обычного браузера (без Telegram) для локальной проверки.
 #
@@ -61,54 +65,12 @@ app = Flask(__name__, static_folder="webapp", static_url_path="")
 # На боевом это означало бы админку без пароля для всего интернета: достаточно
 # один раз скопировать переменные с локальной машины на сервер. Поэтому боевая
 # база (DATABASE_URL) выключает DEV_MODE намертво, что бы ни стояло в env.
-_IS_PRODUCTION = bool(os.environ.get("DATABASE_URL", "").strip())
-DEV_MODE = os.environ.get("DEV_MODE") == "1" and not _IS_PRODUCTION
-if os.environ.get("DEV_MODE") == "1" and _IS_PRODUCTION:
-    print("DEV_MODE ИГНОРИРУЕТСЯ: подключена боевая база. Вход только через Telegram.")
-DEV_USER_ID = next(iter(ADMIN_IDS), 0)
 
 _file_path_cache = {}      # кэш путей к файлам Telegram (чтобы не звать get_file каждый раз)
 _photo_cache = {}          # кэш самих картинок в памяти: file_id -> (bytes, content_type)
 _photo_cache_lock = threading.Lock()
 _photo_cache_bytes = 0     # сколько памяти занято картинками
 PHOTO_CACHE_MAX_BYTES = int(os.environ.get("PHOTO_CACHE_MB", "48")) * 1024 * 1024
-
-# --- Кэш в памяти для частых чтений (каталог/точки/доставка/бренды) ---
-# Эти данные меняются редко (через админку), а читаются на каждом открытии.
-# Кэш убирает лишние round-trip'ы к Neon. При любой правке — _cache_bust().
-_cache = {}
-_cache_lock = threading.Lock()
-
-
-def _cache_get(key):
-    with _cache_lock:
-        item = _cache.get(key)
-        if item and item[0] > time.time():
-            return item[1]
-        if item:
-            _cache.pop(key, None)
-    return None
-
-
-def _cache_set(key, value, ttl):
-    with _cache_lock:
-        _cache[key] = (time.time() + ttl, value)
-    return value
-
-
-def _cache_bust(*prefixes):
-    """Сбросить кэш чтений. Без аргументов — весь; с префиксами — только нужные ключи.
-
-    Точечный сброс важен для заказов: заказ меняет ТОЛЬКО остатки (каталог и статистику),
-    а способы доставки/точки/бренды остаются прежними. Раньше любой заказ чистил всё,
-    и следующий покупатель снова ждал Neon на экране «Способ получения»."""
-    with _cache_lock:
-        if not prefixes:
-            _cache.clear()
-            return
-        for k in [k for k in _cache if k.startswith(prefixes)]:
-            _cache.pop(k, None)
-
 
 def _bg(fn, *args, **kwargs):
     """Запускает побочный эффект (уведомления в Telegram) в фоне — чтобы ответ клиенту
@@ -128,160 +90,10 @@ def _bg(fn, *args, **kwargs):
 #  ПРОВЕРКА ПОДЛИННОСТИ (initData от Telegram)
 # ============================================================
 
-INIT_DATA_MAX_AGE = 24 * 3600      # сутки: дольше одной сессии приложения не живут
-
-
-def validate_init_data(init_data):
-    if not init_data:
-        return None
-    try:
-        pairs = dict(parse_qsl(init_data, keep_blank_values=True))
-    except Exception:
-        return None
-    received_hash = pairs.pop("hash", None)
-    if not received_hash:
-        return None
-    check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
-    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-    calc_hash = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(calc_hash, received_hash):
-        return None
-    # Подпись верна вечно, поэтому одна утёкшая строка входа работала бы всегда:
-    # попала в чужой лог или на скриншот — и это постоянный ключ от аккаунта.
-    # Телеграм выдаёт её при каждом открытии приложения, так что суток хватает.
-    try:
-        issued = int(pairs.get("auth_date", 0))
-    except (TypeError, ValueError):
-        return None
-    if issued and time.time() - issued > INIT_DATA_MAX_AGE:
-        return None
-    try:
-        return json.loads(pairs.get("user", "{}"))
-    except Exception:
-        return None
-
-
-def get_user(init_data):
-    """Возвращает пользователя из initData (или подставного в DEV_MODE)."""
-    user = validate_init_data(init_data)
-    if not user and DEV_MODE:
-        return {"id": DEV_USER_ID, "username": "dev"}
-    return user
-
-
-def get_admin(init_data):
-    """Возвращает пользователя, ТОЛЬКО если он админ. Иначе None (доступ запрещён).
-
-    Кладёт его же в g.admin: журнал действий и проверка города берут админа
-    оттуда, чтобы не разбирать initData повторно на каждом запросе."""
-    user = get_user(init_data)
-    if not user or not user.get("id") or not is_admin(int(user["id"])):
-        return None
-    uid = int(user["id"])
-    user = dict(user, city=admin_city(uid), role=admin_role(uid))
-    g.admin = user
-    return user
-
-
-def _admin_display(admin):
-    return admin.get("username") or admin.get("first_name") or str(admin.get("id"))
-
-
-# Что меняет магазин целиком: витрину всех точек, деньги, права, настройки.
-# Продавцу там делать нечего — даже тому, кто ведёт все точки сразу. Проверка
-# централизованная: раскидать её по шестидесяти маршрутам значит забыть в одном.
-_OWNER_ONLY = (
-    # каталог — общий для всех точек
-    "/api/admin/model", "/api/admin/brand", "/api/admin/category",
-    "/api/admin/photo",                        # фото товара и галерея модели
-    # деньги покупателей
-    "/api/admin/grant", "/api/admin/coins/", "/api/admin/wheel/",
-    # Весь розыгрыш целиком — правилом, а не перечислением: новая ручка
-    # («начать розыгрыш») однажды уже не попала бы в список.
-    "/api/admin/promo", "/api/admin/raffle/",
-    # люди
-    "/api/admin/users", "/api/admin/user/delete", "/api/admin/referral",
-    "/api/admin/customer",          # история покупок и телефон — по всем точкам
-    "/api/admin/staff/", "/api/admin/log",
-    # заявки на подтверждение: решает их владелец. Маршруты и сами это проверяют,
-    # но пусть правило будет и здесь — в одном месте видно всё, что не продавцу.
-    "/api/admin/requests", "/api/admin/request/",
-    # устройство магазина
-    "/api/admin/location", "/api/admin/delivery", "/api/admin/point",
-    "/api/admin/settings/update", "/api/admin/stats",
-    # Отзыв виден на всех точках, поэтому публиковать и удалять — владельцу.
-    # Ответить продавец может: это его разговор с покупателем.
-    "/api/admin/review/decide", "/api/admin/review/delete",
-)
-# Ровно этот путь, без вложенных: /api/admin/product заводит товар мимо
-# ассортимента (владельцу), а /api/admin/product/update — это цена на точке
-# (продавцу), и по префиксу их не различить.
-_OWNER_ONLY_EXACT = {
-    "/api/admin/product",
-    "/api/admin/promos",      # коды со статистикой: сколько выручки принёс каждый
-    "/api/admin/raffle",      # настройка розыгрыша
-    "/api/admin/settings",    # реквизиты и правила магазина
-    "/api/admin/staff",       # кто ещё работает и с какими правами
-}
-# Единственное общее чтение, оставленное продавцу: ассортимент. Без него он не
-# завезёт модель на свою точку. Всё остальное про магазин целиком — у владельца.
-_OWNER_ONLY_READS = {"/api/admin/models"}
-# Техническое: про программу, а не про магазин.
-_DEV_ONLY = ("/api/admin/stats/reset",)
-
-
-@app.before_request
-def _guard_owner_only():
-    path = request.path
-    if not path.startswith("/api/admin/") or path in _OWNER_ONLY_READS:
-        return None
-    dev_only = path in _DEV_ONLY
-    if not dev_only and path not in _OWNER_ONLY_EXACT \
-            and not any(path.startswith(p) for p in _OWNER_ONLY):
-        return None
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData") or request.form.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    if dev_only and admin.get("role") != "dev":
-        return jsonify({"ok": False, "error": "dev_only",
-                        "message": "Техническое действие — только у разработчика."}), 403
-    if admin.get("role") not in ("dev", "owner"):
-        return jsonify({"ok": False, "error": "owner_only",
-                        "message": "Это меняет магазин целиком — только у владельца."}), 403
-    return None
-
-
-def may_city(admin, city):
-    """Продавец точки работает со своей точкой. Пустой город — продавец всех
-    точек (и владелец, у которого точки нет по определению)."""
-    scope = (admin or {}).get("city") or ""
-    return not scope or scope == city
-
-
-def _foreign():
-    return jsonify({"ok": False, "error": "other_city",
-                    "message": "Это товар другой точки."}), 403
-
-
-def deny_city(admin, city):
-    """Готовый ответ 403, если точка чужая, иначе None — чтобы в маршруте была
-    одна строчка, а не четыре одинаковых на каждый эндпоинт."""
-    return None if may_city(admin, city) else _foreign()
-
-
-def deny_product(admin, pid):
-    """То же, но город берётся у самого товара."""
-    if not (admin or {}).get("city"):
-        return None                      # полный доступ — читать товар незачем
-    p = db.get_product(pid)
-    return None if (p and may_city(admin, p["city"])) else _foreign()
-
-
 def _notify_supers_request(rid, admin, summary):
     """Шлёт супер-админам запрос на подтверждение с кнопками Разрешить/Отклонить."""
     text = (f"🔐 Запрос #{rid} на подтверждение\n"
-            f"От админа: {_admin_display(admin)} (id {admin['id']})\n\n{summary}")
+            f"От админа: {auth._admin_display(admin)} (id {admin['id']})\n\n{summary}")
     kb = telebot.types.InlineKeyboardMarkup()
     kb.add(telebot.types.InlineKeyboardButton("✅ Разрешить", callback_data=f"areq:ok:{rid}"),
            telebot.types.InlineKeyboardButton("✖️ Отклонить", callback_data=f"areq:no:{rid}"))
@@ -297,7 +109,7 @@ def _gate(admin, action, payload, summary):
     if is_super_admin(int(admin["id"])):
         return jsonify({"ok": True, "pending": False,
                         "result": notifications.run_admin_request(tg, action, payload)})
-    rid = db.create_admin_request(int(admin["id"]), _admin_display(admin), action, payload, summary)
+    rid = db.create_admin_request(int(admin["id"]), auth._admin_display(admin), action, payload, summary)
     _notify_supers_request(rid, admin, summary)
     return jsonify({"ok": True, "pending": True, "request_id": rid})
 
@@ -306,7 +118,7 @@ def _gate(admin, action, payload, summary):
 def api_admin_requests_pending():
     """Список ожидающих заявок — только супер-админ."""
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id") or not is_super_admin(int(user["id"])):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     rows = db.list_admin_requests("pending")
@@ -319,7 +131,7 @@ def api_admin_requests_pending():
 def api_admin_request_decide():
     """Супер-админ разрешает/отклоняет заявку из приложения."""
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id") or not is_super_admin(int(user["id"])):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -397,7 +209,7 @@ def _bust_cache_on_write(resp):
     if request.method == "POST" and 200 <= resp.status_code < 300:
         keys = _WRITE_PATHS.get(request.path)
         if keys is not None:
-            _cache_bust(*keys)
+            cache.bust(*keys)
             # Остаток мог измениться где угодно: правка товара, замена вкусов,
             # отклонение заказа. Ловим это в ОДНОМ месте, а не в каждом маршруте
             # — иначе новый способ менять склад однажды забудут сюда вписать.
@@ -434,7 +246,7 @@ def _write_admin_log(resp):
     try:
         src = request.get_json(silent=True) or request.form or {}
         parts = [f"{k}={str(src[k])[:40]}" for k in _LOG_FIELDS if k in src and src[k] not in ("", None)]
-        db.log_admin_action(int(admin["id"]), _admin_display(admin),
+        db.log_admin_action(int(admin["id"]), auth._admin_display(admin),
                             request.path.replace("/api/admin/", ""), " · ".join(parts))
     except Exception as e:
         print(f"Журнал действий: {e}")
@@ -468,7 +280,7 @@ def api_notify_me():
     """«Сообщите, когда появится». Раньше на карточке отсутствующего товара
     покупателю было нечего нажать — он просто уходил."""
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "no_user"}), 403
     try:
@@ -639,7 +451,7 @@ def health():
 @app.route("/api/me", methods=["POST"])
 def api_me():
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -683,7 +495,7 @@ def api_me():
 @app.route("/api/age", methods=["POST"])
 def api_age():
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     db.set_age_ok(int(user["id"]))
@@ -698,7 +510,7 @@ def api_my_settings():
     заказе остаётся сменяемым: сегодня человеку удобна одна точка, завтра
     другая, и лезть ради этого в настройки он не станет."""
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -750,7 +562,7 @@ def api_promo_check():
     """Проверить код до оформления, чтобы покупатель сразу видел скидку.
     Заказ всё равно пересчитает всё заново — это только показ."""
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     try:
@@ -771,7 +583,7 @@ def api_reminders():
     уйти, кончается не жалобой, а блокировкой бота — и тогда покупатель потерян
     вместе со всеми будущими заказами."""
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     on = bool(data.get("on"))
@@ -809,7 +621,7 @@ def _review_author(r):
 def api_my_reviews():
     """Что этот покупатель может оценить и что уже написал."""
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -822,7 +634,7 @@ def api_my_reviews():
 def api_review():
     """Оставить отзыв. Право даёт покупка, а не желание высказаться."""
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -864,7 +676,7 @@ def _notify_new_review(review_id):
 def api_admin_reviews():
     """Отзывы для админа: очередь на модерацию, опубликованные, скрытые."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     status = (data.get("status") or "pending").strip()
@@ -907,7 +719,7 @@ def _review_in_scope(admin, review):
 def api_admin_review_delete():
     """Удалить отзыв насовсем. «Скрыть» оставляет его в базе — это для мусора."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         rid = int(data.get("id"))
@@ -922,7 +734,7 @@ def api_admin_review_delete():
 def api_admin_review_reply():
     """Ответ магазина под отзывом. Пустой текст убирает ответ."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -944,7 +756,7 @@ def api_admin_review_reply():
 def api_admin_review_decide():
     """Опубликовать отзыв или скрыть его."""
     data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         rid = int(data.get("id"))
@@ -956,29 +768,6 @@ def api_admin_review_decide():
     return jsonify({"ok": True, "status": status})
 
 
-def _json_etag(payload):
-    """JSON со сверкой версии: пока данные не менялись, браузер получает 304.
-
-    Витрина и справочники перекачивались целиком при каждом открытии приложения,
-    хотя меняются редко. Хэш считается от готового тела ответа, поэтому «не
-    менялись» здесь значит буквально это — отдать устаревшее нельзя.
-    """
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    # Метка версии зависит и от сжатия: ниже ответ может уйти gzip'ом, и одна
-    # метка на два разных тела — это шанс однажды получить от прокси не тот
-    # вариант, который просили.
-    gz = "gzip" in request.headers.get("Accept-Encoding", "")
-    etag = '"%s%s"' % (hashlib.md5(body.encode("utf-8")).hexdigest(), "-gz" if gz else "")
-    if request.headers.get("If-None-Match") == etag:
-        resp = Response(status=304)
-    else:
-        resp = Response(body, content_type="application/json")
-    resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["Vary"] = "Accept-Encoding"
-    return resp
-
-
 # ============================================================
 #  ЛОКАЦИИ (точки продаж)
 # ============================================================
@@ -987,25 +776,25 @@ def _json_etag(payload):
 @app.route("/api/categories")
 def api_categories():
     """Категории товара — витрина строит по ним фильтры, админка формы."""
-    cached = _cache_get("categories")
+    cached = cache.get("categories")
     if cached is None:
         by_cat = {}
         for s in db.list_category_specs():
             by_cat.setdefault(s["category"], []).append(s)
-        cached = _cache_set("categories", [{"code": c["code"], "name": c["name"],
+        cached = cache.put("categories", [{"code": c["code"], "name": c["name"],
                                             "emoji": c["emoji"] or "", "sort": c["sort"],
                                             # Вкусы есть не у всего: у картриджей их нет,
                                             # а у жидкостей товар без них не завести.
                                             "has_flavors": bool(c.get("has_flavors")),
                                             "specs": by_cat.get(c["code"], [])}
                                            for c in db.list_categories()], 300)
-    return _json_etag(cached)
+    return cache.json_etag(cached)
 
 
 @app.route("/api/also-bought")
 def api_also_bought():
     """Что покупали вместе — для подсказки в корзине. Считается по выданным заказам."""
-    cached = _cache_get("also_bought")
+    cached = cache.get("also_bought")
     if cached is None:
         try:
             data = db.also_bought()
@@ -1014,7 +803,7 @@ def api_also_bought():
             print(f"Не удалось посчитать совместные покупки: {e}")
         # Ключи в JSON всё равно станут строками — приводим сразу, чтобы фронт
         # не гадал, каким типом искать.
-        cached = _cache_set("also_bought", {str(k): v for k, v in data.items()}, 600)
+        cached = cache.put("also_bought", {str(k): v for k, v in data.items()}, 600)
     return jsonify(cached)
 
 
@@ -1037,7 +826,7 @@ def _delivery_json(m):
 def _all_products_payload():
     """Полный список товаров (все точки). Кэш 30с — витрина открывается без похода в базу.
     Заказ всё равно проверяет остаток по живой базе, так что кратковременный лаг склада не опасен."""
-    cached = _cache_get("products")
+    cached = cache.get("products")
     if cached is not None:
         return cached
     variants_by = {}
@@ -1099,7 +888,7 @@ def _all_products_payload():
             # отдаём полноразмерную: витрина в любом случае что-то покажет.
             "thumb_url": (f"/api/photo?file_id={p['photo_thumb'] or p['photo']}" if p["photo"] else None),
         })
-    return _cache_set("products", out, 30)
+    return cache.put("products", out, 30)
 
 
 @app.route("/api/products")
@@ -1113,7 +902,7 @@ def api_products():
     out = [_public_product(p) for p in _all_products_payload() if not p["hidden"]]
     if city:
         out = [p for p in out if p["city"] == city]
-    return _json_etag(out)
+    return cache.json_etag(out)
 
 
 # Что в товаре не для покупателя: закупка (наша маржа), число ждущих
@@ -1308,9 +1097,9 @@ def _photo_not_modified(file_id):
 def _payment_info():
     """Реквизиты оплаты: из настроек магазина, иначе — значение из config.
     Кэшируем: настройки меняются раз в год, а читались на каждом оформлении заказа."""
-    cached = _cache_get("settings:payment_info")
+    cached = cache.get("settings:payment_info")
     if cached is None:
-        cached = _cache_set("settings:payment_info", db.get_setting("payment_info", PAYMENT_INFO), 300)
+        cached = cache.put("settings:payment_info", db.get_setting("payment_info", PAYMENT_INFO), 300)
     return cached
 
 
@@ -1320,38 +1109,38 @@ ORDERS_DONE_MIN = 15
 
 
 def _orders_done():
-    cached = _cache_get("orders_done")
+    cached = cache.get("orders_done")
     if cached is None:
         try:
             n = db.issued_orders_count()
         except Exception:
             n = 0
-        cached = _cache_set("orders_done", n if n >= ORDERS_DONE_MIN else 0, 300)
+        cached = cache.put("orders_done", n if n >= ORDERS_DONE_MIN else 0, 300)
     return cached
 
 
 def _free_delivery_from():
     """С какой суммы доставка бесплатна. 0 = порога нет.
     Кэшируем: читается на каждом оформлении, а меняется раз в год."""
-    cached = _cache_get("settings:free_delivery_from")
+    cached = cache.get("settings:free_delivery_from")
     if cached is None:
         try:
             val = float(db.get_setting("free_delivery_from", 0) or 0)
         except (TypeError, ValueError):
             val = 0.0
-        cached = _cache_set("settings:free_delivery_from", max(0.0, val), 300)
+        cached = cache.put("settings:free_delivery_from", max(0.0, val), 300)
     return cached
 
 
 def _confirm_minutes():
     """Через сколько минут продавец подтверждает: из настроек, иначе — из config."""
-    cached = _cache_get("settings:confirm_minutes")
+    cached = cache.get("settings:confirm_minutes")
     if cached is None:
         try:
             val = int(db.get_setting("confirm_minutes", CONFIRM_MINUTES))
         except (TypeError, ValueError):
             val = CONFIRM_MINUTES
-        cached = _cache_set("settings:confirm_minutes", val, 300)
+        cached = cache.put("settings:confirm_minutes", val, 300)
     return cached
 
 
@@ -1363,7 +1152,7 @@ _support_last = {}             # uid -> время последнего сооб
 def api_support():
     """Клиент пишет в поддержку — доставляем сообщение менеджеру(ам) через бота."""
     data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     text = _text(data.get("text"), 2000)
@@ -1408,7 +1197,7 @@ def api_support():
 def api_admin_message():
     """Админ пишет клиенту — доставляем сообщение клиенту через бота."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -1470,7 +1259,7 @@ def _notify_client(user_id, text):
 
 def _super(data):
     """Проверка «это супер-админ» — общая для всех операций с правами."""
-    user = get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id") or not is_super_admin(int(user["id"])):
         return None
     return user

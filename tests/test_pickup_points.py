@@ -3,7 +3,9 @@
 Главное, что проверяем: точка сверяется со списком города. Иначе в заказ попадёт
 любой присланный текст, и продавец поедет по несуществующему адресу.
 """
-from _common import db, client, server, Checker, as_user, as_admin, deny_admin
+from _common import db, client, Checker, as_user, as_admin, deny_admin
+
+import cache
 
 
 BUYER = 7701
@@ -15,7 +17,7 @@ def _clean():
     cur.execute("DELETE FROM orders")
     cur.execute("DELETE FROM delivery_methods")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def run():
@@ -52,7 +54,7 @@ def run():
     c2 = Checker("Заказ с выбором точки")
     as_admin()
     db.add_delivery_method("Минск", "Самовывоз", False, "", "", 0, True, 0, needs_point=True)
-    server._cache_bust()
+    cache.bust()
     method = db.get_delivery_methods("Минск")[0]
     c2("флаг «выбирает точку» сохранён", bool(method["needs_point"]))
 
@@ -145,7 +147,7 @@ def run_settings():
     c("у способа галочка не включена", not method["needs_point"])
     pid = db.add_product("Минск", "pods", "БезГалочкиПод", 10.0, 5)
     db.set_age_ok(BUYER)
-    server._cache_bust()
+    cache.bust()
     r = client.post("/api/order", json={"initData": "x", "city": "Минск", "delivery_method_id": method["id"],
                                         "payment_method": "cash", "items": [{"id": pid, "qty": 1}]})
     c("без выбора точки заказ не проходит", r.status_code == 400 and r.get_json()["error"] == "no_point")

@@ -7,13 +7,15 @@ server_shop.py — устройство магазина: точки, спосо
 Две ручки отсюда — единственные, открытые всем: список точек и способы
 получения нужны покупателю ещё до того, как он что-то выбрал.
 
-Помощники берутся ЧЕРЕЗ модуль (server.get_admin()), а Flask и база
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin()), а Flask и база
 импортируются напрямую — это внешние библиотеки, а не состояние сервера.
 """
 
 from flask import jsonify, request
 
 import config
+import cache
+import auth
 import db
 import server
 from config import CITIES, SUPER_ADMIN_IDS, is_super_admin
@@ -21,11 +23,11 @@ from config import CITIES, SUPER_ADMIN_IDS, is_super_admin
 
 @server.app.route("/api/locations")
 def api_locations():
-    cached = server._cache_get("locations")
+    cached = cache.get("locations")
     if cached is None:
-        cached = server._cache_set("locations",
+        cached = cache.put("locations",
                             [{"id": r["id"], "name": r["name"]} for r in db.get_locations()], 300)
-    return server._json_etag(cached)
+    return cache.json_etag(cached)
 
 
 @server.app.route("/api/delivery")
@@ -37,9 +39,9 @@ def api_delivery():
     оформления должна открываться мгновенно."""
     city = server._text(request.args.get("city"))
     key = f"delivery:{city}"
-    cached = server._cache_get(key)
+    cached = cache.get(key)
     if cached is None:
-        cached = server._cache_set(key, {
+        cached = cache.put(key, {
             "methods": [server._delivery_json(m) for m in db.get_delivery_methods(city)],
             "points": [{"id": p["id"], "address": p["address"], "note": p["note"] or ""}
                        for p in db.get_pickup_points(city)],
@@ -53,7 +55,7 @@ def api_delivery():
 def api_admin_point_add():
     """Добавить точку самовывоза городу."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     city = server._text(data.get("city"))
     address = server._text(data.get("address"))
@@ -67,7 +69,7 @@ def api_admin_point_add():
 @server.app.route("/api/admin/point/update", methods=["POST"])
 def api_admin_point_update():
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         pid = int(data.get("id"))
@@ -85,7 +87,7 @@ def api_admin_point_delete():
     """Удаление точки не трогает прежние заказы: адрес в них сохранён строкой,
     поэтому продавец по-прежнему видит, куда человек приедет."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         pid = int(data.get("id"))
@@ -162,7 +164,7 @@ def api_admin_staff_remove():
 def api_admin_location_add():
     """Добавить локацию (точку продаж)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     name = server._text(data.get("name"))
     if not name:
@@ -175,7 +177,7 @@ def api_admin_location_add():
 def api_admin_delivery_add():
     """Добавить способ получения к точке."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     city = server._text(data.get("city"))
     name = server._text(data.get("name"))
@@ -202,7 +204,7 @@ def api_admin_delivery_add():
 def api_admin_delivery_update():
     """Правка способа получения на месте (по id)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         mid = int(data.get("id"))
@@ -231,7 +233,7 @@ def api_admin_delivery_update():
 def api_admin_delivery_delete():
     """Удалить способ получения."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         mid = int(data.get("id"))
@@ -245,7 +247,7 @@ def api_admin_delivery_delete():
 def api_admin_location_delete():
     """Удалить локацию. Нельзя, если в ней есть товары."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         lid = int(data.get("id"))

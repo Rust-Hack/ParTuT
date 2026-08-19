@@ -9,7 +9,7 @@ server_catalog.py — админка ассортимента: товары, м�
 всех точек, им распоряжается владелец; цена и остаток на точке — дело продавца.
 Проверяет это общий страж по списку путей в server.py, а не эти ручки.
 
-Помощники берутся ЧЕРЕЗ модуль (server.get_admin(), server._text()), а Flask и
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), server._text()), а Flask и
 база импортируются напрямую — это внешние библиотеки, а не состояние сервера.
 """
 
@@ -17,6 +17,8 @@ import json
 
 from flask import jsonify, request
 
+import cache
+import auth
 import db
 import server
 
@@ -24,7 +26,7 @@ import server
 @server.app.route("/api/admin/category", methods=["POST"])
 def api_admin_category_add():
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     name = server._text(data.get("name"))
     if not name:
@@ -38,7 +40,7 @@ def api_admin_category_add():
 @server.app.route("/api/admin/category/update", methods=["POST"])
 def api_admin_category_update():
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     code = server._text(data.get("code"))
     if code not in db.category_codes():
@@ -54,7 +56,7 @@ def api_admin_category_update():
 def api_admin_category_spec_add():
     """Добавить характеристику категории («Сопротивление, Ом» у расходников)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     category = server._text(data.get("category"))
     if category not in db.category_codes():
@@ -72,7 +74,7 @@ def api_admin_category_spec_add():
 @server.app.route("/api/admin/category/spec/update", methods=["POST"])
 def api_admin_category_spec_update():
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         sid = int(data.get("id"))
@@ -94,7 +96,7 @@ def api_admin_category_spec_delete():
     """Убрать характеристику из категории. Значения у товаров остаются в базе:
     вернули поле — вернулись и они, а удалять чужие данные молча нельзя."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         sid = int(data.get("id"))
@@ -110,7 +112,7 @@ def api_admin_category_delete():
     """Удалить можно только пустую категорию: иначе товары остались бы в разделе,
     которого нет, и пропали бы из витрины молча."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     code = server._text(data.get("code"))
     if code not in db.category_codes():
@@ -130,10 +132,10 @@ def api_admin_category_delete():
 def api_admin_products():
     """То же, но целиком — со снятыми с витрины. Только для админов."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    out = [p for p in server._all_products_payload() if server.may_city(admin, p["city"])]
+    out = [p for p in server._all_products_payload() if auth.may_city(admin, p["city"])]
     return jsonify({"ok": True, "products": out})
 
 
@@ -141,7 +143,7 @@ def api_admin_products():
 def api_admin_product_specs():
     """Сохранить характеристики товара (все разом)."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -151,7 +153,7 @@ def api_admin_product_specs():
     p = db.get_product(pid)
     if not p:
         return jsonify({"ok": False, "error": "not_found"}), 404
-    deny = server.deny_city(admin, p["city"])
+    deny = auth.deny_city(admin, p["city"])
     if deny:
         return deny
     _save_specs(pid, p["category"], data.get("specs"))
@@ -188,7 +190,7 @@ def _закупка(data):
 def api_admin_add():
     """Добавить товар из приложения."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
     city = data.get("city")
@@ -245,7 +247,7 @@ def api_admin_add():
 def api_admin_update():
     """Изменить одно поле товара (price / stock / name / description / is_hit)."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
@@ -253,7 +255,7 @@ def api_admin_update():
         pid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    deny = server.deny_product(admin, pid)
+    deny = auth.deny_product(admin, pid)
     if deny:
         return deny
 
@@ -277,7 +279,7 @@ def api_admin_update():
                 return jsonify({"ok": False, "error": "bad_value"}), 400
             # Перенос — это и есть смена точки: чужую нельзя ни как источник,
             # ни как цель, иначе товар уезжает туда, где продавец не отвечает.
-            deny = server.deny_city(admin, value)
+            deny = auth.deny_city(admin, value)
             if deny:
                 return deny
             cur = db.get_product(pid)
@@ -303,14 +305,14 @@ def api_admin_update():
 def api_admin_variants():
     """Заменяет список вкусов товара целиком (добавить/убрать/изменить остаток)."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         pid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    deny = server.deny_product(admin, pid)
+    deny = auth.deny_product(admin, pid)
     if deny:
         return deny
 
@@ -331,14 +333,14 @@ def api_admin_variants():
 def api_admin_delete():
     """Удалить товар."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         pid = int(data.get("id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    deny = server.deny_product(admin, pid)
+    deny = auth.deny_product(admin, pid)
     if deny:
         return deny
     db.delete_variants(pid)
@@ -350,7 +352,7 @@ def api_admin_delete():
 def api_admin_photo():
     """Загрузить фото товара. Отправляем картинку админу (тихо), чтобы получить file_id."""
     init_data = request.form.get("initData", "")
-    user = server.get_admin(init_data)
+    user = auth.get_admin(init_data)
     if not user:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -377,7 +379,7 @@ def api_admin_photo():
 @server.app.route("/api/admin/photo/add", methods=["POST"])
 def api_admin_photo_add():
     """Добавить фото в галерею МОДЕЛИ (главное фото при этом не меняется)."""
-    user = server.get_admin(request.form.get("initData", ""))
+    user = auth.get_admin(request.form.get("initData", ""))
     if not user:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -409,7 +411,7 @@ def api_admin_photo_add():
 def api_admin_photo_delete():
     """Убрать фото из галереи. Главное фото (id 0) так не удаляется — его заменяют."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         photo_id = int(data.get("photo_id"))
@@ -424,7 +426,7 @@ def api_admin_photo_delete():
 def api_admin_models():
     """Ассортимент: что магазин вообще продаёт (независимо от наличия на точках)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     models = db.list_models()
     for m in models:
@@ -441,7 +443,7 @@ def api_admin_models():
 def api_admin_model_save():
     """Создать или изменить модель. Правка расходится по всем её товарам."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     category = server._text(data.get("category"))
     name = server._text(data.get("name"))
@@ -483,7 +485,7 @@ def api_admin_model_hide():
     «Больше не возим» — это не «этого не было»: удаление уносит остаток,
     историю движений и отзывы, а снятие оставляет всё на месте."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         mid = int(data.get("id"))
@@ -500,7 +502,7 @@ def api_admin_model_delete():
     """Убрать модель из ассортимента. Товары на точках остаются: их снимают
     с продажи отдельно, иначе одно нажатие обнуляло бы все точки разом."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         mid = int(data.get("id"))
@@ -517,7 +519,7 @@ def api_admin_model_delete():
 @server.app.route("/api/admin/model/photo", methods=["POST"])
 def api_admin_model_photo():
     """Фото модели — оно же появляется у всех её товаров на точках."""
-    user = server.get_admin(request.form.get("initData", ""))
+    user = auth.get_admin(request.form.get("initData", ""))
     if not user:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -546,7 +548,7 @@ def api_admin_model_photo():
 def api_admin_product_from_model():
     """Завоз: модель появляется на точке с ценой и остатком."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -559,7 +561,7 @@ def api_admin_product_from_model():
     if not m or city not in db.location_names():
         return jsonify({"ok": False, "error": "bad_data"}), 400
     # Завозить на свою точку продавец вправе — это его работа. На чужую нет.
-    deny = server.deny_city(admin, city)
+    deny = auth.deny_city(admin, city)
     if deny:
         return deny
     # Один товар на точке — одна запись. Иначе на витрине две одинаковые
@@ -596,7 +598,7 @@ def api_admin_product_from_model():
 def api_admin_brand():
     """Создать или обновить бренд (если пришёл id — обновляем)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     name = server._text(data.get("name"))
     # Пустая категория — бренд общий: Vaporesso делает и поды, и картриджи,
@@ -633,7 +635,7 @@ def api_admin_brand():
 @server.app.route("/api/admin/brand/delete", methods=["POST"])
 def api_admin_brand_delete():
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         bid = int(data.get("id"))
@@ -673,9 +675,9 @@ def _save_specs(product_id, category, values):
 def api_brands():
     category = server._text(request.args.get("category")) or None
     key = f"brands:{category or 'all'}"
-    cached = server._cache_get(key)
+    cached = cache.get(key)
     if cached is not None:
-        return server._json_etag(cached)
+        return cache.json_etag(cached)
     out = []
     for b in db.get_brands(category):
         try:
@@ -683,17 +685,17 @@ def api_brands():
         except Exception:
             flavors = []
         out.append({"id": b["id"], "name": b["name"], "category": b["category"] or "", "flavors": flavors})
-    return server._json_etag(server._cache_set(key, out, 300))
+    return cache.json_etag(cache.put(key, out, 300))
 
 
 @server.app.route("/api/flavors")
 def api_flavors():
     """Все вкусы, которые уже встречались — для подсказок при вводе.
     Без них одна и та же «Мята» набирается по-разному и дробит фильтр."""
-    cached = server._cache_get("flavors")
+    cached = cache.get("flavors")
     if cached is None:
-        cached = server._cache_set("flavors", db.known_flavors(), 300)
-    return server._json_etag(cached)
+        cached = cache.put("flavors", db.known_flavors(), 300)
+    return cache.json_etag(cached)
 
 
 def _clean_specs(category, values):

@@ -15,7 +15,7 @@ server_orders.py — заказ от корзины до выдачи.
 возникает, — db.place_order(), одной транзакцией. Здесь же — только разбор
 того, что прислало приложение, и человеческие ответы.
 
-Помощники берутся ЧЕРЕЗ модуль (server.get_admin(), server._payment_info()),
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), server._payment_info()),
 а Flask, база и уведомления импортируются напрямую.
 """
 
@@ -23,6 +23,8 @@ import json
 
 from flask import jsonify, request
 
+import cache
+import auth
 import db
 import notifications
 import server
@@ -90,7 +92,7 @@ def _order_reply(order):
 @server.app.route("/api/order", methods=["POST"])
 def api_order():
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
 
@@ -171,7 +173,7 @@ def api_order():
     # Что-то разобрали или осталось меньше — не оформляем втихую. Приложение по
     # этому ответу поправит корзину, покажет сообщение и даст оформить заново.
     if gone or short:
-        server._cache_bust("products")
+        cache.bust("products")
         return jsonify({"ok": False, "error": "sold_out",
                         "name": (gone or short)[0]["name"],
                         "gone": gone, "short": short,
@@ -271,7 +273,7 @@ def api_order():
     except db.OutOfStock as e:
         # Пока человек оформлял, последнюю штуку забрал кто-то другой. Лучше
         # честно сказать сейчас, чем продать то, чего нет, и отказывать при выдаче.
-        server._cache_bust("products")
+        cache.bust("products")
         return jsonify({"ok": False, "error": "sold_out", "name": e.name,
                         "message": f"«{e.name}» разобрали, пока вы оформляли заказ. "
                                    "Обновите корзину — остальное на месте."}), 409
@@ -313,7 +315,7 @@ def api_order():
 def api_receipt():
     """Принимает фото чека (файлом), подтверждает клиенту, шлёт заказ продавцу города."""
     init_data = request.form.get("initData", "")
-    user = server.get_user(init_data)
+    user = auth.get_user(init_data)
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     user_id = int(user["id"])
@@ -359,7 +361,7 @@ def api_receipt():
 def api_order_cancel():
     """Клиент отменяет свой заказ ДО подтверждения продавцом (статус new/paid)."""
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     try:
@@ -384,7 +386,7 @@ def api_order_cancel():
 def api_my_orders():
     """История заказов текущего клиента (для вкладки Профиль)."""
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     orders = [_order_json(o, data.get("initData", "")) for o in db.get_orders_by_user(int(user["id"]))]
@@ -508,10 +510,10 @@ def _след_платежа(o):
 def api_admin_orders():
     """Заказы для админ-панели (новые сверху). Продавец города видит свои."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    orders = [o for o in db.get_orders() if server.may_city(admin, o["city"])]
+    orders = [o for o in db.get_orders() if auth.may_city(admin, o["city"])]
     return jsonify({"ok": True, "orders": [_order_json(o, data.get("initData", "")) for o in orders]})
 
 
@@ -519,7 +521,7 @@ def api_admin_orders():
 def api_admin_today():
     """Сводка дня для входа в управление: что ждёт и чем кончился день."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     scope = admin.get("city") or None
@@ -557,7 +559,7 @@ def _сколько_пришло(сырое):
 def api_admin_order_status():
     """Продавец меняет статус заказа из приложения (confirm / issued / reject)."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -568,7 +570,7 @@ def api_admin_order_status():
     order = db.get_order(oid)
     if not order:
         return jsonify({"ok": False, "error": "not_found"}), 404
-    deny = server.deny_city(admin, order["city"])
+    deny = auth.deny_city(admin, order["city"])
     if deny:
         return deny
 
@@ -623,7 +625,7 @@ def _reject_text(oid, reason, note):
 def api_admin_order_items():
     """Продавец правит количества в заказе: «осталась одна» или «добавьте ещё»."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -634,7 +636,7 @@ def api_admin_order_items():
     order = db.get_order(oid)
     if not order:
         return jsonify({"ok": False, "error": "not_found"}), 404
-    deny = server.deny_city(admin, order["city"])
+    deny = auth.deny_city(admin, order["city"])
     if deny:
         return deny
 

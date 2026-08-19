@@ -16,6 +16,8 @@ import itertools
 
 from _common import db, client, server, Checker, as_user, as_admin
 
+import cache
+
 ПОКУПАТЕЛЬ = 7501
 
 
@@ -26,7 +28,7 @@ def _clean():
     cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
     cur.execute(db._q("DELETE FROM users WHERE user_id = %s"), (ПОКУПАТЕЛЬ,))
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def run():
@@ -40,7 +42,7 @@ def run():
     db.add_promo("СКИДКА10", "percent", 10, 0, None, False)
     db.set_age_ok(ПОКУПАТЕЛЬ)
     старый_порог = db.get_setting("free_delivery_from", 0)
-    server._cache_bust()
+    cache.bust()
 
     c = Checker("Названное, записанное и пересчитанное — одно и то же")
     расхождения = []
@@ -49,7 +51,7 @@ def run():
         for порог, метод, монеты, промо in itertools.product(
                 (0, 50), (самовывоз, доставка), (False, True), ("", "СКИДКА10")):
             db.set_setting("free_delivery_from", порог)
-            server._cache_bust()
+            cache.bust()
             conn = db.connect(); cur = conn.cursor()
             cur.execute(db._q("UPDATE users SET coins = %s WHERE user_id = %s"), (500, ПОКУПАТЕЛЬ))
             conn.commit(); conn.close()
@@ -91,7 +93,7 @@ def run():
         # не работает вовсе: ноль равен нулю.
         c2 = Checker("Порог бесплатной доставки")
         db.set_setting("free_delivery_from", 0)
-        server._cache_bust()
+        cache.bust()
         as_user(ПОКУПАТЕЛЬ, "касса")
         платно = client.post("/api/order", json={
             "initData": "x", "city": "Минск", "delivery_method_id": доставка,
@@ -100,7 +102,7 @@ def run():
         c2("без порога доставка платная", платно.get("fee") == 5.0)
 
         db.set_setting("free_delivery_from", 50)
-        server._cache_bust()
+        cache.bust()
         даром = client.post("/api/order", json={
             "initData": "x", "city": "Минск", "delivery_method_id": доставка,
             "payment_method": "cash", "items": [{"id": pid, "qty": 2}],

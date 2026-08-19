@@ -11,7 +11,9 @@
 """
 import datetime
 
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import cache
 import config
 
 
@@ -21,7 +23,7 @@ def _clean():
         cur.execute(f"DELETE FROM {t}")
     cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _make_old(oid, hours):
@@ -49,7 +51,7 @@ def run():
         db.set_age_ok(6611)
         db.add_coins(6611, 300)
         as_user(6611, "buyer")
-        server._cache_bust()
+        cache.bust()
 
         r = client.post("/api/order", json={"initData": "x", "city": "Минск",
                                             "delivery_method_id": mid,

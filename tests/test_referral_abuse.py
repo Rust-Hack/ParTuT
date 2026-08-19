@@ -11,7 +11,9 @@
     «оформил — получил монеты — отменил» печатает монеты из воздуха;
   • бонус за первый заказ друга даётся один раз, дальше только процент.
 """
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import cache
 
 A, B, C = 8301, 8302, 8303
 
@@ -23,7 +25,7 @@ def _clean():
     cur.execute(db._q("DELETE FROM users WHERE user_id BETWEEN %s AND %s"), (8300, 8399))
     cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _open_app(uid, start=None):
@@ -62,7 +64,7 @@ def run():
     db.add_delivery_method("Минск", "Самовывоз", False, "", "ул. Тест", 0, True, 0)
     mid = db.get_delivery_methods("Минск")[0]["id"]
     pid = db.add_product("Минск", "disposable", "Товар", 10.0, 99)
-    server._cache_bust()
+    cache.bust()
 
     def order_by(uid):
         as_user(uid, f"u{uid}")

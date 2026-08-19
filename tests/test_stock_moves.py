@@ -4,7 +4,9 @@
 делось» ответа не было. Теперь у каждого изменения есть причина, автор и дата,
 а списание считается деньгами по закупочной цене.
 """
-from _common import db, client, server, Checker, as_admin, deny_admin
+from _common import db, client, Checker, as_admin, deny_admin
+
+import cache
 
 
 def _clean():
@@ -12,7 +14,7 @@ def _clean():
     cur.execute("DELETE FROM stock_moves")
     cur.execute("DELETE FROM products")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def run():
@@ -97,7 +99,7 @@ def run():
     c2("Вишня не тронута", вкусы["Вишня"] == 5)
 
     # --- Статистика показывает потери ---
-    server._cache_bust()
+    cache.bust()
     st = client.post("/api/admin/stats", json={"initData": "x", "period": "all"}).get_json()
     c2("потери попали в статистику", any(l["reason"] == "broken" for l in st["stats"]["losses"]))
 

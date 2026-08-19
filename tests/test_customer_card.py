@@ -7,7 +7,9 @@
 """
 import datetime
 
-from _common import db, client, server, Checker, as_admin, deny_admin
+from _common import db, client, Checker, as_admin, deny_admin
+
+import cache
 
 
 BUYER = 9701
@@ -20,7 +22,7 @@ def _clean():
     cur.execute("DELETE FROM products")
     cur.execute(db._q("DELETE FROM users WHERE user_id IN (%s, %s)"), (BUYER, OTHER))
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _order(uid, items, total, status, created=None, username="vasya"):

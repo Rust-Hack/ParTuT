@@ -6,6 +6,8 @@ import io
 
 from _common import db, client, server, Checker, as_admin
 
+import cache
+
 
 class _FakeResp:
     def __init__(self, content):
@@ -94,7 +96,7 @@ def run():
     c2("сохранена полноразмерная", row["photo"] == "fid")
     c2("сохранена копия для сетки", row["photo_thumb"] == "fid_m")
 
-    server._cache_bust()
+    cache.bust()
     p = next(x for x in client.get("/api/products").get_json() if x["id"] == pid)
     c2("в каталог уходит thumb_url", p["thumb_url"] == "/api/photo?file_id=fid_m")
     c2("карточка товара получает полную", p["photo_url"] == "/api/photo?file_id=fid")

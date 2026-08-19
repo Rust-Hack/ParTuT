@@ -16,7 +16,11 @@ UPDATE), и на SQLite её подменяет запись. TEST_DATABASE_URL=
 """
 import threading
 
-from _common import db, client, server, Checker, as_admin
+from _common import db, client, Checker, as_admin
+
+import auth
+
+import cache
 
 UID = 7501
 
@@ -27,7 +31,7 @@ def _clean():
         cur.execute(f"DELETE FROM {t}")
     cur.execute("DELETE FROM delivery_methods WHERE city = 'Минск'")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _setup():
@@ -35,8 +39,8 @@ def _setup():
     mid = db.get_delivery_methods("Минск")[0]["id"]
     pid = db.add_product("Минск", "disposable", "Товар", 10.0, 100)
     db.set_age_ok(UID)
-    server.get_user = lambda init: {"id": UID, "username": "racer"}
-    server._cache_bust()
+    auth.get_user = lambda init: {"id": UID, "username": "racer"}
+    cache.bust()
     return mid, pid
 
 

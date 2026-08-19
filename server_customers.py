@@ -12,12 +12,13 @@ server_customers.py — покупатель глазами магазина: м
 потолком из настроек и только по своему городу. Проверяет это общий страж по
 списку путей в server.py, а не эти ручки.
 
-Помощники берутся ЧЕРЕЗ модуль (server.get_admin(), server._text()), а Flask и
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), server._text()), а Flask и
 база импортируются напрямую.
 """
 
 from flask import jsonify, request
 
+import auth
 import db
 import server
 from config import is_super_admin
@@ -25,7 +26,7 @@ from config import is_super_admin
 def api_bonus():
     """Бонусы клиента: баланс vapecoins, число приглашённых, реферальная ссылка."""
     data = request.get_json(force=True, silent=True) or {}
-    user = server.get_user(data.get("initData", ""))
+    user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
@@ -58,7 +59,7 @@ def api_bonus():
 def api_admin_grant():
     """Начислить пользователю монеты и/или прокруты колеса (по id). Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -93,7 +94,7 @@ def api_admin_order_compensate():
     покупателю Минска, а владелец в заявке видит, о каком заказе речь.
     """
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -104,7 +105,7 @@ def api_admin_order_compensate():
     order = db.get_order(oid)
     if not order:
         return jsonify({"ok": False, "error": "not_found"}), 404
-    denied = server.deny_city(admin, order["city"])
+    denied = auth.deny_city(admin, order["city"])
     if denied:
         return denied
     cap = db.compensation_max()
@@ -124,7 +125,7 @@ def api_admin_order_compensate():
 def api_admin_referrals():
     """Список рефералов текущего админа (для управления/отвязки)."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     rows = db.list_referrals(int(admin["id"]))
@@ -135,7 +136,7 @@ def api_admin_referrals():
 def api_admin_coins_adjust():
     """Изменить баланс монет пользователя на delta (±). Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -153,7 +154,7 @@ def api_admin_coins_adjust():
 def api_admin_users():
     """Список всех пользователей (поиск по id) — для админа (просмотр)."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     users, total = db.list_users(str(data.get("search") or ""))
     for u in users:
@@ -165,7 +166,7 @@ def api_admin_users():
 def api_admin_customer():
     """Карточка покупателя: история заказов, суммы, любимые товары."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server.get_admin(data.get("initData", "")):
+    if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
         target = int(data.get("user_id"))
@@ -182,7 +183,7 @@ def api_admin_customer():
 def api_admin_referral_unlink():
     """Отвязать конкретного реферала по его id. Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:
@@ -198,7 +199,7 @@ def api_admin_referral_unlink():
 def api_admin_referral_clear():
     """Отвязать ВСЕХ рефералов текущего админа. Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     uid = int(admin["id"])
@@ -209,7 +210,7 @@ def api_admin_referral_clear():
 def api_admin_user_delete():
     """Полностью удалить пользователя по id. Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
-    admin = server.get_admin(data.get("initData", ""))
+    admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     try:

@@ -7,7 +7,9 @@
     и «Vaporesso» под картриджи), и в фильтре это выглядело как два бренда;
   • бренд удалялся молча, даже если на нём висели товары.
 """
-from _common import db, client, server, Checker, as_admin, deny_admin
+from _common import db, client, Checker, as_admin, deny_admin
+
+import cache
 
 
 def _clean():
@@ -15,11 +17,11 @@ def _clean():
     cur.execute("DELETE FROM products")
     cur.execute("DELETE FROM brands")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _brands(category=None):
-    server._cache_bust()
+    cache.bust()
     url = "/api/brands" + (f"?category={category}" if category else "")
     return client.get(url).get_json()
 
@@ -76,7 +78,7 @@ def run():
     vid = db.add_product("Минск", "liquid", "Husky Соль", 16.0, 0, brand="Husky")
     db.add_variant(vid, "Дыня", 3)
     db.add_product("Минск", "coils", "Картридж с ароматом", 5.0, 1, flavor="Табак")
-    server._cache_bust()
+    cache.bust()
     flavors = client.get("/api/flavors").get_json()
     c3("вкус из бренда попал в справочник", "Смородина" in flavors)
     c3("вкус из варианта тоже", "Дыня" in flavors)

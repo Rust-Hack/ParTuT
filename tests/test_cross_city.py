@@ -9,7 +9,11 @@
 Проверяем не чтением кода, а попыткой: сервер обязан отказать сам, независимо
 от того, показывает приложение чужой заказ на экране или нет.
 """
-from _common import db, client, server, Checker, real_auth, deny_admin, as_admin
+from _common import db, client, Checker, real_auth, deny_admin, as_admin
+
+import auth
+
+import cache
 import config
 
 OWNER = 7410         # владелец
@@ -21,8 +25,8 @@ BUYER = 7413
 def _as(uid):
     """Настоящая проверка прав, только подменяем, кто стучится."""
     real_auth()
-    server.get_user = lambda init, u=uid: {"id": u, "username": f"u{u}"}
-    server.get_admin = lambda init, u=uid: (
+    auth.get_user = lambda init, u=uid: {"id": u, "username": f"u{u}"}
+    auth.get_admin = lambda init, u=uid: (
         {"id": u, "username": f"u{u}", "role": config.admin_role(u), "city": config.admin_city(u)}
         if config.admin_role(u) else None)
 
@@ -36,7 +40,7 @@ def _clean():
     for t in ("orders", "products"):
         cur.execute(f"DELETE FROM {t}")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def _order(city, pid):

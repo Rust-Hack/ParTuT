@@ -14,6 +14,8 @@
 """
 from _common import db, client, server, Checker, as_user, as_admin, deny_admin, real_auth
 
+import cache
+
 # Тела, которыми стучимся: пустое, мусорное и почти правдоподобное.
 ТЕЛА = [
     {"initData": "x"},
@@ -52,7 +54,7 @@ def _clean():
     for t in ("raffles", "raffle_entries", "admin_requests"):
         cur.execute(f"DELETE FROM {t}")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
 
 
 def run():

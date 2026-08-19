@@ -1,5 +1,7 @@
 """Правка способа доставки на месте: /api/admin/delivery/update."""
-from _common import db, client, server, Checker, as_admin, as_user
+from _common import db, client, Checker, as_admin, as_user
+
+import cache
 
 
 def upd(payload):
@@ -60,7 +62,7 @@ def run_phone():
     pid = db.add_product("Минск", "pods", "ТелефонПод", 20.0, 50)
     db.set_age_ok(4401)
     as_user(4401, "buyer")
-    server._cache_bust()
+    cache.bust()
 
     def заказ(mid, **kw):
         body = {"initData": "x", "city": "Минск", "delivery_method_id": mid,
@@ -83,5 +85,5 @@ def run_phone():
     conn = db.connect(); cur = conn.cursor()
     cur.execute("DELETE FROM orders"); cur.execute("DELETE FROM products")
     conn.commit(); conn.close()
-    server._cache_bust()
+    cache.bust()
     return c.fails

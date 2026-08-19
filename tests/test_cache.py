@@ -1,10 +1,12 @@
 """Кэш чтений: каталог отдаётся из памяти, но сбрасывается при изменениях."""
-from _common import db, client, server, Checker, as_admin, as_user
+from _common import db, client, Checker, as_admin, as_user
+
+import cache
 
 
 def run():
     as_admin()
-    server._cache_bust()
+    cache.bust()
     c = Checker("Кэш каталога + инвалидация")
 
     # чистое состояние
