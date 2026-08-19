@@ -48,7 +48,8 @@ def run():
 
     # --- Товар в новой категории ---
     r = client.post("/api/admin/product", json={"initData": "x", "city": "Минск", "category": new_code,
-                                                "name": "Паучи Ice", "price": "9", "stock": "4"})
+                                                "name": "Паучи Ice", "price": "9", "stock": "4",
+                                                "cost": "5"})
     c("товар заводится в новой категории", (r.get_json() or {}).get("ok"))
     pid = r.get_json()["id"]
     server._cache_bust()
@@ -56,7 +57,10 @@ def run():
       any(p["id"] == pid for p in client.get("/api/products").get_json()))
     c("выдуманная категория отклонена",
       client.post("/api/admin/product", json={"initData": "x", "city": "Минск", "category": "нетакой",
-                                              "name": "Ничто", "price": "1", "stock": "1"}).status_code == 400)
+                                              "name": "Ничто", "price": "1", "stock": "1",
+                                              # закупку кладём намеренно: иначе отказ пришёл бы
+                                              # из-за неё, и проверка категории прошла бы вхолостую
+                                              "cost": "1"}).get_json().get("error") == "bad_data")
     c("перевод товара в выдуманную категорию отклонён",
       client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
                                                      "field": "category", "value": "нетакой"}).status_code == 400)

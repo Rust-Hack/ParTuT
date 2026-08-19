@@ -354,8 +354,19 @@ $("stockInSave").onclick = async () => {
     alertMsg("На этой точке модель уже есть — правьте её в разделе «Товары».");
     return;
   }
+  // Закупку спрашиваем здесь, а не «когда-нибудь потом»: незаполненная,
+  // она навсегда выбрасывает товар из подсчёта прибыли, и отчёт занижает
+  // заработок молча. Ноль принимаем — подарок и образец бывают, — но его
+  // надо вписать руками.
+  const cost = $("stockInCost").value.trim();
+  if (!cost) {
+    alertMsg("Впишите закупочную цену — без неё прибыль по этому товару не посчитается.\n\n" +
+             "Если закупки не было (подарок, образец), поставьте 0.");
+    $("stockInCost").focus();
+    return;
+  }
   const body = { initData, model_id: stockInModel.id, city, price,
-                 cost: $("stockInCost").value.trim(), is_hit: $("stockInHit").checked };
+                 cost, is_hit: $("stockInHit").checked };
   if (stockInModel.flavors.length) {
     body.variants = [...document.querySelectorAll("#stockInFlavors .admrow")]
       .filter(row => row.querySelector(".sifchk").checked)
@@ -741,7 +752,9 @@ async function loadStats() {
     ${(s.losses || []).length ? `<div class="stathead">📉 Списано <span class="stathint">${pl}</span></div><div class="statlist">${
         s.losses.map(l => `<div class="statrow"><span>${esc({broken:"Брак или бой",expired:"Просрочка",lost:"Недостача",gift:"Подарок или образец",fix:"Пересчёт"}[l.reason] || l.reason)}</span><b style="color:var(--danger)">${l.qty} шт${l.money ? ` · ${money(l.money)}` : ""}</b></div>`).join("")
       }</div>` : ""}
-    ${s.revenue_unknown_cost ? `<div class="dnote" style="margin:-6px 0 14px">⚠️ У части товаров не заполнена закупочная цена — выручка на ${money(s.revenue_unknown_cost)} в прибыль не попала. Проставьте закупку в карточках товаров, чтобы цифра стала полной.</div>` : ""}
+    ${s.no_cost_total ? `<div class="dnote" style="margin:-6px 0 14px">⚠️ Без закупочной цены: <b>${s.no_cost_total}</b> ${plural(s.no_cost_total, "товар", "товара", "товаров")}${s.revenue_unknown_cost ? ` — выручка на ${money(s.revenue_unknown_cost)} в прибыль не попала` : ""}.
+      <div class="nocostlist">${s.no_cost.map(p => `<span class="nocostitem">${esc(p.name)} <i>${esc(p.city)}</i></span>`).join("")}${s.no_cost_total > s.no_cost.length ? `<span class="nocostitem">и ещё ${s.no_cost_total - s.no_cost.length}</span>` : ""}</div>
+      Проставьте закупку в карточках этих товаров — тогда прибыль станет настоящей.</div>` : ""}
     ${dayChart(s.daily || [], "revenue", "Выручка по дням", moneyShort)}
     ${dayChart(s.daily || [], "orders", "Заказы по дням", (v) => `${v} шт`)}
     <div class="stathead">🏆 Топ товаров <span class="stathint">${pl}</span></div><div class="statlist">${topRows}</div>

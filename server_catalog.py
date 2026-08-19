@@ -158,6 +158,32 @@ def api_admin_product_specs():
     return jsonify({"ok": True})
 
 
+def _закупка(data):
+    """Закупочная цена: заполнить обязаны, ноль — только осознанно.
+
+    Раньше пустое поле молча означало ноль, и товар навсегда выпадал из
+    подсчёта прибыли: отчёт занижал заработок, а решения о закупке
+    принимались вслепую. Молчание тут дороже отказа.
+
+    Ноль по-прежнему принимаем — подарок, образец, замена по гарантии
+    бывают, — но только если его вписали руками, а не забыли поле.
+    Возвращает (цена, ошибка).
+    """
+    сырое = data.get("cost")
+    if сырое is None or str(сырое).strip() == "":
+        return None, (jsonify({"ok": False, "error": "cost_required",
+                               "message": "Впишите закупочную цену — без неё прибыль по этому "
+                                          "товару не посчитается. Если закупки не было (подарок, "
+                                          "образец), поставьте 0."}), 400)
+    try:
+        цена = float(str(сырое).replace(",", "."))
+    except (TypeError, ValueError):
+        return None, (jsonify({"ok": False, "error": "bad_number"}), 400)
+    if цена < 0:
+        return None, (jsonify({"ok": False, "error": "bad_number"}), 400)
+    return цена, None
+
+
 @server.app.route("/api/admin/product", methods=["POST"])
 def api_admin_add():
     """Добавить товар из приложения."""
@@ -174,12 +200,9 @@ def api_admin_add():
         price = float(str(data.get("price")).replace(",", "."))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_number"}), 400
-    try:
-        # Закупочная цена необязательна: пустое поле = «не знаю», и прибыль по
-        # такому товару честно считается неизвестной, а не нулевой.
-        cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
-    except (TypeError, ValueError):
-        cost = 0.0
+    cost, беда = _закупка(data)
+    if беда:
+        return беда
 
     is_hit = 1 if data.get("is_hit") else 0
     desc = server._text(data.get("description"))
@@ -546,10 +569,9 @@ def api_admin_product_from_model():
         return jsonify({"ok": False, "error": "already_here"}), 400
     if price <= 0:
         return jsonify({"ok": False, "error": "bad_price"}), 400
-    try:
-        cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
-    except (TypeError, ValueError):
-        cost = 0.0
+    cost, беда = _закупка(data)
+    if беда:
+        return беда
     variants = data.get("variants") if isinstance(data.get("variants"), list) else []
     try:
         stock = max(0, int(data.get("stock") or 0))

@@ -2176,9 +2176,18 @@ def get_business_stats(days=None):
                 "avg_check": round(p_rev / p_cnt, 2) if p_cnt else 0,
                 "buyers": p_buyers, "new_users": p_new}
 
+    # Какие именно товары остались без закупочной цены. Предупреждение «выручка
+    # на N Br в прибыль не попала» говорит размер беды, но не говорит, где она:
+    # владелец видел цифру и не знал, что открыть. Теперь знает.
+    cur.execute("""SELECT name, city FROM products
+                    WHERE (cost IS NULL OR cost <= 0) AND (hidden IS NULL OR hidden = 0)
+                    ORDER BY name""")
+    без_закупки = [{"name": r["name"], "city": r["city"]} for r in cur.fetchall()]
+
     conn.close()
     return {
         "period_days": days, "prev": prev,
+        "no_cost": без_закупки[:30], "no_cost_total": len(без_закупки),
         "revenue": round(revenue, 2), "orders": issued_count, "avg_check": round(avg_check, 2),
         "profit": round(profit, 2), "margin": round(margin, 1),
         "revenue_unknown_cost": round(revenue_unknown, 2),   # выручка без закупочной цены

@@ -797,3 +797,16 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 }
 @keyframes logoOut { to { opacity: 0; } }
 @keyframes splashOut { to { opacity: 0; visibility: hidden; } }
+
+/* Пометка «это поле обязательно». Имя намеренно не .req — тот класс уже занят
+   карточкой-блоком, и подпись у поля унаследовала бы её фон и отступы. */
+.mustfill { font-size: 11px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
+            color: var(--danger); opacity: .85; margin-left: 6px; }
+
+/* Список товаров без закупочной цены — прямо в предупреждении. Раньше владелец
+   видел размер потери и не знал, какие карточки открывать. */
+.nocostlist { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.nocostitem { background: var(--surface); border-radius: 10px; padding: 3px 8px;
+              font-size: 12px; line-height: 1.5; white-space: nowrap;
+              max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.nocostitem i { opacity: .6; font-style: normal; }

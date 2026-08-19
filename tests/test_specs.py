@@ -56,7 +56,7 @@ def run():
     # --- Товар с характеристиками ---
     r = client.post("/api/admin/product", json={
         "initData": "x", "city": "Минск", "category": "coils", "name": "Картридж XROS",
-        "price": "12", "stock": "10", "brand": "Vaporesso",
+        "price": "12", "cost": "7", "stock": "10", "brand": "Vaporesso",
         "specs": {"resistance": "0.8", "volume": "2", "fit": "XROS 2, XROS 3", "kind": "Картридж",
                   "power": "40"}})       # power у расходников нет — не должен сохраниться
     c("товар создан", (r.get_json() or {}).get("ok"))

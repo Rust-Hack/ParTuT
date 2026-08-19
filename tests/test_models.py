@@ -52,7 +52,7 @@ def run():
     r1 = client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": mid,
                                                             "city": "Минск", "price": "12", "cost": "7", "stock": "10"})
     r2 = client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": mid,
-                                                            "city": "Туров", "price": "14", "stock": "3"})
+                                                            "city": "Туров", "price": "14", "cost": "8", "stock": "3"})
     c("завоз на первую точку", (r1.get_json() or {}).get("ok"))
     c("завоз на вторую точку", (r2.get_json() or {}).get("ok"))
     p1, p2 = r1.get_json()["id"], r2.get_json()["id"]
@@ -137,7 +137,7 @@ def run():
 
     # Перенос товара на точку, где эта модель уже стоит
     client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": lid,
-                                                       "city": "Туров", "price": "17"})
+                                                       "city": "Туров", "price": "17", "cost": "9"})
     r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
                                                        "field": "city", "value": "Туров"})
     c5("перенос в точку с двойником отклонён",
