@@ -710,16 +710,20 @@ def _ensure_order_columns():
         cur.execute("ALTER TABLE orders ADD COLUMN comment TEXT")
     if "phone" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN phone TEXT")
-    # След платежа. Магазин принимает перевод на карту и фото чека, а сверить
-    # это с выпиской банка было нечем: заказ и поступление на счёт связывала
-    # только память продавца. Сумма и последние четыре цифры карты плательщика
-    # — тот минимум, по которому строка выписки находит свой заказ.
+    # Сколько денег реально пришло на счёт. Магазин принимает перевод на карту
+    # и фото чека, а сверить это с выпиской банка было нечем: заказ и
+    # поступление связывала только память продавца. Число записывает продавец
+    # при подтверждении — у него в этот момент открыт банк.
     #
-    # От подделки это не защищает и не должно: защита — дело банка. Это след
-    # для разбора и ловушка на небрежность (заплатил не ту сумму, оплатил
-    # чужой заказ).
+    # От подделки это не защищает и не должно: защита — дело банка. Это ловушка
+    # на небрежность (пришло не столько, пришло не за тот заказ) и единственная
+    # ниточка от заказа к строке выписки.
     if "paid_amount" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN paid_amount REAL")
+    # payer_last4 осталась от первого захода, где эти данные спрашивали у
+    # покупателя. От затеи отказались — лишнее поле на экране оплаты стоит
+    # брошенных заказов, — а колонку не сносим: правило схемы «только
+    # добавлять», и на нём держится безопасность отката (см. tests/test_schema).
     if "payer_last4" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN payer_last4 TEXT")
     if "reminded_at" not in cols:
@@ -3427,21 +3431,28 @@ def set_order_status_if(order_id, new_status, allowed):
     return changed
 
 
-def set_order_receipt(order_id, file_id, paid_amount=None, payer_last4=""):
-    """Сохраняет фото чека, след платежа и переводит заказ в статус 'paid'.
+def set_order_receipt(order_id, file_id):
+    """Сохраняет фото чека и переводит заказ в статус 'paid'."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE orders SET receipt_file_id = %s, status = 'paid' WHERE id = %s"),
+                (file_id, order_id))
+    conn.commit()
+    conn.close()
 
-    Сумму и последние цифры карты пишем как СКАЗАННОЕ покупателем, а не как
-    проверенное: проверить может только банк. Ценность в другом — по этой паре
-    строка банковской выписки находит свой заказ, а несовпадение суммы видно
-    продавцу сразу, а не при пересчёте кассы в конце дня.
+
+def set_order_paid_amount(order_id, amount):
+    """Сколько денег реально пришло на счёт — со слов продавца.
+
+    Записывается в момент подтверждения заказа: продавец только что смотрел
+    чек и банк, и другого такого момента не будет. Пусто здесь означает «не
+    сверяли» и таким и остаётся — подставить сюда итог заказа значило бы
+    нарисовать проверку, которой не было.
     """
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("""UPDATE orders
-                         SET receipt_file_id = %s, status = 'paid',
-                             paid_amount = %s, payer_last4 = %s
-                       WHERE id = %s"""),
-                (file_id, paid_amount, (payer_last4 or "")[:4], order_id))
+    cur.execute(_q("UPDATE orders SET paid_amount = %s WHERE id = %s"),
+                (float(amount), order_id))
     conn.commit()
     conn.close()
 

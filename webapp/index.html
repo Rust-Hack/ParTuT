@@ -152,6 +152,33 @@
       <button class="closebtn" id="msgClose">Закрыть</button></div>
   </div>
 
+  <!-- Чек во весь экран. На миниатюре 140×180 суммы не разобрать, а именно
+       её продавец и должен прочитать перед подтверждением. -->
+  <div class="overlay" id="checkOverlay">
+    <div class="checkbox">
+      <img id="checkImg" alt="Чек по заказу">
+      <button class="closebtn" id="checkClose">Закрыть</button>
+    </div>
+  </div>
+
+  <!-- Сколько денег реально пришло. Спрашиваем продавца при подтверждении:
+       у него в этот момент открыт банк, и другого такого момента не будет. -->
+  <div class="overlay" id="paidOverlay">
+    <div class="sheet"><h2>💰 Сколько пришло?</h2>
+      <p style="color:var(--hint);font-size:13px;margin:0 0 12px" id="paidTo"></p>
+      <button class="bigbtn" id="paidExact">Пришло ровно&nbsp;<span id="paidSum"></span></button>
+      <div class="form" style="margin-top:14px">
+        <label for="paidOther">Пришла другая сумма (Br)</label>
+        <div class="rowf" style="align-items:end">
+          <div><input id="paidOther" inputmode="decimal" placeholder="0.00" autocomplete="off"></div>
+          <button class="bigbtn" id="paidOtherGo" style="flex:0 0 auto;width:auto;padding:12px 16px;margin:0">Подтвердить</button>
+        </div>
+      </div>
+      <button class="closebtn" id="paidSkip">Подтвердить без сверки</button>
+      <button class="closebtn" id="paidClose">Отмена</button>
+    </div>
+  </div>
+
   <!-- Компенсация покупателю монетами (по заказу) -->
   <div class="overlay" id="compOverlay">
     <div class="sheet"><h2>🎁 Компенсация</h2>
@@ -182,15 +209,6 @@
     <div class="icon">💳</div><h2 id="payTitle">Оплата заказа</h2>
     <p>Переведите сумму по реквизитам, затем загрузите фото чека.</p>
     <div class="req" id="payReq"></div>
-    <div class="req form payform">
-      <div class="rowf">
-        <div><label for="paySum">Сумма перевода (Br)</label>
-          <input id="paySum" inputmode="decimal" autocomplete="off"></div>
-        <div><label for="payLast4">Последние 4 цифры карты</label>
-          <input id="payLast4" inputmode="numeric" maxlength="4" placeholder="1234" autocomplete="off"></div>
-      </div>
-      <p class="payhint">Нужно, чтобы продавец нашёл ваш перевод среди прочих и подтвердил заказ быстрее.</p>
-    </div>
     <div class="spacer"></div>
     <button class="bigbtn" id="uploadBtn">📷 Загрузить чек</button>
     <input type="file" id="receiptFile" accept="image/*" style="display:none">

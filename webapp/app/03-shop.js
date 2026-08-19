@@ -347,10 +347,6 @@ function payReqRows(info) {
   return rows;
 }
 function renderPayReq(d) {
-  // Сумму подставляем сами: человек уже заплатил ровно столько, и заставлять
-  // его набирать её заново — лишний шаг там, где он и так устал.
-  $("paySum").value = d.total.toFixed(2);
-  $("payLast4").value = "";
   const html = [];
   if (d.discount) html.push(`<div class="rline">Списано ${d.coins_used} 🪙 (−${d.discount.toFixed(2)} Br)</div>`);
   if (d.fee) html.push(`<div class="rline">Доставка: +${d.fee.toFixed(2)} Br</div>`);
@@ -380,19 +376,10 @@ $("uploadBtn").onclick = () => $("receiptFile").click();
 $("payCancel").onclick = () => $("payView").classList.remove("show");
 $("receiptFile").onchange = async (e) => {
   const file = e.target.files[0]; if (!file || !currentOrder) return;
-  const last4 = ($("payLast4").value || "").replace(/\D/g, "");
-  if (last4.length !== 4) {
-    alertMsg("Впишите последние 4 цифры карты, с которой платили.\n\n" +
-             "По ним продавец найдёт ваш перевод и подтвердит заказ быстрее.");
-    $("payLast4").focus();
-    e.target.value = "";                 // иначе тот же файл повторно не выберется
-    return;
-  }
   $("uploadBtn").disabled = true; $("uploadBtn").textContent = "Отправляю…";
   try {
     const fd = new FormData();
     fd.append("initData", initData); fd.append("order_id", currentOrder.order_id); fd.append("file", file);
-    fd.append("amount", $("paySum").value || ""); fd.append("last4", last4);
     const r = await fetch("/api/receipt", { method: "POST", body: fd });
     const d = await r.json();
     if (d.ok) {

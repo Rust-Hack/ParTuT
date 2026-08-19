@@ -233,18 +233,19 @@ function renderOrders() {
     const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
     const items = (o.items || []).map(it =>
       `<div class="oitem"><span>${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} Br</span></div>`).join("");
-    const receipt = o.receipt_url ? `<div class="oreceipt"><img src="${o.receipt_url}" alt="чек"></div>` : "";
+    const receipt = o.receipt_url
+      ? `<div class="oreceipt"><img src="${o.receipt_url}" alt="чек — нажмите, чтобы открыть" data-ocheck="${esc(o.receipt_url)}"></div>`
+      : "";
     // След платежа: что покупатель сказал о переводе. Не доказательство —
     // доказывает банк, — но по этой паре строка выписки находит свой заказ,
     // а несошедшаяся сумма должна попасться на глаза ДО выдачи товара.
-    const trail = (o.paid_amount != null || o.payer_last4)
+    const trail = o.paid_amount != null
       ? `<div class="ptrail ${o.payment_matches === false ? "bad" : ""}">
-           ${o.payment_matches === false ? "⚠️ " : "🧾 "}
-           Перевод: <b>${o.paid_amount != null ? (+o.paid_amount).toFixed(2) + " Br" : "сумма не указана"}</b>
-           ${o.payer_last4 ? ` · карта •••• ${esc(o.payer_last4)}` : ""}
-           ${o.payment_matches === false ? `<div class="ptrail-note">Не сходится с итогом ${(+o.total).toFixed(2)} Br — проверьте чек и выписку перед выдачей.</div>` : ""}
+           ${o.payment_matches === false ? "⚠️ " : "💰 "}Пришло: <b>${(+o.paid_amount).toFixed(2)} Br</b>
+           ${o.payment_matches === false ? `<div class="ptrail-note">Итог заказа ${(+o.total).toFixed(2)} Br — расхождение ${((+o.paid_amount) - (+o.total)).toFixed(2)} Br.</div>` : ""}
          </div>`
-      : "";
+      : (o.status === "confirmed" || o.status === "issued") && o.payment_method === "card"
+        ? `<div class="ptrail">💰 Сумма не сверялась</div>` : "";
     const who = o.username ? "@" + esc(o.username) : "id " + o.user_id;
     const PM = { card: "💳 картой", cash: "💵 наличными", none: "🚕 при получении" };
     const deliv = o.delivery_method
@@ -276,6 +277,7 @@ function renderOrders() {
   $("ordersList").querySelectorAll("[data-omsg]").forEach(b => b.onclick = () => openAdminMsg(+b.dataset.omsg, b.dataset.owho));
   $("ordersList").querySelectorAll("[data-oedit]").forEach(b => b.onclick = () => openOrderEdit(+b.dataset.oedit));
   $("ordersList").querySelectorAll("[data-ocomp]").forEach(b => b.onclick = () => openCompensation(+b.dataset.ocomp, b.dataset.owho));
+  $("ordersList").querySelectorAll("[data-ocheck]").forEach(i => i.onclick = () => openCheck(i.dataset.ocheck));
 }
 
 // ----- Правка состава заказа -----
@@ -372,17 +374,71 @@ $("orejGo").onclick = async () => {
   } catch (e) { alertMsg("Сеть недоступна."); }
 };
 
-async function orderAction(id, action) {
+async function orderAction(id, action, paidAmount) {
   if (action === "reject") { openOrderReject(id); return; }
+  // Подтверждение заказа картой — момент сверки: продавец только что смотрел
+  // чек, и другого такого момента не будет. Спрашиваем здесь, а не у
+  // покупателя: у продавца открыт банк, а число покупателя ничего не стоит.
+  if (action === "confirm" && paidAmount === undefined) {
+    const o = adminOrders.find(z => z.id === id);
+    if (o && o.payment_method === "card") { openPaidCheck(o); return; }
+  }
   const ask = action === "issued" ? "Отметить заказ выданным?" : "Подтвердить заказ?";
   const go = async () => {
     try {
-      await fetch("/api/admin/order/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, action }) });
+      const body = { initData, id, action };
+      if (paidAmount !== undefined && paidAmount !== null) body.paid_amount = paidAmount;
+      await fetch("/api/admin/order/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       await loadAdminOrders();
       await refreshProducts();   // остаток мог вернуться при отклонении
       loadToday();               // плитки «ждут подтверждения» / «к выдаче» — сразу
     } catch (e) { alertMsg("Сеть недоступна."); }
   };
+  if (paidAmount !== undefined) { go(); return; }   // спрашивали уже — второй раз незачем
   confirmMsg(ask, go);
 }
+
+// ----- Сверка суммы при подтверждении -----
+let paidOrder = null;
+function openPaidCheck(o) {
+  paidOrder = o;
+  $("paidTo").textContent = `Заказ #${o.id} · ${o.username ? "@" + o.username : "id " + o.user_id}`;
+  $("paidSum").textContent = `${(+o.total).toFixed(2)} Br`;
+  $("paidOther").value = "";
+  $("paidOverlay").classList.add("show");
+}
+function closePaidCheck() { $("paidOverlay").classList.remove("show"); paidOrder = null; }
+
+$("paidClose").onclick = closePaidCheck;
+$("paidExact").onclick = () => {
+  const o = paidOrder; closePaidCheck();
+  if (o) orderAction(o.id, "confirm", +(+o.total).toFixed(2));
+};
+$("paidSkip").onclick = () => {
+  // Ничего не записываем: пустое «не сверяли» честнее подставленного итога,
+  // который выглядел бы как проверка, которой не было.
+  const o = paidOrder; closePaidCheck();
+  if (o) orderAction(o.id, "confirm", null);
+};
+$("paidOtherGo").onclick = () => {
+  const o = paidOrder;
+  const сумма = parseFloat(($("paidOther").value || "").replace(",", "."));
+  if (!(сумма >= 0)) { alertMsg("Впишите сумму, которая пришла на счёт."); $("paidOther").focus(); return; }
+  closePaidCheck();
+  const разница = (сумма - +o.total).toFixed(2);
+  const вопрос = Math.abs(сумма - +o.total) < 0.01
+    ? "Подтвердить заказ?"
+    : `Пришло ${сумма.toFixed(2)} Br вместо ${(+o.total).toFixed(2)} Br (${разница > 0 ? "+" : ""}${разница}).\n\nВсё равно подтвердить?`;
+  confirmMsg(вопрос, () => orderAction(o.id, "confirm", +сумма.toFixed(2)));
+};
+
+// ----- Чек во весь экран -----
+// На миниатюре 140×180 сумму не разобрать, а именно её продавец и должен
+// прочитать перед подтверждением.
+function openCheck(url) {
+  $("checkImg").src = url;
+  $("checkOverlay").classList.add("show");
+}
+$("checkClose").onclick = () => { $("checkOverlay").classList.remove("show"); $("checkImg").src = ""; };
+$("checkOverlay").onclick = (e) => { if (e.target === $("checkOverlay")) $("checkClose").click(); };
 
