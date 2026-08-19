@@ -15,9 +15,9 @@ shopinfo.py — настройки магазина, которые читают
 из-за чего за одним числом тянулось всё приложение.
 """
 
-import cache
-import db
-from config import CONFIRM_MINUTES, PAYMENT_INFO
+from partut import cache
+from partut import db
+from partut.config import CONFIRM_MINUTES, PAYMENT_INFO
 
 REFERRAL_BONUS = 50        # vapecoins пригласившему за нового друга
 COINS_PER_BYN = 1          # vapecoins клиенту за каждый Br выданного заказа

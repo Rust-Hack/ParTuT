@@ -15,8 +15,8 @@ import types
 
 from _common import (db, client, server, Checker, as_user, as_admin, deny_admin,
                      SENT, reset_sent)
-import bot as botmod
-import config
+from partut.bot import handlers as botmod
+from partut import config
 
 ПОКУПАТЕЛЬ, ПРОДАВЕЦ, ВЛАДЕЛЕЦ = 9601, 9602, 9603
 

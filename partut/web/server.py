@@ -10,7 +10,7 @@ server.py — веб-сервер Mini App (вся витрина внутри �
   • /api/order    — создать заказ (возвращает реквизиты для оплаты)
   • /api/receipt  — принять фото чека, отправить продавцу города
 
-Бот (bot.py) и этот сервер — отдельные процессы, общая база и настройки (config.py).
+Бот (partut/bot/handlers.py) и этот сервер — отдельные процессы, общая база и настройки (config.py).
 Кнопки статусов у продавца обрабатывает бот.
 
 Запуск локально:  DEV_MODE=1 venv/bin/python server.py
@@ -27,15 +27,16 @@ import time
 import requests
 from flask import Flask, g, jsonify, request, Response
 
-import auth
-import cache
-import db
-import photos
-import inputs
-import tgsend
-import errors
-import notifications
-from config import (BOT_TOKEN, SUPPORT_IDS, is_admin, is_super_admin, admin_city, admin_role, all_admin_ids)
+from partut.web import auth
+from partut import cache
+from partut import paths
+from partut import db
+from partut.web import photos
+from partut import inputs
+from partut.integrations import tgsend
+from partut import errors
+from partut import notifications
+from partut.config import (BOT_TOKEN, SUPPORT_IDS, is_admin, is_super_admin, admin_city, admin_role, all_admin_ids)
 
 db.init_db()      # схема, разовые переносы и права из окружения — внутри
 
@@ -45,7 +46,7 @@ db.init_db()      # схема, разовые переносы и права и
 
 
 
-app = Flask(__name__, static_folder="webapp", static_url_path="")
+app = Flask(__name__, static_folder=str(paths.WEBAPP), static_url_path="")
 # Права проверяет auth, а вешает страж на приложение — тот, у кого приложение
 # есть. Так auth не знает про сервер, и граф импортов остаётся деревом.
 app.before_request(auth.guard_owner_only)
@@ -308,10 +309,9 @@ def _compress(resp):
 # мобильной сети, ещё до того как человек увидит витрину.
 # Сборки при этом нет никакой: подстановка двух кусков в разметку, здесь и
 # сейчас. Правишь файл — обновляешь страницу, как и раньше.
-_WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
-_INDEX_PATH = os.path.join(_WEBAPP_DIR, "index.html")
-_STYLES_PATH = os.path.join(_WEBAPP_DIR, "styles.css")
-_APP_DIR = os.path.join(_WEBAPP_DIR, "app")
+_INDEX_PATH = str(paths.INDEX)
+_STYLES_PATH = str(paths.STYLES)
+_APP_DIR = str(paths.APP_PARTS)
 
 
 def _app_parts():
@@ -941,7 +941,7 @@ def api_admin_message():
 # ============================================================
 
 # ------------------- Связь с людьми -------------------
-# Сами заказы уехали в server_orders.py, а эти двое остались здесь: ими
+# Сами заказы уехали в partut/web/orders.py, а эти двое остались здесь: ими
 # пользуется и поддержка, и разбор запросов продавцов, не только заказы.
 
 # ------------------- Админы и продавцы (только супер-админ) -------------------
@@ -958,24 +958,21 @@ def api_admin_message():
 # Теперь каждый модуль объявляет свои маршруты на Blueprint и про сервер не
 # знает ничего. Стрелка одна: server подключает их, они его — нет. Забыть
 # модуль в этом списке нельзя незаметно — сторожит tests/test_server_split.
-import server_admin        # noqa: E402
-import server_catalog      # noqa: E402
-import server_customers    # noqa: E402
-import server_games        # noqa: E402
-import server_orders       # noqa: E402
-import server_promos       # noqa: E402
-import server_shop         # noqa: E402
-import server_stock        # noqa: E402
+from partut.web import (admin, catalog, customers, games,        # noqa: E402
+                        orders, promos, shop, stock)             # noqa: E402
 
-for _модуль in (server_admin, server_catalog, server_customers, server_games,
-                server_orders, server_promos, server_shop, server_stock):
+for _модуль in (admin, catalog, customers, games, orders, promos, shop, stock):
     app.register_blueprint(_модуль.bp)
 
 
 if __name__ == "__main__":
-    # «python server.py» делает из ЭТОГО файла модуль __main__, и вынесенные
-    # модули, импортируй они server, завели бы его вторым экземпляром. Круга
-    # больше нет, но привычку оставляем: порт отдаём настоящему модулю.
-    import server as настоящий
+    # Поднять ОДИН сайт, без бота:  python -m partut.web.server
+    # Нужно для учений по восстановлению и для правки витрины: бот при этом не
+    # запускается и в Телеграм ничего не уходит.
+    #
+    # Именно «-m», а не «python partut/web/server.py»: запуск файла напрямую
+    # сделал бы из него модуль __main__, и пакет завёл бы ВТОРОЕ приложение —
+    # половина ручек отвечала бы 404. Однажды так и было.
+    from partut.web import server as настоящий
     port = int(os.environ.get("PORT", 5000))
     настоящий.app.run(host="0.0.0.0", port=port)

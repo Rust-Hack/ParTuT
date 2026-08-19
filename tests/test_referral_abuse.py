@@ -13,7 +13,7 @@
 """
 from _common import db, client, Checker, as_user, as_admin
 
-import cache
+from partut import cache
 
 A, B, C = 8301, 8302, 8303
 

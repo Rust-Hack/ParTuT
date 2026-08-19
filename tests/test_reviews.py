@@ -9,9 +9,9 @@
 """
 from _common import db, client, Checker, as_user, as_admin, deny_admin, SENT, reset_sent
 
-import tgsend
+from partut.integrations import tgsend
 
-import cache
+from partut import cache
 
 
 BUYER = 9801

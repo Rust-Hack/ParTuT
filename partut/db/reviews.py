@@ -1,5 +1,5 @@
 """
-db_reviews.py — отзывы покупателей.
+partut/db/reviews.py — отзывы покупателей.
 
 Четвёртый кусок, вынесенный из db.py.
 
@@ -8,12 +8,12 @@ db_reviews.py — отзывы покупателей.
 это правило и живёт здесь.
 
 Примитивы и соседние функции берутся ЧЕРЕЗ модуль (db.connect(), db._q()), а не
-копиями имён: копия не заметила бы подмены в тестах — см. db_raffles.py.
+копиями имён: копия не заметила бы подмены в тестах — см. partut/db/raffles.py.
 """
 
 import json
 
-import db
+from partut import db
 
 
 def _ensure_review_columns():

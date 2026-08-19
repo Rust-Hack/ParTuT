@@ -13,8 +13,8 @@ import datetime
 
 from _common import db, client, Checker, as_user, as_admin
 
-import cache
-import config
+from partut import cache
+from partut import config
 
 
 def _clean():
@@ -37,7 +37,7 @@ def _make_old(oid, hours):
 def run():
     c = Checker("Брошенный заказ картой")
     _clean()
-    import bot as botmod
+    from partut.bot import handlers as botmod
 
     sent = []
     orig_safe = botmod._safe_send

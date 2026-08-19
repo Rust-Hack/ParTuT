@@ -23,7 +23,7 @@ import threading
 
 from _common import db, Checker, SENT, reset_sent
 
-import bot as botmod
+from partut.bot import handlers as botmod
 
 MARKS = (botmod._SUMMARY_MARK, botmod._BACKUP_MARK, botmod._REPEAT_MARK)
 

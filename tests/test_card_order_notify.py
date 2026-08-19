@@ -14,12 +14,12 @@ import importlib
 
 from _common import db, client, Checker, as_user, as_admin
 
-import tgsend
+from partut.integrations import tgsend
 
-import cache
-import config
-import notifications
-import server_orders
+from partut import cache
+from partut import config
+from partut import notifications
+from partut.web import orders as server_orders
 
 
 def _clean():

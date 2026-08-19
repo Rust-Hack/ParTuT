@@ -16,7 +16,7 @@ import threading
 
 from _common import db, client, Checker, as_user, as_admin, SENT, reset_sent
 
-import cache
+from partut import cache
 
 UID = 8801
 

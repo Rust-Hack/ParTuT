@@ -1,5 +1,5 @@
 """
-server_admin.py — экран владельца: настройки магазина, цифры, журнал.
+partut/web/admin.py — экран владельца: настройки магазина, цифры, журнал.
 
 Три вещи, которые смотрит и крутит владелец поверх всего магазина сразу:
 настройки (реквизиты, щедрость, сроки), статистика продаж и журнал действий
@@ -15,12 +15,12 @@ server_admin.py — экран владельца: настройки магаз
 
 from flask import Blueprint, jsonify, request
 
-import cache
-import auth
-import db
-import shopinfo
-import inputs
-from config import CONFIRM_MINUTES, PAYMENT_INFO, is_super_admin
+from partut import cache
+from partut.web import auth
+from partut import db
+from partut.web import shopinfo
+from partut import inputs
+from partut.config import CONFIRM_MINUTES, PAYMENT_INFO, is_super_admin
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.

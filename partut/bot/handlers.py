@@ -1,5 +1,5 @@
 """
-bot.py — тонкая оболочка вокруг Mini App.
+partut/bot/handlers.py — тонкая оболочка вокруг Mini App.
 
 Весь магазин (каталог, корзина, оплата, чек) теперь ВНУТРИ приложения (server.py + webapp).
 Бот делает только:
@@ -21,17 +21,17 @@ import telebot
 from telebot import types
 from dotenv import load_dotenv
 
-import config
-import db
-import errors
-import notifications
-import offsite
+from partut import config
+from partut import db
+from partut import errors
+from partut import notifications
+from partut.integrations import offsite
 
 # --- Подготовка ---
 load_dotenv()
 
 # Общие настройки и справочники берём из config.py (их же использует server.py).
-from config import (
+from partut.config import (
     BOT_TOKEN, WEBAPP_URL, CITIES,
     SUPER_ADMIN_IDS, is_admin, is_super_admin, admin_city,
 )
@@ -857,7 +857,7 @@ def _reminder_loop():
 
 # --- Запуск ---
 def run():
-    """Запускает бота (long polling). Зовётся при прямом запуске bot.py или из run.py."""
+    """Запускает бота (long polling). Зовётся при прямом запуске partut/bot/handlers.py или из run.py."""
     print("Бот-оболочка запущен. (Ctrl+C — остановить)")
     threading.Thread(target=_reminder_loop, daemon=True).start()   # повтор-напоминания продавцам
     bot.infinity_polling()

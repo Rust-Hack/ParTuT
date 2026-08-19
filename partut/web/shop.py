@@ -1,5 +1,5 @@
 """
-server_shop.py — устройство магазина: точки, способы получения, продавцы.
+partut/web/shop.py — устройство магазина: точки, способы получения, продавцы.
 
 Третий кусок, вынесенный из server.py. Здесь настраивают не товар, а сам
 магазин: где он работает, как оттуда получают заказ и кто за этим стоит.
@@ -13,14 +13,14 @@ server_shop.py — устройство магазина: точки, спосо
 
 from flask import Blueprint, jsonify, request
 
-import config
-import cache
-import auth
-import db
-import shopinfo
-import tgsend
-import inputs
-from config import CITIES, SUPER_ADMIN_IDS, is_super_admin
+from partut import config
+from partut import cache
+from partut.web import auth
+from partut import db
+from partut.web import shopinfo
+from partut.integrations import tgsend
+from partut import inputs
+from partut.config import CITIES, SUPER_ADMIN_IDS, is_super_admin
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.

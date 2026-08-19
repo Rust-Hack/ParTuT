@@ -13,8 +13,8 @@ import importlib
 
 from _common import db, Checker
 
-import config
-import notifications
+from partut import config
+from partut import notifications
 
 # Общий стенд глушит отправку продавцам, чтобы не шуметь при каждом заказе.
 # Здесь проверяется как раз она — возвращаем настоящую функцию на время теста.

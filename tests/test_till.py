@@ -16,9 +16,9 @@ import itertools
 
 from _common import db, client, Checker, as_user, as_admin
 
-import shopinfo
+from partut.web import shopinfo
 
-import cache
+from partut import cache
 
 ПОКУПАТЕЛЬ = 7501
 

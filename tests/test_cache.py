@@ -1,7 +1,7 @@
 """Кэш чтений: каталог отдаётся из памяти, но сбрасывается при изменениях."""
 from _common import db, client, Checker, as_admin, as_user
 
-import cache
+from partut import cache
 
 
 def run():

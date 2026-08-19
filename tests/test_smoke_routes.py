@@ -14,7 +14,7 @@
 """
 from _common import db, client, server, Checker, as_user, as_admin, deny_admin, real_auth
 
-import cache
+from partut import cache
 
 # Тела, которыми стучимся: пустое, мусорное и почти правдоподобное.
 ТЕЛА = [

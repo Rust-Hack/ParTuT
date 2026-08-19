@@ -15,7 +15,7 @@ import datetime
 
 from _common import db, Checker
 
-import bot as botmod
+from partut.bot import handlers as botmod
 
 LIVE = ("живое_фото", "живая_мелкая", "фото_галереи", "мелкая_галереи")
 

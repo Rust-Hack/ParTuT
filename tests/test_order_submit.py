@@ -6,7 +6,7 @@
 import time
 from _common import db, client, Checker, as_user
 
-import tgsend
+from partut.integrations import tgsend
 
 CLIENT = 6161
 COINS_CLIENT = 6162

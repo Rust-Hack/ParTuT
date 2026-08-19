@@ -13,11 +13,11 @@ import io
 
 from _common import db, client, Checker, as_user, as_admin, real_auth, deny_admin
 
-import photos
+from partut.web import photos
 
-import auth
+from partut.web import auth
 
-import cache
+from partut import cache
 
 
 def _clean():

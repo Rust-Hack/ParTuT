@@ -1,3 +1,20 @@
+# Описание проекта и настройки инструментов.
+
+[project]
+name = "partut"
+version = "1.0.0"
+description = "ParTuT — магазин в Telegram: бот и мини-приложение к нему"
+requires-python = ">=3.11"
+# Зависимости намеренно НЕ здесь, а в requirements.txt с точными версиями:
+# хостинг ставит именно его, и второй список неизбежно разошёлся бы с первым.
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["partut*"]
+
 # Настройки линтера. Правила выбраны по одному признаку: находят ОШИБКИ, а не
 # несогласия о стиле.
 #
@@ -11,7 +28,7 @@
 # править работающий код, перестают читать — и он перестаёт находить настоящее.
 [tool.ruff]
 line-length = 120          # в проекте длинные строки с SQL и текстами для людей
-target-version = "py39"    # версия, на которой проект запускают локально
+target-version = "py311"   # та же, что в CI и на хостинге (.python-version)
 
 [tool.ruff.lint]
 select = ["F", "E9"]

@@ -20,47 +20,62 @@ import re
 
 from _common import server, Checker
 
-import auth
+from partut.web import auth
 
 КОРЕНЬ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ВЕБ = os.path.join(КОРЕНЬ, "partut", "web")
 
-# Помощники, которые обязаны браться ЧЕРЕЗ server: на их подмене стоят тесты.
+# Помощники, которые обязаны браться ЧЕРЕЗ модуль: на их подмене стоят тесты.
 ЧЕРЕЗ_МОДУЛЬ = ["get_admin", "get_user", "_bg", "_gate", "_text", "_cache_bust",
                 "deny_city", "_guard_owner_only", "app"]
 
 
 def _модули():
-    return sorted(и for и in os.listdir(КОРЕНЬ)
-                  if и.startswith("server_") and и.endswith(".py"))
+    """Файлы partut/web/, объявляющие Blueprint, — то есть модули с ручками.
+
+    Признак — сам Blueprint в тексте, а не имя файла. Раньше модули искались по
+    префиксу «server_», и после переезда в папку поиск нашёл бы ноль файлов:
+    тест прошёл бы вхолостую, ничего не проверив.
+    """
+    найдено = []
+    for и in sorted(os.listdir(ВЕБ)):
+        if not и.endswith(".py") or и == "__init__.py":
+            continue
+        if re.search(r"^bp = Blueprint\(", io.open(os.path.join(ВЕБ, и), encoding="utf-8").read(), re.M):
+            найдено.append(и)
+    return найдено
 
 
 def run():
-    исходник = io.open(os.path.join(КОРЕНЬ, "server.py"), encoding="utf-8").read()
-
-    c = Checker("Каждый вынесенный модуль подключён к server.py")
+    c = Checker("Каждый модуль с ручками подключён к фабрике")
     модули = _модули()
     c(f"модули найдены ({len(модули)})", len(модули) >= 5)
+
+    # Спрашиваем у самого приложения, а не у текста: забыть модуль в списке —
+    # ровно та ошибка, ради которой тест и написан (три модуля однажды не
+    # подключили, и их ручки молча отвечали 404).
     for файл in модули:
         имя = файл[:-3]
-        c(f"{имя} импортирован в server.py (иначе его ручки — 404)",
-          re.search(rf"^import {имя}\b", исходник, re.M) is not None)
+        c(f"{имя} зарегистрирован в приложении (иначе его ручки — 404)",
+          имя in server.app.blueprints)
 
     # И проверка делом: модуль не просто упомянут, а действительно загружен.
     import sys
     for файл in модули:
-        c(f"{файл[:-3]} и правда загружен", файл[:-3] in sys.modules)
+        c(f"{файл[:-3]} и правда загружен", f"partut.web.{файл[:-3]}" in sys.modules)
 
-    c2 = Checker("Помощники берутся через server, а не копией")
+    c2 = Checker("Помощники берутся через модуль, а не копией")
     for файл in модули:
-        текст = io.open(os.path.join(КОРЕНЬ, файл), encoding="utf-8").read()
+        текст = io.open(os.path.join(ВЕБ, файл), encoding="utf-8").read()
         скопировано = [и for и in ЧЕРЕЗ_МОДУЛЬ
-                       if re.search(rf"^from server import .*\b{и}\b", текст, re.M)]
+                       if re.search(rf"^from partut\.web\.(server|auth) import .*\b{и}\b",
+                                    текст, re.M)]
         c2(f"{файл[:-3]} не копирует помощников"
            + ("" if not скопировано else f": {скопировано}"), not скопировано)
 
     c3 = Checker("Префикс не задел чужие поля")
     for файл in модули + ["server.py"]:
-        текст = io.open(os.path.join(КОРЕНЬ, файл), encoding="utf-8").read()
+        текст = io.open(os.path.join(ВЕБ, файл), encoding="utf-8").read()
         кривое = re.findall(r"\b(?:db|server)\.(?:db|server)\.\w+", текст)
         c3(f"{файл[:-3]} без двойного префикса"
            + ("" if not кривое else f": {sorted(set(кривое))}"), not кривое)
@@ -104,10 +119,11 @@ if __name__ == "__main__":
 
 
 def run_standalone():
-    """«python server.py» обязан отдавать ВСЕ ручки, а не половину.
+    """«python -m partut.web.server» обязан отдавать ВСЕ ручки, а не половину.
 
-    Запуск файла напрямую делает из него модуль __main__, и вынесенные модули
-    импортируют server ВТОРОЙ раз — отдельным модулем со своим Flask-приложением.
+    Запуск файла напрямую (python partut/web/server.py) делает из него модуль
+    __main__, и пакет загрузил бы server ВТОРОЙ раз — отдельным модулем со своим
+    Flask-приложением.
     Маршруты регистрируются на нём, а порт слушает первое: ручки из вынесенных
     модулей молча отвечают 404.
 
@@ -121,7 +137,7 @@ def run_standalone():
     import urllib.error
     import urllib.request
 
-    c = Checker("Сайт, запущенный напрямую (python server.py)")
+    c = Checker("Сайт, запущенный отдельно (python -m partut.web.server)")
 
     с_сокетом = socket.socket()
     с_сокетом.bind(("127.0.0.1", 0))
@@ -131,7 +147,7 @@ def run_standalone():
     окружение = dict(os.environ)
     окружение.update({"BOT_TOKEN": "000000:TEST-NO-SEND", "PORT": str(порт),
                       "DATABASE_URL": "", "KEEP_WARM": "0"})
-    процесс = subprocess.Popen(["python3", os.path.join(КОРЕНЬ, "server.py")],
+    процесс = subprocess.Popen(["python3", "-m", "partut.web.server"],
                                cwd=КОРЕНЬ, env=окружение,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:

@@ -1,5 +1,5 @@
 """
-server_games.py — ручки развлечений: колесо, слот, розыгрыши.
+partut/web/games.py — ручки развлечений: колесо, слот, розыгрыши.
 
 Первый кусок, вынесенный из server.py (3873 строки). Здесь всё, что раздаёт
 призы: колесо фортуны, слот «Облако Монет» и розыгрыш с билетами.
@@ -9,7 +9,7 @@ server_games.py — ручки развлечений: колесо, слот, �
 
 Помощники берутся ЧЕРЕЗ модуль (auth.get_user(), db), а не копиями
 имён: копия не заметила бы подмены в тестах. То же правило, что и у модулей
-базы, — см. db_raffles.py.
+базы, — см. partut/db/raffles.py.
 """
 
 import json
@@ -17,12 +17,12 @@ import random
 
 from flask import Blueprint, jsonify, request
 
-import auth
-import db
-import photos
-import tgsend
-import inputs
-import notifications
+from partut.web import auth
+from partut import db
+from partut.web import photos
+from partut.integrations import tgsend
+from partut import inputs
+from partut import notifications
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.

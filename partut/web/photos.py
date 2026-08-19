@@ -13,8 +13,8 @@ import hashlib
 import hmac
 import time
 
-import db
-from config import BOT_TOKEN
+from partut import db
+from partut.config import BOT_TOKEN
 
 RECEIPT_TOKEN_TTL = 6 * 3600       # ссылка на чек живёт полдня, не вечно
 GRID_PHOTO_MIN_WIDTH = 480     # карточка каталога ~190px, но экраны телефонов 2-3x

@@ -19,7 +19,7 @@ import threading
 import time
 import traceback
 
-from config import DEV_IDS
+from partut.config import DEV_IDS
 
 # Как часто можно повторять сообщение об ОДНОЙ И ТОЙ ЖЕ ошибке.
 COOLDOWN = int(os.environ.get("ERROR_COOLDOWN", "600"))     # 10 минут

@@ -15,7 +15,7 @@
 
 from _common import db, client, server, Checker, as_admin, as_user
 
-import inputs
+from partut import inputs
 
 # Значения нарочно не тех типов, каких ждёт обработчик.
 JUNK = [

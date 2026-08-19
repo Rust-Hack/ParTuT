@@ -1,5 +1,5 @@
 """
-server_customers.py — покупатель глазами магазина: монеты, рефералы, карточка.
+partut/web/customers.py — покупатель глазами магазина: монеты, рефералы, карточка.
 
 Здесь всё, что магазин знает и делает с самим человеком, а не с его заказом:
 баланс монет и реферальная ссылка (это видит покупатель), а также владельческая
@@ -18,12 +18,12 @@ server_customers.py — покупатель глазами магазина: м
 
 from flask import Blueprint, jsonify, request
 
-import auth
-import db
-import shopinfo
-import tgsend
-import inputs
-from config import is_super_admin
+from partut.web import auth
+from partut import db
+from partut.web import shopinfo
+from partut.integrations import tgsend
+from partut import inputs
+from partut.config import is_super_admin
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.

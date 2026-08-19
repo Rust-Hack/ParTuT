@@ -26,10 +26,10 @@ from urllib.parse import parse_qsl
 import telebot
 from flask import g, jsonify, request
 
-import db
-import notifications
-import tgsend
-from config import (BOT_TOKEN, DEV_MODE, DEV_USER_ID, SUPER_ADMIN_IDS, admin_city,
+from partut import db
+from partut import notifications
+from partut.integrations import tgsend
+from partut.config import (BOT_TOKEN, DEV_MODE, DEV_USER_ID, SUPER_ADMIN_IDS, admin_city,
                     admin_role, is_admin, is_super_admin)
 
 

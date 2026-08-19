@@ -7,9 +7,13 @@ run.py — единый запуск для хостинга (Render).
   • а веб-сервер Mini App (Flask) — в основном (он и слушает порт $PORT).
 
 Локально можно по-прежнему запускать по отдельности:
-  venv/bin/python bot.py      — только бот
-  venv/bin/python server.py   — только сайт
+  venv/bin/python -m partut.bot.handlers   — только бот
+  venv/bin/python -m partut.web.server     — только сайт
 А этот файл — как на хостинге: и то, и другое сразу.
+
+Почему точка входа лежит в корне, а не внутри пакета: пакет — это библиотека,
+его импортируют. Запускать — отсюда, и только отсюда. По одному файлу в корне
+сразу видно, чем поднимается магазин.
 """
 
 import os
@@ -19,9 +23,9 @@ import threading
 import requests
 from waitress import serve     # «боевой» веб-сервер (вместо встроенного в Flask)
 
-import bot                      # регистрирует обработчики (polling не стартует при импорте)
-import db
-from server import app         # Flask-приложение Mini App
+from partut import db
+from partut.bot import handlers as bot   # обработчики; polling при импорте не стартует
+from partut.web.server import app        # Flask-приложение Mini App
 
 
 def _keep_warm():

@@ -9,9 +9,9 @@ Telegram присылает имя при каждом открытии прил
 """
 from _common import db, client, Checker, as_user, as_admin
 
-import tgsend
+from partut.integrations import tgsend
 
-import cache
+from partut import cache
 
 
 def _clean():

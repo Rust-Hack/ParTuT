@@ -12,8 +12,8 @@
 import types
 
 from _common import db, Checker, SENT, reset_sent
-import bot as botmod
-import config
+from partut.bot import handlers as botmod
+from partut import config
 
 OWNER, SELLER, BUYER = 8601, 8602, 8603
 

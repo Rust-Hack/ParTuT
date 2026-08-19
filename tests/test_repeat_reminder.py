@@ -8,7 +8,7 @@ import datetime
 
 from _common import db, client, Checker, as_user, SENT, reset_sent
 
-import bot as botmod
+from partut.bot import handlers as botmod
 
 
 def _order_days_ago(uid, days, status="issued"):

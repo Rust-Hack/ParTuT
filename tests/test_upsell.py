@@ -9,7 +9,7 @@
 """
 from _common import db, client, Checker
 
-import cache
+from partut import cache
 
 
 def _clean():

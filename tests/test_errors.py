@@ -5,9 +5,9 @@
 """
 from _common import db, client, Checker, as_user
 
-import tgsend
+from partut.integrations import tgsend
 
-import errors
+from partut import errors
 
 
 class _Tg:

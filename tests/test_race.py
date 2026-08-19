@@ -12,9 +12,9 @@ import threading
 
 from _common import db, client, Checker, as_admin
 
-import auth
+from partut.web import auth
 
-import cache
+from partut import cache
 
 
 def _clean():

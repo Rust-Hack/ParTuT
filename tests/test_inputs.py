@@ -13,7 +13,7 @@
 """
 from _common import db, client, Checker, as_admin
 
-import inputs
+from partut import inputs
 
 
 def run():

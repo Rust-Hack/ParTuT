@@ -99,7 +99,7 @@ def run():
 
     # --- Одни часы на всех ---
     c4 = Checker("Часы одни на весь магазин")
-    import bot as botmod
+    from partut.bot import handlers as botmod
     db.shop_now = lambda: НОЧЬ
     try:
         c4("бот смотрит на те же часы, что и база", botmod._local_now() == НОЧЬ)

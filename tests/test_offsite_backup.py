@@ -14,8 +14,8 @@
 """
 from _common import Checker
 
-import bot as botmod
-import offsite
+from partut.bot import handlers as botmod
+from partut.integrations import offsite
 
 
 def _подменить_телеграм():
@@ -49,7 +49,7 @@ def run():
         ушло.clear(); сложено.clear()
         offsite.отправить = lambda blob, имя: "хранилище ответило 403: нет доступа"
         сообщено = []
-        import errors
+        from partut import errors
         настоящий_report = errors.report
         errors.report = lambda бот, где, e: сообщено.append(f"{где}: {e}")
         try:

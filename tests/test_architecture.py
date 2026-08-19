@@ -27,27 +27,59 @@ import os
 from _common import Checker
 
 КОРЕНЬ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ПАКЕТ = os.path.join(КОРЕНЬ, "partut")
 
 # Модули, которые обязаны оставаться листьями: их импортируют все, и стоит им
 # самим что-то потянуть — этот «кто-то» приедет в каждый тест и каждый скрипт.
-ЛИСТЬЯ = ["config", "cache", "inputs"]
+ЛИСТЬЯ = ["partut.config", "partut.cache", "partut.inputs", "partut.paths"]
+
+# Модули с ручками: каждый объявляет свой Blueprint, и ни один не знает про
+# фабрику. Список руками — чтобы забытый при переезде модуль был виден.
+РУЧЕЧНЫЕ = ["partut.web." + и for и in
+            ("admin", "catalog", "customers", "games", "orders", "promos", "shop", "stock")]
+
+ФАБРИКА = "partut.web.server"
 
 # Круги на стороне базы, известные и принятые. Список только сокращается.
 ИЗВЕСТНЫЕ_КРУГИ = 6
 
 
+def _модули():
+    """Все модули пакета плюс точка входа — по полным именам (partut.web.orders).
+
+    Раньше здесь читался список .py из корня репозитория. После переезда в пакет
+    корень опустел бы, граф вышел пустым — и тест прошёл бы ВХОЛОСТУЮ, ничего не
+    проверив. Поэтому имена собираются обходом пакета, а run.py добавляется явно.
+    """
+    найдено = {}
+    for папка, _, файлы in os.walk(ПАКЕТ):
+        if "__pycache__" in папка:
+            continue
+        for ф in файлы:
+            if not ф.endswith(".py"):
+                continue
+            путь = os.path.join(папка, ф)
+            отн = os.path.relpath(путь, КОРЕНЬ)[:-3].replace(os.sep, ".")
+            найдено[отн[:-9] if отн.endswith(".__init__") else отн] = путь
+    найдено["run"] = os.path.join(КОРЕНЬ, "run.py")
+    return найдено
+
+
 def _граф():
-    свои = {и[:-3] for и in os.listdir(КОРЕНЬ) if и.endswith(".py")}
+    модули = _модули()
     граф = {}
-    for имя in sorted(свои):
-        текст = io.open(os.path.join(КОРЕНЬ, имя + ".py"), encoding="utf-8").read()
+    for имя, путь in sorted(модули.items()):
         куда = set()
-        for n in ast.walk(ast.parse(текст)):
+        for n in ast.walk(ast.parse(io.open(путь, encoding="utf-8").read())):
             if isinstance(n, ast.Import):
-                куда |= {a.name.split(".")[0] for a in n.names}
+                куда |= {a.name for a in n.names if a.name in модули}
             elif isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
-                куда.add(n.module.split(".")[0])
-        граф[имя] = (куда & свои) - {имя}
+                # `from partut.web import auth` — стрелка к partut.web.auth, а не
+                # к пакету partut.web: иначе каждый модуль «зависел» бы от папки,
+                # в которой лежит, и круги считались бы на пустом месте.
+                подмодули = {f"{n.module}.{a.name}" for a in n.names} & set(модули)
+                куда |= подмодули or ({n.module} & set(модули))
+        граф[имя] = куда - {имя}
     return граф
 
 
@@ -76,18 +108,19 @@ def run():
         c(f"{лист} ни от кого не зависит"
           + ("" if not граф.get(лист) else f": {sorted(граф[лист])}"), not граф.get(лист))
 
-    c2 = Checker("Модули с ручками не знают про server")
-    ручечные = [и for и in граф if и.startswith("server_")]
-    c2(f"модули найдены ({len(ручечные)})", len(ручечные) >= 8)
-    for и in ручечные:
-        c2(f"{и} не импортирует server", "server" not in граф[и])
+    c2 = Checker("Модули с ручками не знают про фабрику")
+    пропали = [и for и in РУЧЕЧНЫЕ if и not in граф]
+    c2(f"все модули с ручками на месте{'' if not пропали else ': нет ' + str(пропали)}",
+       not пропали)
+    for и in РУЧЕЧНЫЕ:
+        c2(f"{и} не импортирует {ФАБРИКА}", ФАБРИКА not in граф.get(и, set()))
 
-    c3 = Checker("Стрелка от server к модулям — односторонняя")
-    c3("server подключает все модули с ручками",
-       set(ручечные) <= граф.get("server", set()))
-    # Кто вообще имеет право знать про server: только точка запуска.
-    знают = sorted(и for и, куда in граф.items() if "server" in куда and и != "server")
-    c3(f"про server знает только run: {знают}", знают == ["run"])
+    c3 = Checker("Стрелка от фабрики к модулям — односторонняя")
+    c3("фабрика подключает все модули с ручками",
+       set(РУЧЕЧНЫЕ) <= граф.get(ФАБРИКА, set()))
+    # Кто вообще имеет право знать про фабрику: только точка запуска.
+    знают = sorted(и for и, куда in граф.items() if ФАБРИКА in куда and и != ФАБРИКА)
+    c3(f"про фабрику знает только run: {знают}", знают == ["run"])
 
     c4 = Checker("Круги не разрастаются")
     круги = _круги(граф)

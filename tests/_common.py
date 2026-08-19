@@ -21,7 +21,7 @@ os.environ["DATABASE_URL"] = _PG     # пусто — локальный SQLite
 os.environ["DEV_MODE"] = "0"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import db                             # noqa: E402
+from partut import db  # noqa: E402
 if _PG:
     # Чистим схему целиком: тесты рассчитывают на пустую базу, а прошлый прогон
     # мог оставить и таблицы, и данные.
@@ -32,10 +32,10 @@ else:
     db.SQLITE_FILE = tempfile.mktemp(suffix=".db")
 db.init_db()
 
-import auth                          # noqa: E402
-import server                        # noqa: E402
-import tgsend                        # noqa: E402
-import notifications                 # noqa: E402
+from partut.web import auth  # noqa: E402
+from partut.web import server  # noqa: E402
+from partut.integrations import tgsend  # noqa: E402
+from partut import notifications  # noqa: E402
 
 # Заглушки Telegram: копим отправленное, ничего не шлём наружу.
 SENT = []   # список (chat_id, text, parse_mode)
@@ -68,7 +68,7 @@ def _send_document(cid, *a, **kw):
 # этого тест, дёрнувший функцию бота, уходит в настоящий Telegram с боевым
 # токеном. Глушим здесь, чтобы об этом нельзя было забыть в отдельном модуле.
 os.environ["WEBAPP_URL"] = ""          # иначе bot при импорте лезет в сеть за меню
-import bot as _bot                     # noqa: E402
+from partut.bot import handlers as _bot  # noqa: E402
 _bot.bot.send_message = _send_message
 _bot.bot.send_photo = _send_photo
 _bot.bot.send_document = _send_document

@@ -10,11 +10,11 @@
 """
 from _common import db, client, Checker, as_admin, deny_admin, real_auth, REAL_GET_USER
 
-import auth
+from partut.web import auth
 
-import cache
+from partut import cache
 
-import config
+from partut import config
 
 SELLER = 7401
 

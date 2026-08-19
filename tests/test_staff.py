@@ -18,7 +18,7 @@ def _as(uid):
 
 
 def run():
-    import config
+    from partut import config
     c = Checker("Доступ: выдать и забрать")
 
     conn = db.connect(); conn.cursor().execute("DELETE FROM staff"); conn.commit(); conn.close()

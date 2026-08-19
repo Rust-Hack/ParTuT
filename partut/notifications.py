@@ -12,8 +12,8 @@ import random
 import json
 from telebot import types
 
-import db
-from config import CITIES, WEBAPP_URL, admins_for_city
+from partut import db
+from partut.config import CITIES, WEBAPP_URL, admins_for_city
 
 
 def _orders_kb():

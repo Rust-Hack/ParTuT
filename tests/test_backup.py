@@ -84,7 +84,7 @@ def run():
     # Самая хрупкая часть: собрать архив и отдать его в Telegram. Проверяем без
     # сети — подменяем отправку и смотрим, что уходит.
     c2 = Checker("Отправка копии в Telegram")
-    import bot as botmod
+    from partut.bot import handlers as botmod
 
     sent = []
     real_send = botmod.bot.send_document
@@ -198,7 +198,7 @@ def run_handler_order():
     видна ни в коде команды, ни в логах: она в порядке строк.
     """
     c = Checker("Порядок обработчиков бота")
-    import bot as botmod
+    from partut.bot import handlers as botmod
 
     handlers = botmod.bot.message_handlers
     def имя(h):
@@ -232,7 +232,7 @@ def run_daily_once():
     подряд, а «раз в сутки» держалось только пока процесс жив.
     """
     import datetime
-    import bot as botmod
+    from partut.bot import handlers as botmod
 
     c = Checker("Копия раз в сутки")
     db.set_setting(botmod._BACKUP_MARK, "")

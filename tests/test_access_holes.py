@@ -11,14 +11,14 @@ from urllib.parse import urlencode
 
 from _common import db, client, server, Checker, as_admin, REAL_GET_USER, real_auth
 
-import photos
+from partut.web import photos
 
-import auth
+from partut.web import auth
 
-import cache
+from partut import cache
 
-import config
-import server_orders
+from partut import config
+from partut.web import orders as server_orders
 
 BUYER = 7501
 SELLER = 7502          # продавец Турова
@@ -113,7 +113,7 @@ def run():
 
     # --- Бот не должен быть обходной дверью ---
     c5 = Checker("Границы точек в чате")
-    import bot as botmod
+    from partut.bot import handlers as botmod
     minsk = db.add_product("Минск", "disposable", "Минский", 10.0, 5)
     turov = db.add_product("Туров", "disposable", "Туровский", 10.0, 5)
     db.add_staff(SELLER, "Туров", "продавец точки")

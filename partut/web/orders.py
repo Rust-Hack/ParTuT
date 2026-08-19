@@ -1,5 +1,5 @@
 """
-server_orders.py — заказ от корзины до выдачи.
+partut/web/orders.py — заказ от корзины до выдачи.
 
 Самый ответственный путь магазина, и потому он собран в одном файле целиком:
 оформление, чек, отмена покупателем, история заказов — и вторая половина,
@@ -23,15 +23,15 @@ import json
 
 from flask import Blueprint, jsonify, request
 
-import cache
-import auth
-import db
-import photos
-import shopinfo
-import tgsend
-import inputs
-import notifications
-from config import admins_for_city
+from partut import cache
+from partut.web import auth
+from partut import db
+from partut.web import photos
+from partut.web import shopinfo
+from partut.integrations import tgsend
+from partut import inputs
+from partut import notifications
+from partut.config import admins_for_city
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.

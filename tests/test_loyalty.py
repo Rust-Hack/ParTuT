@@ -17,7 +17,7 @@
 """
 from _common import db, client, Checker, as_user, as_admin
 
-import cache
+from partut import cache
 
 
 def _clean():
@@ -102,7 +102,7 @@ def run():
     # пустоту: пустое поле владелец сохранит — и сотрёт реквизиты по-настоящему.
     # Экран собирает все настройки одним запросом, и на этом однажды потерялись
     # значения по умолчанию.
-    import config
+    from partut import config
     conn = db.connect(); cur = conn.cursor()
     for ключ in ("payment_info", "confirm_minutes", "wheel_step", "referral_bonus",
                  "coins_per_byn", "compensation_max"):

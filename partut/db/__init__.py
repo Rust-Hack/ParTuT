@@ -14,7 +14,7 @@ import os
 import json
 import datetime
 
-import config
+from partut import config
 
 from dotenv import load_dotenv
 
@@ -4045,31 +4045,31 @@ def recalc_product_stock(product_id):
 
 
 # --- Розыгрыши ---
-# Сам код — в db_raffles.py, здесь только имена, чтобы весь магазин по-прежнему
+# Сам код — в partut/db/raffles.py, здесь только имена, чтобы весь магазин по-прежнему
 # звал db.get_active_raffle() и не знал о переезде.
 #
 # Импорт внизу файла намеренно: db_raffles обращается к примитивам через db, и к
 # этому моменту они уже определены. F401 подавлен осознанно — это переэкспорт,
 # имена нужны не здесь, а тем, кто зовёт их через db.
 # --- Склад ---
-# Движения и подписки на поступление — см. db_stock.py.
-from db_stock import (                                          # noqa: E402
+# Движения и подписки на поступление — см. partut/db/stock.py.
+from partut.db.stock import (                                          # noqa: E402
     move_stock, get_stock_moves, stock_losses,                          # noqa: F401
     add_stock_alert, remove_stock_alert, stock_alerts_ready,            # noqa: F401
     clear_stock_alerts, stock_alert_counts, STOCK_REASONS,              # noqa: F401
 )
 
 # --- Промокоды ---
-# Код занимается одной транзакцией с заказом — см. db_promos.py.
-from db_promos import (                                         # noqa: E402
+# Код занимается одной транзакцией с заказом — см. partut/db/promos.py.
+from partut.db.promos import (                                         # noqa: E402
     _promo_row, check_promo, consume_promo,                             # noqa: F401
     list_promos, add_promo, set_promo_active,                           # noqa: F401
     delete_promo, _reserve_promo,                                       # noqa: F401
 )
 
 # --- Отзывы ---
-# Отзыв принадлежит модели, а не товару на точке — см. db_reviews.py.
-from db_reviews import (                                        # noqa: E402
+# Отзыв принадлежит модели, а не товару на точке — см. partut/db/reviews.py.
+from partut.db.reviews import (                                        # noqa: E402
     _ensure_review_columns, reviewable_products, add_review,            # noqa: F401
     list_reviews, list_reviews_by_user, admin_reviews,                  # noqa: F401
     pending_reviews, delete_review, set_review_reply,                   # noqa: F401
@@ -4078,8 +4078,8 @@ from db_reviews import (                                        # noqa: E402
 )
 
 # --- Картинки ---
-# Витрина, галерея и кэш скачанного — в db_photos.py.
-from db_photos import (                                         # noqa: E402
+# Витрина, галерея и кэш скачанного — в partut/db/photos.py.
+from partut.db.photos import (                                         # noqa: E402
     MAX_EXTRA_PHOTOS, _ensure_photo_columns, get_photo_blob, save_photo_blob,   # noqa: F401
     is_shop_photo, is_product_photo, model_photos, all_model_photos,            # noqa: F401
     add_model_photo, get_product_photos, all_product_photos, add_product_photo,  # noqa: F401
@@ -4087,15 +4087,15 @@ from db_photos import (                                         # noqa: E402
 )
 
 # --- Игры ---
-# Колесо и слот — в db_games.py. Здесь только имена: магазин зовёт их через db.
-from db_games import (                                          # noqa: E402
+# Колесо и слот — в partut/db/games.py. Здесь только имена: магазин зовёт их через db.
+from partut.db.games import (                                          # noqa: E402
     WHEEL_STEP_DEFAULT, WHEEL_ITEMS_STEP_OLD,                               # noqa: F401
     _migrate_wheel_progress_to_money, wheel_step, get_wheel,                # noqa: F401
     add_wheel_progress, add_spins, use_spin, do_wheel_spin,                 # noqa: F401
     do_slot_spin, get_game_stats,                                           # noqa: F401
 )
 
-from db_raffles import (                                        # noqa: E402
+from partut.db.raffles import (                                        # noqa: E402
     _RAFFLE_EDITABLE, _ensure_raffle_columns, _ensure_raffle_uniques,       # noqa: F401
     get_active_raffle, get_last_finished_raffle, recent_finished_raffle,    # noqa: F401
     create_raffle, update_raffle_field, claim_raffle_draw,                  # noqa: F401

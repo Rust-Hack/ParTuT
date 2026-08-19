@@ -8,7 +8,7 @@
 Здесь два теста подряд: первый пачкает состояние, второй смотрит, убрали ли за
 ним. Порядок внутри файла pytest сохраняет — он и есть суть проверки.
 """
-import auth
+from partut.web import auth
 from _common import as_admin, REAL_GET_ADMIN
 
 

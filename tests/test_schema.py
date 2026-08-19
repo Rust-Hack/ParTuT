@@ -87,9 +87,14 @@ def run():
     c3("база вернулась в исходное", not db.schema_version()["ждут"])
 
     c4 = Checker("Схема правится только добавлением")
-    for файл in sorted(и for и in os.listdir(КОРЕНЬ)
-                       if и.startswith("db") and и.endswith(".py")):
-        текст = io.open(os.path.join(КОРЕНЬ, файл), encoding="utf-8").read()
+    # Все файлы пакета базы, а не список имён: новый кусок db попадёт под
+    # проверку сам. Раньше здесь искались файлы «db*.py» в корне — после
+    # переезда в partut/db/ поиск нашёл бы ноль, и проверка прошла бы вхолостую.
+    ПАПКА_БАЗЫ = os.path.join(КОРЕНЬ, "partut", "db")
+    файлы_базы = sorted(и for и in os.listdir(ПАПКА_БАЗЫ) if и.endswith(".py"))
+    c4(f"файлы базы найдены ({len(файлы_базы)})", len(файлы_базы) >= 5)
+    for файл in файлы_базы:
+        текст = io.open(os.path.join(ПАПКА_БАЗЫ, файл), encoding="utf-8").read()
         находки = []
         for строка in текст.splitlines():
             if any(р in строка for р in РАЗРЕШЕНО) or строка.lstrip().startswith("#"):

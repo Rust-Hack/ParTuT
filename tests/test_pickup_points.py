@@ -5,7 +5,7 @@
 """
 from _common import db, client, Checker, as_user, as_admin, deny_admin
 
-import cache
+from partut import cache
 
 
 BUYER = 7701

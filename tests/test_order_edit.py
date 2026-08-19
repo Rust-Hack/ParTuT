@@ -9,7 +9,7 @@
 """
 from _common import db, client, Checker, as_admin, deny_admin, SENT, reset_sent
 
-import cache
+from partut import cache
 
 
 BUYER = 9601

@@ -1,7 +1,7 @@
 """Правка способа доставки на месте: /api/admin/delivery/update."""
 from _common import db, client, Checker, as_admin, as_user
 
-import cache
+from partut import cache
 
 
 def upd(payload):

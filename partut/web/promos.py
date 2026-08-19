@@ -1,7 +1,7 @@
 """
-server_promos.py — промокоды: ручки админки.
+partut/web/promos.py — промокоды: ручки админки.
 
-Пара к db_promos.py: там правила и списание кода, здесь — что владелец делает
+Пара к partut/db/promos.py: там правила и списание кода, здесь — что владелец делает
 с ними руками (завести, включить-выключить, удалить, посмотреть список).
 
 Проверку промокода при оформлении здесь искать не надо: она живёт на пути
@@ -13,9 +13,9 @@ server_promos.py — промокоды: ручки админки.
 
 from flask import Blueprint, jsonify, request
 
-import auth
-import db
-import inputs
+from partut.web import auth
+from partut import db
+from partut import inputs
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.

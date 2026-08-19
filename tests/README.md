@@ -84,7 +84,7 @@ DATABASE_URL=postgresql://…/drill python tools/restore.py ~/Downloads/partut-�
 DATABASE_URL=postgresql://…/drill python tools/restore.py ~/Downloads/partut-….json.gz --yes
 
 # 4. Поднять магазин на восстановленной базе и открыть его
-DATABASE_URL=postgresql://…/drill PORT=5002 python server.py
+DATABASE_URL=postgresql://…/drill PORT=5002 python -m partut.web.server
 
 # 5. ОФОРМИТЬ ЗАКАЗ. Не «посмотреть витрину» — именно оформить, до конца.
 #    Заодно завести товар в админке. Это единственный шаг, который проверяет,

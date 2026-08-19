@@ -11,12 +11,12 @@ db.py вырос до 4787 строк, и его режут по кускам. �
 """
 from _common import db, Checker
 
-import db_games
-import db_photos
-import db_promos
-import db_raffles
-import db_reviews
-import db_stock
+from partut.db import games as db_games
+from partut.db import photos as db_photos
+from partut.db import promos as db_promos
+from partut.db import raffles as db_raffles
+from partut.db import reviews as db_reviews
+from partut.db import stock as db_stock
 
 # Модули, вынесенные из db.py, и что именно из них переехало.
 ВЫНЕСЕНО = [

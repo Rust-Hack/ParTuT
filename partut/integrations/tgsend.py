@@ -15,11 +15,11 @@ import threading
 
 import telebot
 
-import errors
-from config import BOT_TOKEN
+from partut import errors
+from partut.config import BOT_TOKEN
 
 # Отдельный экземпляр бота — ТОЛЬКО чтобы отправлять сообщения и картинки.
-# Опрос обновлений ведёт bot.py, здесь его нет и быть не должно.
+# Опрос обновлений ведёт partut/bot/handlers.py, здесь его нет и быть не должно.
 tg = telebot.TeleBot(BOT_TOKEN)
 
 try:

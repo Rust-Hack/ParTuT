@@ -2,7 +2,7 @@
 import gzip
 from _common import client, Checker
 
-import cache
+from partut import cache
 
 
 def run():
@@ -60,7 +60,7 @@ def run_etag():
 
     # Данные поменялись — старая версия больше не подходит, иначе витрина
     # застынет на позавчерашних остатках.
-    import db
+    from partut import db
     before = client.get("/api/products").headers.get("ETag")
     pid = db.add_product("Минск", "disposable", "ETag-проверка", 11.0, 3)
     cache.bust()

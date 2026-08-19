@@ -20,7 +20,7 @@ import threading
 from _common import (db, client, server, Checker, as_user, as_admin, deny_admin,  # noqa: F401
                      SENT, reset_sent)
 
-import server_games
+from partut.web import games as server_games
 
 UIDS = [8901, 8902, 8903, 8904]
 

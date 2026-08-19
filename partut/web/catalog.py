@@ -1,5 +1,5 @@
 """
-server_catalog.py — админка ассортимента: товары, модели, бренды, категории, фото.
+partut/web/catalog.py — админка ассортимента: товары, модели, бренды, категории, фото.
 
 Второй кусок, вынесенный из server.py. Здесь владелец ведёт ассортимент: что
 магазин вообще продаёт (модели, бренды, категории) и что стоит на конкретной
@@ -17,12 +17,12 @@ import json
 
 from flask import Blueprint, jsonify, request
 
-import cache
-import auth
-import db
-import photos
-import tgsend
-import inputs
+from partut import cache
+from partut.web import auth
+from partut import db
+from partut.web import photos
+from partut.integrations import tgsend
+from partut import inputs
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.

@@ -1,7 +1,7 @@
 """
-server_stock.py — движение склада: приход, списание, бой.
+partut/web/stock.py — движение склада: приход, списание, бой.
 
-Пара к db_stock.py: там сама запись движения одной транзакцией вместе с
+Пара к partut/db/stock.py: там сама запись движения одной транзакцией вместе с
 остатком, здесь — ручки, которыми продавец это делает, и журнал движений.
 
 Почему это отдельно от ассортимента: завести товар и изменить его остаток —
@@ -13,9 +13,9 @@ server_stock.py — движение склада: приход, списани�
 
 from flask import Blueprint, jsonify, request
 
-import auth
-import db
-import inputs
+from partut.web import auth
+from partut import db
+from partut import inputs
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.

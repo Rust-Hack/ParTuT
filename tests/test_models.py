@@ -7,7 +7,7 @@
 """
 from _common import db, client, Checker, as_admin, deny_admin
 
-import cache
+from partut import cache
 
 
 def _clean():

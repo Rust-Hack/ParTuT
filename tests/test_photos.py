@@ -6,11 +6,11 @@ import io
 
 from _common import db, client, server, Checker, as_admin
 
-import photos
+from partut.web import photos
 
-import tgsend
+from partut.integrations import tgsend
 
-import cache
+from partut import cache
 
 
 class _FakeResp:

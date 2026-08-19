@@ -11,10 +11,10 @@
 """
 from _common import db, client, Checker, real_auth, deny_admin, as_admin
 
-import auth
+from partut.web import auth
 
-import cache
-import config
+from partut import cache
+from partut import config
 
 OWNER = 7410         # владелец
 TUROV = 7411         # продавец Турова
