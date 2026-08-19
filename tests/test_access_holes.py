@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from _common import db, client, server, Checker, as_admin, REAL_GET_USER, real_auth
 
 import config
+import server_orders
 
 BUYER = 7501
 SELLER = 7502          # продавец Турова
@@ -89,8 +90,8 @@ def run():
     stale = f"{int(time.time()) - 10}.{'0' * 32}"
     c4("просроченный пропуск не подходит", not server._may_see_photo("receipt_file_777", stale))
     c4("в ссылке на чек нет строки входа",
-      "initData" not in (server._order_json(db.get_order(oid), "секрет")["receipt_url"] or ""))
-    c4("зато есть пропуск", "&t=" in server._order_json(db.get_order(oid))["receipt_url"])
+      "initData" not in (server_orders._order_json(db.get_order(oid), "секрет")["receipt_url"] or ""))
+    c4("зато есть пропуск", "&t=" in server_orders._order_json(db.get_order(oid))["receipt_url"])
     c4("картинка товара остаётся открытой всем",
       server._may_see_photo(db.get_product(pid)["photo"] or "нет-такого") is True
       or db.get_product(pid)["photo"] is None)

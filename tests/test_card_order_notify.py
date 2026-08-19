@@ -15,6 +15,7 @@ import importlib
 from _common import db, client, server, Checker, as_user, as_admin
 import config
 import notifications
+import server_orders
 
 
 def _clean():
@@ -79,7 +80,7 @@ def run():
 
         # --- Клиенту тоже напоминаем про чек ---
         c3 = Checker("Напоминание клиенту")
-        summary = server._client_order_summary(oid)
+        summary = server_orders._client_order_summary(oid)
         c3("клиент получил подтверждение заказа", f"#{oid}" in summary)
         c3("и напоминание приложить чек", "Ждём фото чека" in summary)
 
@@ -99,7 +100,7 @@ def run():
         c4("после чека пометка «ждём» пропала",
            "Чек ещё не загружен" not in (fb3.sent[0][1] if fb3.sent else ""))
         c4("и клиенту про чек больше не пишем",
-           "Ждём фото чека" not in server._client_order_summary(oid))
+           "Ждём фото чека" not in server_orders._client_order_summary(oid))
 
         db.remove_staff(6699)
         config.refresh_staff()
