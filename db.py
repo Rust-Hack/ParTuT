@@ -110,6 +110,104 @@ def _insert_id(cur, sql, params):
     return cur.lastrowid
 
 
+# --- Летопись изменений схемы -------------------------------------------
+#
+# Схема правится только добавлением: тридцать ADD COLUMN и ни одного DROP или
+# RENAME. Поэтому откат кода назад сегодня безопасен — старый код просто не
+# смотрит на новые колонки. Но это держится на дисциплине, а не на устройстве:
+# первая же разрушительная правка, написанная тем же способом, сломает откат
+# молча. Сторожит это tests/test_schema.py.
+#
+# Чего действительно не хватало — памяти. Разовые переносы данных заводили себе
+# по отметке в настройках, каждый свою, и вопрос «а на какой схеме эта база»
+# ответа не имел вовсе: ни у боевой, ни у поднятой из копии.
+#
+# Теперь ответ есть: таблица schema_migrations. Порядок шагов — порядок их
+# вызова в коде, а этот список нужен, чтобы шаги нельзя было завести втихую.
+SCHEMA_MIGRATIONS = [
+    # (имя в летописи, старая отметка в настройках)
+    ("0001-модели-собраны-из-товаров", "models_seeded"),
+    ("0002-прогресс-колеса-в-рублях", "wheel_progress_in_money"),
+    ("0003-история-по-времени-магазина", "history_shifted_to_shop_time"),
+]
+
+
+def _migration_table():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS schema_migrations (
+                       name       TEXT PRIMARY KEY,
+                       applied_at TEXT NOT NULL)""")
+    conn.commit()
+    conn.close()
+
+
+def _migrate(имя, шаг):
+    """Прогоняет разовый перенос один раз за всю жизнь базы.
+
+    Заявку подаём ДО работы, а не после: два процесса поднимаются одновременно
+    (хостинг деплоит новую версию, старая ещё жива), и «проверить, потом
+    сделать» означало бы удвоенный прогресс у покупателей. Кто вставил строку —
+    тот и работает; остальные проходят мимо.
+
+    Если шаг упал, заявку снимаем: иначе перенос считался бы сделанным, а
+    данные остались бы наполовину старыми — и это никогда бы не всплыло.
+    """
+    старая_метка = dict(SCHEMA_MIGRATIONS).get(имя)
+    if старая_метка is None:
+        raise RuntimeError(f"перенос {имя} не записан в SCHEMA_MIGRATIONS")
+
+    _migration_table()
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("SELECT name FROM schema_migrations WHERE name = %s"), (имя,))
+    if cur.fetchone():
+        conn.close()
+        return False
+
+    # База, поднятая до летописи, носит старую отметку в настройках. Прогнать
+    # шаг второй раз местами означало бы удвоить накопленное людям.
+    уже = bool(get_setting(старая_метка))
+
+    try:
+        cur.execute(_q("INSERT INTO schema_migrations (name, applied_at) VALUES (%s, %s)"),
+                    (имя, _now_str()))
+        conn.commit()
+    except Exception:
+        conn.close()
+        return False        # успел другой процесс
+    conn.close()
+
+    if уже:
+        return False        # уже сделано когда-то, только записали в летопись
+    try:
+        шаг()
+    except Exception:
+        conn = connect(); cur = conn.cursor()
+        cur.execute(_q("DELETE FROM schema_migrations WHERE name = %s"), (имя,))
+        conn.commit(); conn.close()
+        raise
+    return True
+
+
+def schema_version():
+    """На какой схеме эта база: что применено и когда.
+
+    Нужно ровно в тот момент, когда думать некогда: магазин ведёт себя странно,
+    или копию только что развернули в пустую базу и надо понять, доехало ли всё.
+    """
+    _migration_table()
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT name, applied_at FROM schema_migrations ORDER BY name")
+    строки = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    все = [и for и, _ in SCHEMA_MIGRATIONS]
+    return {"применено": строки,
+            "последняя": строки[-1]["name"] if строки else "",
+            "ждут": [и for и in все if и not in {r["name"] for r in строки}]}
+
+
 def init_db():
     """Создаёт таблицы, если их ещё нет."""
     conn = connect()
@@ -451,13 +549,21 @@ def init_db():
     _ensure_category_columns()  # has_flavors у категорий
     _ensure_photo_columns()     # галерея у модели, а не у товара
     seed_category_specs()       # характеристики категорий, если их ещё нет
-    models_seeded_from_products()   # разово собирает ассортимент из прежних товаров
+    _migrate("0001-модели-собраны-из-товаров", models_seeded_from_products)
     _ensure_review_columns()    # отзыв принадлежит модели — ПОСЛЕ того, как модели собраны
     _ensure_raffle_columns()    # finished_at: когда розыгрыш реально подвели
     _ensure_raffle_uniques()    # один билет на человека, один активный розыгрыш
-    _shift_history_to_shop_time()   # разово: старые записи были по UTC, см. ниже
+    _migrate("0003-история-по-времени-магазина", _shift_history_to_shop_time)
     seed_locations()            # добавит стартовые точки, если таблица пустая
     seed_delivery()             # дефолтные способы получения для Минск/Туров
+
+    # Одна строка в логе при старте. Смотрят на неё ровно тогда, когда магазин
+    # ведёт себя странно или копию только что развернули в пустую базу: первый
+    # вопрос в такую минуту — а та ли это схема.
+    состояние = schema_version()
+    ждут = состояние["ждут"]
+    print(f"Схема базы: {состояние['последняя'] or 'чистая'}"
+          + (f" · НЕ ПРИМЕНЕНО: {', '.join(ждут)}" if ждут else ""))
 
 
 def _table_columns(cur, table):
@@ -562,7 +668,7 @@ def _ensure_user_columns():
                    WHERE username IS NULL OR username = ''""")
     conn.commit()
     conn.close()
-    _migrate_wheel_progress_to_money()
+    _migrate("0002-прогресс-колеса-в-рублях", _migrate_wheel_progress_to_money)
 
 
 

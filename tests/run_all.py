@@ -62,17 +62,18 @@ import test_till
 import test_smoke_routes
 import test_module_split
 import test_server_split
+import test_schema
 import test_webapp
 
 MODULES = [test_order_lifecycle, test_messaging, test_stats, test_delivery,
-           test_gzip, test_cache, test_order_submit, test_photos, test_staff, test_stock_alerts, test_backup, test_errors, test_repeat_reminder, test_prefill, test_pickup_points, test_profit, test_free_delivery, test_promos, test_stock_moves, test_customer_card, test_gallery, test_reviews, test_categories, test_upsell, test_specs, test_brands, test_models, test_seller_notify, test_permissions, test_order_edit, test_hidden, test_today, test_access_holes, test_race, test_user_names, test_card_order_notify, test_my_settings, test_unpaid_expire, test_cross_city, test_cart_shortage, test_junk_input, test_promo_race, test_privacy, test_games_race, test_referral_abuse, test_migration, test_bot_access, test_loyalty, test_background, test_cleanup, test_double_order, test_raffle, test_compensation, test_shop_time, test_till, test_smoke_routes, test_module_split, test_server_split, test_webapp]
+           test_gzip, test_cache, test_order_submit, test_photos, test_staff, test_stock_alerts, test_backup, test_errors, test_repeat_reminder, test_prefill, test_pickup_points, test_profit, test_free_delivery, test_promos, test_stock_moves, test_customer_card, test_gallery, test_reviews, test_categories, test_upsell, test_specs, test_brands, test_models, test_seller_notify, test_permissions, test_order_edit, test_hidden, test_today, test_access_holes, test_race, test_user_names, test_card_order_notify, test_my_settings, test_unpaid_expire, test_cross_city, test_cart_shortage, test_junk_input, test_promo_race, test_privacy, test_games_race, test_referral_abuse, test_migration, test_bot_access, test_loyalty, test_background, test_cleanup, test_double_order, test_raffle, test_compensation, test_shop_time, test_till, test_smoke_routes, test_module_split, test_server_split, test_schema, test_webapp]
 
 
 def main():
     all_fails = []
     for m in MODULES:
         all_fails += m.run()
-        for extra in ('run_trust', 'run_settings', 'run_locations', 'run_phone', 'run_handler_order', 'run_daily_once', 'run_empty_restore', 'run_etag', 'run_standalone'):
+        for extra in ('run_trust', 'run_settings', 'run_locations', 'run_phone', 'run_handler_order', 'run_daily_once', 'run_empty_restore', 'run_etag', 'run_standalone', 'run_upgrade_existing'):
             if hasattr(m, extra):
                 all_fails += getattr(m, extra)()
     print("\n" + "=" * 40)
