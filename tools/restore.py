@@ -12,6 +12,12 @@
     venv/bin/python tools/restore.py файл.json.gz --yes
         — заливает копию в базу, ЗАМЕНЯЯ её содержимое.
 
+    venv/bin/python tools/restore.py --счётчики
+        — только пересчитать счётчики id, без заливки. Нужно, если базу
+          подняли не этим скриптом (pg_restore, psql, копирование из Neon):
+          строки приезжают, а счётчики id остаются на нуле, и первый же новый
+          заказ падает на чужом номере.
+
 Куда именно зальётся, определяет DATABASE_URL в .env: пусто — локальный
 shop.db, заполнено — облачная база. Скрипт печатает это перед работой, чтобы
 случайно не залить копию поверх боевого магазина.
@@ -36,6 +42,17 @@ def load(path):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     apply_it = "--yes" in sys.argv
+
+    if "--счётчики" in sys.argv or "--sequences" in sys.argv:
+        подвинуто = db.advance_sequences()
+        if not db.USE_PG:
+            print("Это SQLite — отдельных счётчиков id у него нет, править нечего.")
+            return 0
+        print(f"Счётчики id пересчитаны: {len(подвинуто)}")
+        for строка in подвинуто:
+            print("  ", строка)
+        return 0
+
     if not args:
         print(__doc__)
         return 1
@@ -66,6 +83,7 @@ def main():
     for table, result in sorted(report.items()):
         print(f"   {table:18} {result}")
     print("\nГотово. Перезапустите сервис, чтобы сбросить кэши в памяти.")
+    print("Счётчики id подтянуты — магазин может принимать новые заказы.")
     return 0
 
 

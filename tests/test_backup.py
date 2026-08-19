@@ -262,3 +262,119 @@ def run_daily_once():
         botmod.BACKUP_HOUR = orig_hour
         db.set_setting(botmod._BACKUP_MARK, "")
     return c.fails
+
+
+def run_restore_keeps_numbering():
+    """После восстановления магазин обязан принимать НОВЫЕ заказы.
+
+    Копия привозит строки, но не счётчики id. На SQLite это незаметно —
+    следующий номер он берёт от самих строк. У Postgres счётчик отдельный, в
+    новой базе стоит на единице, и копия его не двигает: заказ №1 в базе уже
+    есть, а счётчик собирается выдать именно единицу.
+
+    Беда идеально спрятана: восстановление проходит, все данные на месте, отчёт
+    зелёный — и магазин не может принять НИ ОДНОГО заказа. Найдено живьём на
+    Postgres: 40 восстановленных заказов, первый же новый — duplicate key.
+
+    Здесь состояние новой базы воспроизводится честно: счётчик сбрасывается на
+    единицу тем же способом, каким он там и оказывается, — обычным SQL, а не
+    тем кодом, который проверяем.
+    """
+    c = Checker("Нумерация после восстановления")
+
+    conn = db.connect(); cur = conn.cursor()
+    for t in ("orders", "products"):
+        cur.execute(f"DELETE FROM {t}")
+    conn.commit(); conn.close()
+
+    pid = db.add_product("Минск", "pods", "Нумерация", 10.0, 100, cost=6.0)
+    номера = [db.create_order(500 + i, "buyer", "Минск",
+                              [{"id": pid, "name": "Нумерация", "price": 10.0, "qty": 1}],
+                              10.0, "") for i in range(3)]
+    копия = db.export_tables()
+    c("заказы в копии", len(копия["orders"]) == 3)
+
+    # --- Базы больше нет: пустые таблицы И счётчики с нуля ---
+    conn = db.connect(); cur = conn.cursor()
+    for t in ("orders", "products"):
+        cur.execute(f"DELETE FROM {t}")
+        if db.USE_PG:
+            cur.execute(f"ALTER SEQUENCE {t}_id_seq RESTART WITH 1")
+        else:
+            cur.execute("DELETE FROM sqlite_sequence WHERE name = ?", (t,))
+    conn.commit(); conn.close()
+
+    db.import_tables(копия, wipe=True)
+    c("заказы вернулись", all(db.get_order(n) is not None for n in номера))
+
+    # --- Первый день после восстановления ---
+    беда = None
+    новый = None
+    try:
+        новый = db.create_order(999, "buyer", "Минск",
+                                [{"id": pid, "name": "Нумерация", "price": 10.0, "qty": 1}],
+                                10.0, "")
+    except Exception as e:
+        беда = f"{type(e).__name__}: {str(e).strip().splitlines()[0][:80]}"
+    c(f"новый заказ принимается{'' if not беда else ' (упало: ' + беда + ')'}", беда is None)
+    c(f"и получает свободный номер (после {max(номера)})",
+      новый is not None and новый > max(номера))
+    c("старые заказы при этом целы", all(db.get_order(n) is not None for n in номера))
+
+    # Товары — та же беда, только тише: новый товар молча занял бы чужой id.
+    # Ловим и здесь: непойманное исключение оборвало бы уборку в конце, и
+    # следующие тесты получили бы чужой мусор в таблицах.
+    try:
+        товар = db.add_product("Минск", "pods", "Новый после беды", 12.0, 3, cost=7.0)
+    except Exception as e:
+        товар, беда2 = None, f"{type(e).__name__}"
+        c(f"новый товар заводится (упало: {беда2})", False)
+    c("новый товар не наступает на старый", товар is not None and товар > pid)
+
+    conn = db.connect(); cur = conn.cursor()
+    for t in ("orders", "products"):
+        cur.execute(f"DELETE FROM {t}")
+    conn.commit(); conn.close()
+    return c.fails
+
+
+def run_sequences_only_forward():
+    """Счётчик id двигаем только вперёд — назад нельзя ни при каких условиях.
+
+    Соблазн поставить счётчик ровно на max(id)+1 понятен и опасен. Заказы
+    удаляют (отменённые, тестовые), и тогда счётчик стоит ДАЛЬШЕ максимума.
+    Откат назад заставил бы новый заказ занять номер удалённого — а на номера
+    заказов ссылаются начисления монет, журнал действий и переписка с
+    покупателем. Новый заказ молча получил бы чужую историю: чужие монеты,
+    чужие сообщения. Это хуже, чем падение, — падение хотя бы видно.
+    """
+    c = Checker("Счётчики id — только вперёд")
+    if not db.USE_PG:
+        # У SQLite отдельного счётчика нет, двигать нечего.
+        c("на SQLite счётчиков нет — проверять нечего", db.advance_sequences() == [])
+        return c.fails
+
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute("DELETE FROM orders")
+    conn.commit(); conn.close()
+
+    pid = db.add_product("Минск", "pods", "Вперёд", 10.0, 100, cost=6.0)
+    товар = {"id": pid, "name": "Вперёд", "price": 10.0, "qty": 1}
+    номера = [db.create_order(700 + i, "buyer", "Минск", [товар], 10.0, "") for i in range(4)]
+
+    # Последний заказ удалили — счётчик остался за максимумом.
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("DELETE FROM orders WHERE id = %s"), (номера[-1],))
+    conn.commit(); conn.close()
+
+    db.advance_sequences()
+
+    следующий = db.create_order(999, "buyer", "Минск", [товар], 10.0, "")
+    c(f"номер удалённого заказа ({номера[-1]}) не выдан заново", следующий != номера[-1])
+    c("нумерация пошла дальше", следующий > номера[-1])
+
+    conn = db.connect(); cur = conn.cursor()
+    for t in ("orders", "products"):
+        cur.execute(f"DELETE FROM {t}")
+    conn.commit(); conn.close()
+    return c.fails
