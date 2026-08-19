@@ -13,7 +13,10 @@ from _common import db, Checker
 
 import db_games
 import db_photos
+import db_promos
 import db_raffles
+import db_reviews
+import db_stock
 
 # Модули, вынесенные из db.py, и что именно из них переехало.
 ВЫНЕСЕНО = [
@@ -23,6 +26,12 @@ import db_raffles
                 "wheel_step", "get_game_stats"]),
     (db_photos, ["get_photo_blob", "save_photo_blob", "is_shop_photo",
                  "purge_orphan_photos", "add_product_photo", "photo_blob_stats"]),
+    (db_reviews, ["add_review", "list_reviews", "set_review_status", "get_review",
+                  "count_pending_reviews", "reviewable_products"]),
+    (db_promos, ["check_promo", "add_promo", "list_promos", "delete_promo",
+                 "set_promo_active", "consume_promo"]),
+    (db_stock, ["move_stock", "get_stock_moves", "stock_losses", "add_stock_alert",
+                "clear_stock_alerts", "stock_alert_counts"]),
 ]
 
 # Примитивы, которые вынесенные модули обязаны брать через db.
@@ -58,6 +67,8 @@ def run():
         db.get_active_raffle()          # живёт в db_raffles
         db.get_game_stats()             # живёт в db_games
         db.photo_blob_stats()           # живёт в db_photos
+        db.list_promos()                # живёт в db_promos
+        db.stock_alert_counts()         # живёт в db_stock
     finally:
         db.connect = настоящий
     c3("вынесенный модуль сходил через подменённый db.connect", считано["n"] > 0)

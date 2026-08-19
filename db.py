@@ -635,32 +635,6 @@ def _ensure_delivery_columns():
     conn.close()
 
 
-def _ensure_review_columns():
-    """Ответ продавца на отзыв. Спокойный ответ на тройку убеждает нового
-    покупателя сильнее, чем её отсутствие.
-
-    Плюс model_id: оценивают модель, а не наличие её на конкретной точке.
-    Пока отзыв висел на товаре, один и тот же Elf Bar в Минске и Турове копил
-    оценки раздельно — покупатель второй точки видел «отзывов пока нет» у
-    товара, у которого их дюжина. product_id остаётся: он говорит, где именно
-    человек покупал, и по нему же работают старые отзывы товаров без модели.
-    """
-    conn = connect()
-    cur = conn.cursor()
-    cols = _table_columns(cur, "reviews")
-    if "reply" not in cols:
-        cur.execute("ALTER TABLE reviews ADD COLUMN reply TEXT")
-    if "replied_at" not in cols:
-        cur.execute("ALTER TABLE reviews ADD COLUMN replied_at TEXT")
-    if "model_id" not in cols:
-        cur.execute("ALTER TABLE reviews ADD COLUMN model_id INTEGER")
-    # Проставляем модель уже написанным отзывам — иначе они останутся видны
-    # только на той точке, где были оставлены.
-    cur.execute("""UPDATE reviews SET model_id =
-                     (SELECT p.model_id FROM products p WHERE p.id = reviews.product_id)
-                   WHERE model_id IS NULL""")
-    conn.commit()
-    conn.close()
 
 
 # ---------- Розыгрыши ----------
@@ -2156,211 +2130,28 @@ def claim_setting(key, value):
 
 # ---------- Движение склада ----------
 
-# Причины движения. Приход прибавляет, остальное списывает.
-STOCK_REASONS = {
-    "in":      "Приход",
-    "broken":  "Брак или бой",
-    "expired": "Просрочка",
-    "lost":    "Недостача",
-    "gift":    "Подарок или образец",
-    "fix":     "Пересчёт",
-}
 
 
-def move_stock(product_id, delta, reason, flavor=None, cost=0, note="", admin_id=None):
-    """Меняет остаток и ЗАПИСЫВАЕТ движение. Возвращает новый остаток.
-
-    Всё одной транзакцией: остаток и запись о нём не должны разъезжаться —
-    иначе появится изменение, которого «никто не делал».
-    """
-    # При списании цену никто не вводит — берём закупочную товара на этот момент,
-    # иначе потеря посчитается нулём и убыток окажется невидимым.
-    if delta < 0 and not cost:
-        p0 = get_product(product_id)
-        cost = float(p0["cost"] or 0) if p0 else 0
-
-    conn = connect()
-    cur = conn.cursor()
-    try:
-        if flavor:
-            cur.execute(_q(f"UPDATE product_variants SET stock = {GREATEST}(0, stock + %s) "
-                           "WHERE product_id = %s AND flavor = %s"), (delta, product_id, flavor))
-        else:
-            cur.execute(_q(f"UPDATE products SET stock = {GREATEST}(0, stock + %s) WHERE id = %s"),
-                        (delta, product_id))
-        # Приход по новой цене обновляет закупочную: считать прибыль по старой
-        # цене после подорожания — значит обманывать себя.
-        if reason == "in" and cost and cost > 0:
-            cur.execute(_q("UPDATE products SET cost = %s WHERE id = %s"), (float(cost), product_id))
-        cur.execute(_q("""INSERT INTO stock_moves (product_id, flavor, delta, reason, cost, note, admin_id, created_at)
-                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""),
-                    (product_id, flavor or None, int(delta), reason, float(cost or 0),
-                     (note or "").strip()[:120], admin_id, _now_str()))
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        conn.close()
-        raise
-    conn.close()
-    if flavor:
-        recalc_product_stock(product_id)
-    p = get_product(product_id)
-    return int(p["stock"]) if p else 0
 
 
-def get_stock_moves(product_id=None, limit=100, city=None):
-    """Движения склада. city ограничивает выборку одной точкой: без товара в
-    запросе продавец иначе получал бы всю историю магазина — а по ней видно
-    завоз и списания соседних точек."""
-    conn = connect()
-    cur = conn.cursor()
-    if product_id:
-        cur.execute(_q("""SELECT m.*, p.name AS product FROM stock_moves m
-                          LEFT JOIN products p ON p.id = m.product_id
-                          WHERE m.product_id = %s ORDER BY m.id DESC LIMIT %s"""), (product_id, limit))
-    elif city:
-        cur.execute(_q("""SELECT m.*, p.name AS product FROM stock_moves m
-                          LEFT JOIN products p ON p.id = m.product_id
-                          WHERE p.city = %s ORDER BY m.id DESC LIMIT %s"""), (city, limit))
-    else:
-        cur.execute(_q("""SELECT m.*, p.name AS product FROM stock_moves m
-                          LEFT JOIN products p ON p.id = m.product_id
-                          ORDER BY m.id DESC LIMIT %s"""), (limit,))
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
 
 
-def stock_losses(days=None):
-    """Во сколько обошлись списания за период — по закупочной цене на момент
-    движения. Это настоящие деньги, и владелец должен их видеть."""
-    conn = connect()
-    cur = conn.cursor()
-    cutoff = ((shop_now() - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00")
-              if days else None)
-    sql = """SELECT reason, SUM(-delta) AS qty,
-                    SUM(-delta * COALESCE(NULLIF(cost, 0), 0)) AS money
-             FROM stock_moves WHERE delta < 0"""
-    if cutoff:
-        cur.execute(_q(sql + " AND created_at >= %s GROUP BY reason"), (cutoff,))
-    else:
-        cur.execute(sql + " GROUP BY reason")
-    rows = [{"reason": r["reason"], "qty": int(r["qty"] or 0), "money": round(float(r["money"] or 0), 2)}
-            for r in cur.fetchall()]
-    conn.close()
-    return sorted(rows, key=lambda r: -r["money"])
 
 
 # ---------- Промокоды ----------
 
-def _promo_row(code):
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("SELECT * FROM promos WHERE code = %s"), (code.strip().upper(),))
-    row = cur.fetchone()
-    conn.close()
-    return dict(row) if row else None
 
 
-def check_promo(code, user_id, subtotal):
-    """Можно ли применить код. Возвращает (скидка, ошибка).
-
-    Считаем ЗДЕСЬ, а не на клиенте: скидка — это деньги, и присланную сумму
-    принимать на веру нельзя."""
-    # Код приходит из запроса: строкой он быть обязан, но прислать могут что
-    # угодно, а промокод — это деньги, и падать здесь нельзя.
-    code = (code if isinstance(code, str) else "").strip().upper()
-    if not code:
-        return 0.0, None
-    p = _promo_row(code)
-    if not p or not p["active"]:
-        return 0.0, "promo_unknown"
-    if p["uses_left"] is not None and p["uses_left"] <= 0:
-        return 0.0, "promo_used_up"
-    if subtotal < (p["min_total"] or 0):
-        return 0.0, "promo_min"
-    if p["once_per_user"]:
-        conn = connect()
-        cur = conn.cursor()
-        cur.execute(_q("SELECT COUNT(*) AS c FROM orders WHERE user_id = %s AND promo_code = %s "
-                       "AND status != 'canceled'"), (user_id, code))
-        used = cur.fetchone()["c"]
-        conn.close()
-        if used:
-            return 0.0, "promo_once"
-
-    if p["kind"] == "fixed":
-        discount = float(p["value"] or 0)
-    else:
-        discount = subtotal * float(p["value"] or 0) / 100.0
-    # Скидка не может превышать стоимость товаров: иначе магазин доплачивает.
-    return round(min(discount, subtotal), 2), None
 
 
-def consume_promo(code):
-    """Списывает одно использование. Без ограничения по числу — ничего не делает."""
-    code = (code or "").strip().upper()
-    if not code:
-        return
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("UPDATE promos SET uses_left = uses_left - 1 "
-                   "WHERE code = %s AND uses_left IS NOT NULL AND uses_left > 0"), (code,))
-    conn.commit()
-    conn.close()
 
 
-def list_promos():
-    """Коды со статистикой: сколько раз применили и сколько это принесло.
-    Ради этой таблицы промокоды и заводятся — она отвечает, сработал ли пост."""
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM promos ORDER BY id DESC")
-    promos = [dict(r) for r in cur.fetchall()]
-    cur.execute("""SELECT promo_code AS code, COUNT(*) AS n,
-                          COALESCE(SUM(total), 0) AS revenue,
-                          COALESCE(SUM(promo_discount), 0) AS given
-                   FROM orders WHERE promo_code IS NOT NULL AND status = 'issued'
-                   GROUP BY promo_code""")
-    stats = {r["code"]: dict(r) for r in cur.fetchall()}
-    conn.close()
-    for p in promos:
-        st = stats.get(p["code"], {})
-        p["orders"] = int(st.get("n", 0))
-        p["revenue"] = round(float(st.get("revenue", 0) or 0), 2)
-        p["given"] = round(float(st.get("given", 0) or 0), 2)
-    return promos
 
 
-def add_promo(code, kind, value, min_total=0, uses_left=None, once_per_user=True):
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("""INSERT INTO promos (code, kind, value, min_total, uses_left, once_per_user, active, created_at)
-                      VALUES (%s, %s, %s, %s, %s, %s, 1, %s)"""),
-                (code.strip().upper(), kind, float(value or 0), float(min_total or 0),
-                 uses_left, 1 if once_per_user else 0, _now_str()))
-    conn.commit()
-    conn.close()
 
 
-def set_promo_active(code, active):
-    code = (code if isinstance(code, str) else "").strip().upper()
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("UPDATE promos SET active = %s WHERE code = %s"),
-                (1 if active else 0, code))
-    conn.commit()
-    conn.close()
 
 
-def delete_promo(code):
-    # Код может прийти чем угодно из запроса — промокоды правит человек руками.
-    code = (code if isinstance(code, str) else "").strip().upper()
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("DELETE FROM promos WHERE code = %s"), (code,))
-    conn.commit()
-    conn.close()
 
 
 # ---------- Точки самовывоза ----------
@@ -2626,19 +2417,6 @@ def import_tables(data, wipe=True):
 
 # ---------- «Сообщить о поступлении» ----------
 
-def add_stock_alert(product_id, user_id):
-    """Покупатель ждёт этот товар. Повторное нажатие не создаёт дубль."""
-    conn = connect()
-    cur = conn.cursor()
-    sql = ("INSERT INTO stock_alerts (product_id, user_id, created_at) VALUES (%s, %s, %s) "
-           + ("ON CONFLICT (product_id, user_id) DO NOTHING" if USE_PG else ""))
-    if USE_PG:
-        cur.execute(sql, (product_id, user_id, _now_str()))
-    else:
-        cur.execute("INSERT OR IGNORE INTO stock_alerts (product_id, user_id, created_at) "
-                    "VALUES (?, ?, ?)", (product_id, user_id, _now_str()))
-    conn.commit()
-    conn.close()
 
 
 def alerts_of_user(user_id):
@@ -2652,38 +2430,10 @@ def alerts_of_user(user_id):
     return ids
 
 
-def remove_stock_alert(product_id, user_id):
-    """Покупатель передумал ждать. Подписка ставилась одним нажатием, а снять её
-    было нельзя вовсе — оставалось терпеть сообщение о товаре, который уже не
-    нужен, или блокировать бота."""
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("DELETE FROM stock_alerts WHERE product_id = %s AND user_id = %s"),
-                (product_id, user_id))
-    conn.commit()
-    conn.close()
 
 
-def stock_alerts_ready():
-    """Кого пора обрадовать: подписки на товары, которые СНОВА в наличии.
-    Возвращает [(user_id, product_id, название)]."""
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("""SELECT a.user_id, a.product_id, p.name
-                   FROM stock_alerts a JOIN products p ON p.id = a.product_id
-                   WHERE p.stock > 0""")
-    rows = [(int(r["user_id"]), int(r["product_id"]), r["name"]) for r in cur.fetchall()]
-    conn.close()
-    return rows
 
 
-def clear_stock_alerts(product_id):
-    """Сообщили — подписки на этот товар больше не нужны."""
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("DELETE FROM stock_alerts WHERE product_id = %s"), (product_id,))
-    conn.commit()
-    conn.close()
 
 
 def coin_flow(days=None):
@@ -2714,14 +2464,6 @@ def coin_flow(days=None):
     return {"granted": granted, "spent": spent, "by_reason": by_reason}
 
 
-def stock_alert_counts():
-    """{товар: сколько ждут} — админу видно, что именно стоит завезти."""
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("SELECT product_id, COUNT(*) AS n FROM stock_alerts GROUP BY product_id")
-    out = {int(r["product_id"]): int(r["n"]) for r in cur.fetchall()}
-    conn.close()
-    return out
 
 
 # ---------- Админы и продавцы (управляются из приложения) ----------
@@ -2832,57 +2574,8 @@ def receipt_owner(file_id):
 
 # ---------- Отзывы ----------
 
-REVIEW_MAX_TEXT = 500
 
 
-def reviewable_products(user_id):
-    """Что этот человек может оценить: купил (заказ выдан) и ещё не оценивал.
-
-    Право на отзыв даёт покупка, а не желание высказаться: иначе конкурент
-    поставит единицу, не потратив ни рубля, а оценка товара перестанет
-    что-либо значить."""
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("SELECT items FROM orders WHERE user_id = %s AND status = 'issued'"), (user_id,))
-    bought = {}
-    for r in cur.fetchall():
-        try:
-            for it in json.loads(r["items"]):
-                pid = int(it.get("id", 0))
-                if pid:
-                    bought[pid] = it.get("name", "")
-        except (TypeError, ValueError):
-            pass
-    if not bought:
-        conn.close()
-        return []
-    marks = ",".join(["%s"] * len(bought))
-    # Названия берём из живого каталога: в старом заказе товар мог называться иначе.
-    cur.execute(_q(f"SELECT id, name, model_id FROM products WHERE id IN ({marks})"), tuple(bought.keys()))
-    live = {r["id"]: (r["name"], r["model_id"]) for r in cur.fetchall()}
-    cur.execute(_q("SELECT product_id, model_id FROM reviews WHERE user_id = %s"), (user_id,))
-    rated_products, rated_models = set(), set()
-    for r in cur.fetchall():
-        rated_products.add(r["product_id"])
-        if r["model_id"]:
-            rated_models.add(r["model_id"])
-    conn.close()
-
-    out, seen_models = [], set()
-    for pid in bought:
-        if pid not in live:
-            continue
-        name, mid = live[pid]
-        # Оценивают модель: уже оценил её на другой точке — второй раз не предлагаем.
-        # И один и тот же товар с двух точек не показываем дважды в одном списке.
-        if mid and (mid in rated_models or mid in seen_models):
-            continue
-        if not mid and pid in rated_products:
-            continue
-        if mid:
-            seen_models.add(mid)
-        out.append({"id": pid, "name": name or bought[pid]})
-    return out
 
 
 def _model_of(cur, product_id):
@@ -2892,137 +2585,24 @@ def _model_of(cur, product_id):
     return row["model_id"] if row else None
 
 
-def add_review(product_id, user_id, rating, text="", username=""):
-    """Сохраняет отзыв в статусе «на модерации». Возвращает id или None, если уже оценивал."""
-    conn = connect()
-    cur = conn.cursor()
-    mid = _model_of(cur, product_id)
-    # Один человек — один отзыв на модель. Иначе один и тот же покупатель
-    # оценил бы её отдельно в Минске и отдельно в Турове.
-    if mid:
-        cur.execute(_q("SELECT 1 AS x FROM reviews WHERE user_id = %s AND model_id = %s LIMIT 1"),
-                    (user_id, mid))
-    else:
-        cur.execute(_q("SELECT 1 AS x FROM reviews WHERE user_id = %s AND product_id = %s LIMIT 1"),
-                    (user_id, product_id))
-    if cur.fetchone():
-        conn.close()
-        return None
-    rid = _insert_id(cur, "INSERT INTO reviews (product_id, model_id, user_id, username, rating, text, status, created_at) "
-                          "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)",
-                     (product_id, mid, user_id, (username or "")[:64], int(rating),
-                      (text or "").strip()[:REVIEW_MAX_TEXT], _now_str()))
-    conn.commit()
-    conn.close()
-    return rid
 
 
-def list_reviews(product_id, status="approved", limit=50):
-    """Отзывы о модели этого товара: на всех точках это одна и та же вещь.
-
-    Для товара без модели — как раньше, по самому товару."""
-    conn = connect()
-    cur = conn.cursor()
-    mid = _model_of(cur, product_id)
-    if mid:
-        cur.execute(_q("SELECT * FROM reviews WHERE model_id = %s AND status = %s ORDER BY id DESC LIMIT %s"),
-                    (mid, status, limit))
-    else:
-        cur.execute(_q("SELECT * FROM reviews WHERE product_id = %s AND model_id IS NULL "
-                       "AND status = %s ORDER BY id DESC LIMIT %s"),
-                    (product_id, status, limit))
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
 
 
-def list_reviews_by_user(user_id, limit=50):
-    """Отзывы одного человека — чтобы показать ему его же оценку и её судьбу."""
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("SELECT * FROM reviews WHERE user_id = %s ORDER BY id DESC LIMIT %s"), (user_id, limit))
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
 
 
-def admin_reviews(status="pending", limit=100):
-    """Отзывы для админа. status='all' — все, включая опубликованные и скрытые.
-
-    Раньше админ видел только очередь на модерацию: опубликованный отзыв
-    исчезал из его поля зрения навсегда, и убрать его было уже нельзя."""
-    conn = connect()
-    cur = conn.cursor()
-    # Имя берём из модели, а не из товара: товар могли снять с точки, и тогда
-    # отзыв в очереди оказывался безымянным — модерировать вслепую нельзя.
-    sql = ("SELECT r.*, COALESCE(m.name, p.name) AS product_name FROM reviews r "
-           "LEFT JOIN products p ON p.id = r.product_id "
-           "LEFT JOIN models m ON m.id = r.model_id ")
-    if status and status != "all":
-        cur.execute(_q(sql + "WHERE r.status = %s ORDER BY r.id DESC LIMIT %s"), (status, limit))
-    else:
-        cur.execute(_q(sql + "ORDER BY r.id DESC LIMIT %s"), (limit,))
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
 
 
-def pending_reviews(limit=50):
-    """Ждут решения — их видит админ."""
-    return admin_reviews("pending", limit)
 
 
-def delete_review(review_id):
-    """Убирает отзыв насовсем. «Скрыть» оставляет запись (можно вернуть),
-    удаление — для мусора, который держать незачем."""
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("DELETE FROM reviews WHERE id = %s"), (review_id,))
-    deleted = cur.rowcount > 0
-    conn.commit()
-    conn.close()
-    return deleted
 
 
-def set_review_reply(review_id, text):
-    """Ответ магазина на отзыв. Пустой текст убирает ответ."""
-    text = (text or "").strip()[:REVIEW_MAX_TEXT]
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("UPDATE reviews SET reply = %s, replied_at = %s WHERE id = %s"),
-                (text or None, (_now_str() if text else None), review_id))
-    changed = cur.rowcount > 0
-    conn.commit()
-    conn.close()
-    return changed
 
 
-def count_pending_reviews():
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) AS c FROM reviews WHERE status = 'pending'")
-    n = int(cur.fetchone()["c"])
-    conn.close()
-    return n
 
 
-def set_review_status(review_id, status):
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("UPDATE reviews SET status = %s WHERE id = %s"), (status, review_id))
-    changed = cur.rowcount > 0
-    conn.commit()
-    conn.close()
-    return changed
 
 
-def get_review(review_id):
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute(_q("SELECT * FROM reviews WHERE id = %s"), (review_id,))
-    row = cur.fetchone()
-    conn.close()
-    return row
 
 
 def also_bought(top=5, scan=500, min_count=2):
@@ -3326,35 +2906,6 @@ class OutOfStock(Exception):
         self.name = name
 
 
-def _reserve_promo(cur, code, user_id):
-    """Занять одно применение промокода. Вызывается ВНУТРИ транзакции заказа.
-
-    Сначала берём блокировку на строку кода: на Postgres — SELECT ... FOR UPDATE,
-    на SQLite её роль играет запись (она переводит транзакцию в режим writer, и
-    вторая ждёт). Без блокировки два одновременных заказа оба видят «код ещё не
-    использован» и оба его применяют.
-    """
-    code = (code if isinstance(code, str) else "").strip().upper()
-    if not code:
-        return
-    if USE_PG:
-        cur.execute("SELECT * FROM promos WHERE code = %s FOR UPDATE", (code,))
-    else:
-        cur.execute("UPDATE promos SET code = code WHERE code = ?", (code,))
-        cur.execute("SELECT * FROM promos WHERE code = ?", (code,))
-    row = cur.fetchone()
-    if not row or not row["active"]:
-        raise PromoGone("promo_unknown")
-    if row["once_per_user"]:
-        cur.execute(_q("SELECT COUNT(*) AS c FROM orders WHERE user_id = %s AND promo_code = %s "
-                       "AND status != 'canceled'"), (user_id, code))
-        if cur.fetchone()["c"]:
-            raise PromoGone("promo_once")
-    if row["uses_left"] is not None:
-        cur.execute(_q("UPDATE promos SET uses_left = uses_left - 1 "
-                       "WHERE code = %s AND uses_left > 0"), (code,))
-        if cur.rowcount < 1:
-            raise PromoGone("promo_used_up")
 
 
 # Сколько времени повтор оформления считается тем же самым заказом. Сутки — с
@@ -4245,6 +3796,32 @@ def recalc_product_stock(product_id):
 # Импорт внизу файла намеренно: db_raffles обращается к примитивам через db, и к
 # этому моменту они уже определены. F401 подавлен осознанно — это переэкспорт,
 # имена нужны не здесь, а тем, кто зовёт их через db.
+# --- Склад ---
+# Движения и подписки на поступление — см. db_stock.py.
+from db_stock import (                                          # noqa: E402
+    move_stock, get_stock_moves, stock_losses,                          # noqa: F401
+    add_stock_alert, remove_stock_alert, stock_alerts_ready,            # noqa: F401
+    clear_stock_alerts, stock_alert_counts, STOCK_REASONS,              # noqa: F401
+)
+
+# --- Промокоды ---
+# Код занимается одной транзакцией с заказом — см. db_promos.py.
+from db_promos import (                                         # noqa: E402
+    _promo_row, check_promo, consume_promo,                             # noqa: F401
+    list_promos, add_promo, set_promo_active,                           # noqa: F401
+    delete_promo, _reserve_promo,                                       # noqa: F401
+)
+
+# --- Отзывы ---
+# Отзыв принадлежит модели, а не товару на точке — см. db_reviews.py.
+from db_reviews import (                                        # noqa: E402
+    _ensure_review_columns, reviewable_products, add_review,            # noqa: F401
+    list_reviews, list_reviews_by_user, admin_reviews,                  # noqa: F401
+    pending_reviews, delete_review, set_review_reply,                   # noqa: F401
+    count_pending_reviews, set_review_status, get_review,               # noqa: F401
+    REVIEW_MAX_TEXT,                                                    # noqa: F401
+)
+
 # --- Картинки ---
 # Витрина, галерея и кэш скачанного — в db_photos.py.
 from db_photos import (                                         # noqa: E402
