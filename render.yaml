@@ -6,6 +6,8 @@ services:
     name: vape-app
     runtime: python
     plan: free
+    # Версия питона — в .python-version (3.11), там же, что и в прогоне
+    # GitHub: проверки обязаны идти на том языке, на котором работает магазин.
     buildCommand: pip install -r requirements.txt
     startCommand: python run.py
     envVars:
