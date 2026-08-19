@@ -12,9 +12,6 @@
 Тест обстреливает ВСЕ маршруты сразу: список берётся из самого server.py, так
 что новый адрес попадает под проверку сам, без правки теста.
 """
-import io
-import os
-import re
 
 from _common import db, client, server, Checker, as_admin, as_user
 
@@ -39,13 +36,24 @@ GET_QUERIES = ("", "?city=%00", "?product_id=abc", "?category=%FF", "?id=[]", "?
 
 
 def _routes():
-    """Адреса берём из исходника: так новый маршрут проверяется сам собой."""
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py")
-    s = io.open(path, encoding="utf-8").read()
-    found = re.findall(r'@app\.route\("([^"]+)"(?:,\s*methods=\[([^\]]+)\])?\)', s)
-    posts = sorted({r for r, m in found if m and "POST" in m and "<" not in r})
-    gets = sorted({r for r, m in found if (not m or "GET" in m) and "<" not in r})
-    return posts, gets
+    """Адреса спрашиваем у самого приложения, а не вычитываем из файла.
+
+    Раньше они искались разбором текста server.py — и перестали находиться в тот
+    день, когда часть ручек переехала в отдельные модули. Список маршрутов знает
+    Flask; так проверка не зависит от того, по каким файлам они разложены, и
+    новый маршрут по-прежнему проверяется сам собой.
+    """
+    posts, gets = set(), set()
+    for rule in server.app.url_map.iter_rules():
+        путь = str(rule)
+        if "<" in путь:
+            continue
+        методы = rule.methods - {"HEAD", "OPTIONS"}
+        if "POST" in методы:
+            posts.add(путь)
+        if "GET" in методы:
+            gets.add(путь)
+    return sorted(posts), sorted(gets)
 
 
 def run():
