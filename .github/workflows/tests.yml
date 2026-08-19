@@ -29,7 +29,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install ruff
+      - run: pip install -r requirements-dev.txt
       - name: Проверить код
         run: ruff check .
 
@@ -66,7 +66,9 @@ jobs:
           cache: pip
 
       - name: Поставить зависимости
-        run: pip install -r requirements.txt
+        # requirements-dev тянет и боевые, и pytest: прогон обязан идти на тех
+        # же версиях, что и магазин.
+        run: pip install -r requirements-dev.txt
 
       - name: Прогнать проверки
         env:

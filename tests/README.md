@@ -18,6 +18,14 @@ python tests/run_all.py
 
 ```bash
 TEST_DATABASE_URL=postgresql://... python tests/run_all.py    # магазин работает на Postgres
+
+Внутри run_all.py — pytest, поэтому доступно и всё его:
+    venv/bin/pytest tests/ --lf         только упавшие в прошлый раз
+    venv/bin/pytest tests/ -k заказ     по имени
+    venv/bin/pytest tests/test_till.py  один файл
+
+Двух запускателей нет намеренно. Были — и разошлись: run_model_reviews
+существовала, а в списке её не было, и она не гонялась ни разу.
 TZ=UTC python tests/run_all.py                                # Render живёт по UTC
 ```
 
