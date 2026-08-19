@@ -6131,7 +6131,6 @@
         $("locName").value = "";
         await refreshProducts();
         await loadDelivery(); renderLocList();
-        $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
       } catch (e) { alertMsg("Сеть недоступна."); }
     };
     function delLocation(id) { confirmMsg("Удалить локацию?", () => doDelLocation(id)); }
@@ -6144,7 +6143,6 @@
           return;
         }
         await refreshProducts();
-        $("afCity").innerHTML = locations.map(l => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join("");
       } catch (e) { alertMsg("Сеть недоступна."); }
     }
 
