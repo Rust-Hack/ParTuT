@@ -950,7 +950,6 @@ def _json_etag(payload):
 # ============================================================
 
 
-
 @app.route("/api/categories")
 def api_categories():
     """Категории товара — витрина строит по ним фильтры, админка формы."""
@@ -985,18 +984,6 @@ def api_also_bought():
     return jsonify(cached)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def _delivery_json(m):
     return {
         "id": m["id"], "name": m["name"],
@@ -1007,8 +994,6 @@ def _delivery_json(m):
         "fee": round(m["fee"] or 0, 2),
         "needs_payment": bool(m["needs_payment"]),
     }
-
-
 
 
 # ============================================================
@@ -1104,8 +1089,6 @@ _ADMIN_ONLY_FIELDS = ("cost", "waiting", "hidden")
 
 def _public_product(p):
     return {k: v for k, v in p.items() if k not in _ADMIN_ONLY_FIELDS}
-
-
 
 
 RECEIPT_TOKEN_TTL = 6 * 3600       # ссылка на чек живёт полдня, не вечно
@@ -1338,16 +1321,6 @@ def _confirm_minutes():
     return cached
 
 
-
-
-
-
-
-
-
-
-
-
 SUPPORT_COOLDOWN = 20          # антиспам: не чаще 1 сообщения в поддержку за столько секунд
 _support_last = {}             # uid -> время последнего сообщения (в памяти процесса)
 
@@ -1428,292 +1401,9 @@ def api_admin_message():
         return jsonify({"ok": True, "sent": False})     # клиент мог не запускать бота
 
 
-
-
-@app.route("/api/bonus", methods=["POST"])
-def api_bonus():
-    """Бонусы клиента: баланс vapecoins, число приглашённых, реферальная ссылка."""
-    data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
-    if not user or not user.get("id"):
-        return jsonify({"ok": False, "error": "auth"}), 401
-    uid = int(user["id"])
-    link = f"https://t.me/{BOT_USERNAME}?start=ref{uid}" if BOT_USERNAME else ""
-
-    st = db.get_bonus_stats(uid)              # всё за одно подключение
-    active = st["active"]
-    percent = db.ref_percent(active)
-    next_need, next_pct = None, None
-    for m, p in sorted(db.REFERRAL_TIERS):    # ближайший тир выше текущего
-        if m > active:
-            next_need, next_pct = m - active, p
-            break
-
-    return jsonify({"ok": True,
-                    "coins": st["coins"],
-                    "referrals": st["referrals"],
-                    "active_referrals": active,
-                    "ref_earned": st["ref_earned"],
-                    "ref_percent": percent,
-                    "next_need": next_need,
-                    "next_percent": next_pct,
-                    "referrals_list": st["referrals_list"],
-                    "ref_link": link,
-                    "referral_bonus": db.referral_bonus(),
-                    "coin_value": COIN_VALUE})
-
-
-
-
-@app.route("/api/admin/wheel/grant", methods=["POST"])
-def api_admin_wheel_grant():
-    """Тест: начислить админу 3 прокрута колеса."""
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    uid = int(admin["id"])
-    return _gate(admin, "wheel_grant_self", {"user_id": uid, "spins": 3},
-                 f"+3 прокрута колеса админу id {uid}")
-
-
-@app.route("/api/admin/grant", methods=["POST"])
-def api_admin_grant():
-    """Начислить пользователю монеты и/или прокруты колеса (по id). Обычный админ — через подтверждение."""
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "bad_id"}), 400
-    coins = spins = 0
-    try:
-        coins = int(data.get("coins") or 0)
-    except (TypeError, ValueError):
-        coins = 0
-    try:
-        spins = int(data.get("spins") or 0)
-    except (TypeError, ValueError):
-        spins = 0
-    parts = []
-    if coins:
-        parts.append(f"{'убрать' if coins < 0 else 'начислить'} {abs(coins)} 🪙")
-    if spins:
-        parts.append(f"{'убрать' if spins < 0 else 'начислить'} {abs(spins)} прокрутов")
-    summary = f"Пользователю id {target}: " + (", ".join(parts) if parts else "—")
-    return _gate(admin, "grant", {"user_id": target, "coins": coins, "spins": spins}, summary)
-
-
-@app.route("/api/admin/order/compensate", methods=["POST"])
-def api_admin_order_compensate():
-    """Компенсация покупателю монетами по конкретному заказу.
-
-    Единственное денежное действие, доступное продавцу, — и то через
-    подтверждение владельца. Привязка к заказу не формальность: из него берутся
-    и покупатель, и точка, поэтому продавец Турова не начислит ничего
-    покупателю Минска, а владелец в заявке видит, о каком заказе речь.
-    """
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        oid = int(data.get("order_id"))
-        coins = int(data.get("coins"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "bad_input"}), 400
-    order = db.get_order(oid)
-    if not order:
-        return jsonify({"ok": False, "error": "not_found"}), 404
-    denied = deny_city(admin, order["city"])
-    if denied:
-        return denied
-    cap = db.compensation_max()
-    if coins < 1 or coins > cap:
-        return jsonify({"ok": False, "error": "bad_amount",
-                        "message": f"Компенсация — от 1 до {cap} 🪙 за раз."}), 400
-    reason = _text(data.get("reason"), 200)
-    target = int(order["user_id"])
-    summary = (f"Компенсация {coins} 🪙 покупателю id {target} по заказу #{oid}"
-               + (f"\nПричина: {reason}" if reason else ""))
-    return _gate(admin, "compensate",
-                 {"user_id": target, "coins": coins, "order_id": oid, "reason": reason},
-                 summary)
-
-
-@app.route("/api/admin/referrals", methods=["POST"])
-def api_admin_referrals():
-    """Список рефералов текущего админа (для управления/отвязки)."""
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    rows = db.list_referrals(int(admin["id"]))
-    return jsonify({"ok": True, "referrals": [{"id": r["user_id"], "active": bool(r["ref_activated"])} for r in rows]})
-
-
-@app.route("/api/admin/coins/adjust", methods=["POST"])
-def api_admin_coins_adjust():
-    """Изменить баланс монет пользователя на delta (±). Обычный админ — через подтверждение."""
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-        delta = int(data.get("delta"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "bad_input"}), 400
-    if is_super_admin(target) and not is_super_admin(int(admin["id"])):
-        return jsonify({"ok": False, "error": "protected"}), 403     # монеты супер-админа не трогаем
-    summary = (f"Убрать {abs(delta)} 🪙 у id {target}" if delta < 0 else f"Начислить {delta} 🪙 id {target}")
-    return _gate(admin, "coins_adjust", {"user_id": target, "delta": delta}, summary)
-
-
-@app.route("/api/admin/users", methods=["POST"])
-def api_admin_users():
-    """Список всех пользователей (поиск по id) — для админа (просмотр)."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    users, total = db.list_users(str(data.get("search") or ""))
-    for u in users:
-        u["super"] = is_super_admin(u["id"])       # супер-админа фронт пометит и скроет кнопки
-    return jsonify({"ok": True, "users": users, "total": total, "shown": len(users)})
-
-
-@app.route("/api/admin/customer", methods=["POST"])
-def api_admin_customer():
-    """Карточка покупателя: история заказов, суммы, любимые товары."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "bad_id"}), 400
-    card = db.customer_card(target)
-    if not card:
-        return jsonify({"ok": False, "error": "not_found"}), 404
-    card["super"] = is_super_admin(target)
-    return jsonify({"ok": True, "card": card})
-
-
-@app.route("/api/admin/referral/unlink", methods=["POST"])
-def api_admin_referral_unlink():
-    """Отвязать конкретного реферала по его id. Обычный админ — через подтверждение."""
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "bad_id"}), 400
-    if is_super_admin(target):
-        return jsonify({"ok": False, "error": "protected"}), 403     # супер-админа не трогаем
-    return _gate(admin, "referral_unlink", {"user_id": target}, f"Отвязать реферала id {target}")
-
-
-@app.route("/api/admin/referral/clear", methods=["POST"])
-def api_admin_referral_clear():
-    """Отвязать ВСЕХ рефералов текущего админа. Обычный админ — через подтверждение."""
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    uid = int(admin["id"])
-    return _gate(admin, "referral_clear", {"requester_id": uid}, f"Отвязать ВСЕХ рефералов админа id {uid}")
-
-
-@app.route("/api/admin/user/delete", methods=["POST"])
-def api_admin_user_delete():
-    """Полностью удалить пользователя по id. Обычный админ — через подтверждение."""
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "bad_id"}), 400
-    if target == int(admin["id"]):
-        return jsonify({"ok": False, "error": "self"}), 400     # себя не удаляем
-    if is_super_admin(target):
-        return jsonify({"ok": False, "error": "protected"}), 403     # супер-админа удалить нельзя
-    return _gate(admin, "user_delete", {"user_id": target}, f"Удалить пользователя id {target}")
-
-
-
-
-# ------------------- Слот «Облако Монет» -------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ------------------- Розыгрыши (раз в месяц) -------------------
-
-
-
-
-
-def _mask_id(uid):
-    """Кто это был — не называя человека. Показывать полный id участникам
-    незачем: по нему пишут в личку."""
-    return "•••" + str(uid)[-3:]
-
-
-
-
-
-
-
-
-
-
 # ============================================================
 #  АДМИН-API (только для тех, кто в ADMIN_IDS)
 # ============================================================
-
-def _save_specs(product_id, category, values):
-    """Пишет только те характеристики, которые заведены у этой категории.
-
-    Иначе в товар попало бы что угодно из запроса, и карточка бы показывала
-    поля, которых в категории нет."""
-    if not isinstance(values, dict):
-        return
-    allowed = {s["key"] for s in db.list_category_specs(category)}
-    clean = {k: v for k, v in values.items() if k in allowed}
-    if clean:
-        db.set_product_specs(product_id, clean)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 # ------------------- Связь с людьми -------------------
 # Сами заказы уехали в server_orders.py, а эти двое остались здесь: ими
@@ -1742,233 +1432,6 @@ def _notify_client(user_id, text):
         print(f"Не смог уведомить клиента {user_id}: {e}")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Одно «заказ отклонён» на все случаи читалось одинаково и когда товара не
-# оказалось, и когда не подошёл чек. Человек не понимает, что делать дальше,
-# и либо уходит, либо пишет в чат — а продавец отвечает то же самое руками.
-REJECT_REASONS = {
-    "out": ("товара не оказалось в наличии",
-            "Простите — товар разобрали раньше, чем мы успели отложить ваш. "
-            "Монеты и оплата возвращены. Напишем, когда привезём снова."),
-    "receipt": ("чек не подошёл",
-                "Оплата по чеку не нашлась. Проверьте, что перевод прошёл, и оформите заказ снова "
-                "— или пришлите чек нам в чат, разберёмся вместе."),
-    "client": ("клиент передумал", "Заказ отменён по вашей просьбе. Ждём вас снова 🌿"),
-    "duplicate": ("дубль заказа", "Это был повторный заказ — оставили один. Второй отменён."),
-}
-
-
-
-
-
-
-# ------------------- Статистика -------------------
-
-PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "all": None}
-
-
-@app.route("/api/admin/stats", methods=["POST"])
-def api_admin_stats():
-    """Бизнес-аналитика для админа за период: KPI, графики, товары, юзеры, монеты, склад, игры."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-
-    # Период уходит в ключ кэша: списком или словарём он быть не может.
-    period = _text(data.get("period")) or "30d"
-    # Тяжёлый расчёт (~15 запросов) — кэшируем на 60с. Сбрасывается при изменении заказов
-    # (через _WRITE_PATHS), так что цифры остаются актуальными после реальных продаж.
-    cached = _cache_get(f"stats:{period}")
-    if cached is not None:
-        return jsonify({"ok": True, "stats": cached})
-
-    days = PERIOD_DAYS.get(period, 30)
-    stats = db.get_business_stats(days)          # всё считается в SQL
-
-    products = db.get_all_products()             # склад — не зависит от периода
-    stats["low_stock"] = [{"name": p["name"], "city": p["city"], "stock": p["stock"]}
-                          for p in products if 0 < p["stock"] <= LOW_STOCK][:12]
-    stats["out_stock"] = [{"name": p["name"], "city": p["city"]}
-                          for p in products if p["stock"] <= 0][:12]
-    stats["out_of_stock"] = sum(1 for p in products if p["stock"] <= 0)
-    stats["products_total"] = len(products)
-    stats["games"] = db.get_game_stats()
-    stats["period"] = period
-    try:
-        # Во что обходится лояльность: сколько монет роздали и сколько из них
-        # вернулось скидками. Считаем по летописи движений, а не по балансам —
-        # потраченного на балансах уже нет, и раздача выглядела бы меньше.
-        stats["coins"] = db.coin_flow(days)
-        stats["coin_value"] = COIN_VALUE
-    except Exception as e:
-        stats["coins"] = {"granted": 0, "spent": 0, "by_reason": []}
-        print(f"Не удалось посчитать движение монет: {e}")
-    try:
-        stats["losses"] = db.stock_losses(days)      # во сколько обошлись списания
-    except Exception as e:
-        stats["losses"] = []
-        print(f"Не удалось посчитать списания: {e}")
-    _cache_set(f"stats:{period}", stats, 60)
-    return jsonify({"ok": True, "stats": stats})
-
-
-@app.route("/api/admin/stats/reset", methods=["POST"])
-def api_admin_stats_reset():
-    """Сброс тестовой статистики (заказы + счётчики игр) — только супер-админ."""
-    data = request.get_json(force=True, silent=True) or {}
-    user = get_user(data.get("initData", ""))
-    if not user or not user.get("id") or not is_super_admin(int(user["id"])):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    res = db.reset_statistics()
-    return jsonify({"ok": True, **res})
-
-
-# ------------------- Движение склада -------------------
-
-@app.route("/api/admin/stock/move", methods=["POST"])
-def api_admin_stock_move():
-    """Приход или списание с причиной. Остаток меняется только так — тогда на
-    любой вопрос «куда делось» есть ответ с именем и датой."""
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        pid = int(data.get("id"))
-        qty = int(data.get("qty"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "bad_number"}), 400
-    if qty <= 0:
-        return jsonify({"ok": False, "error": "bad_number"}), 400
-    reason = data.get("reason")
-    if reason not in db.STOCK_REASONS:
-        return jsonify({"ok": False, "error": "bad_reason"}), 400
-    if not db.get_product(pid):
-        return jsonify({"ok": False, "error": "not_found"}), 404
-    deny = deny_product(admin, pid)
-    if deny:
-        return deny
-
-    # Приход прибавляет, всё остальное списывает. Знак задаёт причина, а не
-    # клиент: иначе «списание» могло бы прийти с плюсом.
-    delta = qty if reason == "in" else -qty
-    try:
-        cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
-    except (TypeError, ValueError):
-        cost = 0.0
-    flavor = _text(data.get("flavor")) or None
-    stock = db.move_stock(pid, delta, reason, flavor=flavor, cost=cost,
-                          note=data.get("note"), admin_id=int(admin["id"]))
-    return jsonify({"ok": True, "stock": stock})
-
-
-@app.route("/api/admin/stock/moves", methods=["POST"])
-def api_admin_stock_moves():
-    data = request.get_json(force=True, silent=True) or {}
-    admin = get_admin(data.get("initData", ""))
-    if not admin:
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        pid = int(data.get("id")) if data.get("id") else None
-    except (TypeError, ValueError):
-        pid = None
-    if pid:
-        # История чужой точки — тоже чужая: по ней видно завоз, списания и
-        # закупочные цены соседей.
-        deny = deny_product(admin, pid)
-        if deny:
-            return deny
-    # Без товара в запросе это «вся история магазина» — продавцу отдаём только
-    # его точку. Раньше проверка стояла лишь на запрос по конкретному товару.
-    moves = db.get_stock_moves(pid, 60, city=(admin.get("city") or None))
-    return jsonify({"ok": True, "moves": moves, "reasons": db.STOCK_REASONS})
-
-
-# ------------------- Промокоды (админ) -------------------
-
-@app.route("/api/admin/promos", methods=["POST"])
-def api_admin_promos():
-    """Коды со статистикой: сколько заказов и выручки принёс каждый."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    return jsonify({"ok": True, "promos": db.list_promos()})
-
-
-@app.route("/api/admin/promo", methods=["POST"])
-def api_admin_promo_add():
-    data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    code = _text(data.get("code")).upper()
-    if not code or len(code) > 24 or " " in code:
-        return jsonify({"ok": False, "error": "bad_code"}), 400
-    kind = "fixed" if data.get("kind") == "fixed" else "percent"
-    try:
-        value = float(str(data.get("value") or 0).replace(",", "."))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "bad_value"}), 400
-    if value <= 0 or (kind == "percent" and value > 100):
-        return jsonify({"ok": False, "error": "bad_value"}), 400
-    try:
-        min_total = max(0.0, float(str(data.get("min_total") or 0).replace(",", ".")))
-    except (TypeError, ValueError):
-        min_total = 0.0
-    uses = data.get("uses_left")
-    try:
-        uses_left = int(uses) if str(uses or "").strip() else None   # пусто = без ограничения
-    except (TypeError, ValueError):
-        uses_left = None
-    if db._promo_row(code):
-        return jsonify({"ok": False, "error": "exists"}), 400
-    db.add_promo(code, kind, value, min_total, uses_left, bool(data.get("once_per_user", True)))
-    return jsonify({"ok": True})
-
-
-@app.route("/api/admin/promo/toggle", methods=["POST"])
-def api_admin_promo_toggle():
-    """Выключить код, не удаляя: статистика по нему должна остаться."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    db.set_promo_active((data.get("code") or ""), bool(data.get("active")))
-    return jsonify({"ok": True})
-
-
-@app.route("/api/admin/promo/delete", methods=["POST"])
-def api_admin_promo_delete():
-    data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    db.delete_promo((data.get("code") or ""))
-    return jsonify({"ok": True})
-
-
-# ------------------- Точки самовывоза -------------------
-
-
-
-
-
-
-
 # ------------------- Админы и продавцы (только супер-админ) -------------------
 
 def _super(data):
@@ -1979,29 +1442,6 @@ def _super(data):
     return user
 
 
-@app.route("/api/admin/log", methods=["POST"])
-def api_admin_log():
-    """Кто и что менял. Остаток всегда писался в журнал движений, а цена,
-    удаление товара и правка настроек не оставляли следа вовсе."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not _super(data):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    rows = db.list_admin_log(limit=150)
-    return jsonify({"ok": True, "log": [{
-        "who": r["admin_name"] or str(r["admin_id"] or ""),
-        "admin_id": r["admin_id"],
-        "action": r["action"] or "",
-        "details": r["details"] or "",
-        "at": r["created_at"] or "",
-    } for r in rows]})
-
-
-
-
-
-
-
-
 def _notify_new_admin(uid, city):
     """Сообщаем человеку, что доступ выдан: иначе он не узнает, что теперь админ."""
     where = f" по точке «{city}»" if city else ""
@@ -2010,197 +1450,6 @@ def _notify_new_admin(uid, city):
                              f"Откройте приложение — появится раздел «Управление».")
     except Exception as e:
         print(f"Не смог уведомить нового админа {uid}: {e}")
-
-
-# ------------------- Розыгрыш (админ) -------------------
-
-
-
-
-
-
-
-
-
-
-
-# ------------------- Настройки магазина -------------------
-
-def _num(value, default, as_int=False):
-    """Число из настройки. Настройки хранятся строками, и мусор в них не должен
-    ронять целый экран — возвращаем то, что задумано по умолчанию."""
-    if value is None or value == "":
-        return default
-    try:
-        n = float(str(value).replace(",", "."))
-    except (TypeError, ValueError):
-        return default
-    return int(n) if as_int else n
-
-
-@app.route("/api/admin/settings", methods=["POST"])
-def api_admin_settings():
-    """Текущие настройки магазина для админ-панели."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    # Все настройки — одним запросом. По одному ключу за раз это было восемь
-    # походов в базу подряд ради восьми строк из одной маленькой таблицы.
-    # Значения по умолчанию обязаны быть теми же, что у обычного чтения: на
-    # незаполненной настройке экран должен показывать то, чем магазин и живёт,
-    # а не пустоту. Пустое поле владелец сохранит — и сотрёт реквизиты
-    # по-настоящему.
-    opts = db.get_settings(
-        ["payment_info", "confirm_minutes", "free_delivery_from", "remind_after_days",
-         "remind_daily_cap", "coins_per_byn", "wheel_step", "referral_bonus",
-         "compensation_max"],
-        {"payment_info": PAYMENT_INFO, "confirm_minutes": CONFIRM_MINUTES,
-         "free_delivery_from": 0, "remind_after_days": 21, "remind_daily_cap": 20,
-         "coins_per_byn": 1, "wheel_step": db.WHEEL_STEP_DEFAULT,
-         "referral_bonus": db.REFERRAL_BONUS,
-         "compensation_max": db.COMPENSATION_MAX_DEFAULT})
-    return jsonify({"ok": True, "settings": {
-        "payment_info": opts["payment_info"] or "",
-        "confirm_minutes": _num(opts["confirm_minutes"], CONFIRM_MINUTES, as_int=True),
-        "free_delivery_from": _num(opts["free_delivery_from"], 0),
-        "remind_after_days": _num(opts["remind_after_days"], 21, as_int=True),
-        "remind_daily_cap": _num(opts["remind_daily_cap"], 20, as_int=True),
-        # Щедрость программы лояльности. Раньше эти числа жили в коде, и любая
-        # правка требовала выкладки новой версии.
-        "coins_per_byn": _num(opts["coins_per_byn"], 1.0),
-        "wheel_step": _num(opts["wheel_step"], db.WHEEL_STEP_DEFAULT),
-        "referral_bonus": _num(opts["referral_bonus"], db.REFERRAL_BONUS, as_int=True),
-        # Потолок компенсации: сколько монет продавец может начислить покупателю
-        # за раз. Раньше эта строка по ошибке стояла в экране бонусов покупателя,
-        # а здесь её не было вовсе — поле в настройках всегда пустовало.
-        "compensation_max": _num(opts["compensation_max"], db.COMPENSATION_MAX_DEFAULT, as_int=True),
-        "coin_value": COIN_VALUE,          # только для показа: менять нельзя, см. ниже
-    }})
-
-
-@app.route("/api/admin/settings/update", methods=["POST"])
-def api_admin_settings_update():
-    """Сохранить настройки магазина (реквизиты оплаты, время подтверждения)."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
-    if "payment_info" in data:
-        db.set_setting("payment_info", _text(data.get("payment_info")))
-    if "confirm_minutes" in data:
-        try:
-            db.set_setting("confirm_minutes", max(1, int(data.get("confirm_minutes"))))
-        except (TypeError, ValueError):
-            pass
-    if "free_delivery_from" in data:
-        try:
-            # 0 — законное значение: порог выключен, доставка платная всегда.
-            db.set_setting("free_delivery_from", max(0.0, float(str(data.get("free_delivery_from") or 0).replace(",", "."))))
-        except (TypeError, ValueError):
-            pass
-    if "remind_after_days" in data:
-        try:
-            db.set_setting("remind_after_days", max(1, int(data.get("remind_after_days"))))
-        except (TypeError, ValueError):
-            pass
-    if "remind_daily_cap" in data:
-        try:
-            # 0 — законное значение: так напоминания выключаются целиком.
-            db.set_setting("remind_daily_cap", max(0, int(data.get("remind_daily_cap"))))
-        except (TypeError, ValueError):
-            pass
-    # --- Щедрость программы лояльности ---
-    # Границы стоят не «на всякий случай»: 100 монет = 1 Br, и лишний ноль в
-    # кэшбэке превращает 1% в 10% на каждом заказе. Цену монеты (COIN_VALUE)
-    # намеренно НЕ отдаём в настройки: она задним числом меняет стоимость всех
-    # уже накопленных балансов, а это не настройка, а переоценка обязательств.
-    if "coins_per_byn" in data:
-        try:
-            db.set_setting("coins_per_byn", min(10.0, max(0.0, float(
-                str(data.get("coins_per_byn") or 0).replace(",", ".")))))
-        except (TypeError, ValueError):
-            pass
-    if "wheel_step" in data:
-        try:
-            # Ноль означал бы прокрут за каждую покупку — держим нижнюю границу.
-            db.set_setting("wheel_step", min(100000.0, max(1.0, float(
-                str(data.get("wheel_step") or 0).replace(",", ".")))))
-        except (TypeError, ValueError):
-            pass
-    if "referral_bonus" in data:
-        try:
-            db.set_setting("referral_bonus", min(100000, max(0, int(data.get("referral_bonus")))))
-        except (TypeError, ValueError):
-            pass
-    if "compensation_max" in data:
-        try:
-            # Ноль допустим и означает «продавцам компенсации запрещены».
-            db.set_setting("compensation_max", min(100000, max(0, int(data.get("compensation_max")))))
-        except (TypeError, ValueError):
-            pass
-    return jsonify({"ok": True})
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------- Бренды со вкусами ----------
-
-@app.route("/api/brands")
-def api_brands():
-    category = _text(request.args.get("category")) or None
-    key = f"brands:{category or 'all'}"
-    cached = _cache_get(key)
-    if cached is not None:
-        return _json_etag(cached)
-    out = []
-    for b in db.get_brands(category):
-        try:
-            flavors = json.loads(b["flavors"] or "[]")
-        except Exception:
-            flavors = []
-        out.append({"id": b["id"], "name": b["name"], "category": b["category"] or "", "flavors": flavors})
-    return _json_etag(_cache_set(key, out, 300))
-
-
-@app.route("/api/flavors")
-def api_flavors():
-    """Все вкусы, которые уже встречались — для подсказок при вводе.
-    Без них одна и та же «Мята» набирается по-разному и дробит фильтр."""
-    cached = _cache_get("flavors")
-    if cached is None:
-        cached = _cache_set("flavors", db.known_flavors(), 300)
-    return _json_etag(cached)
-
-
-
-
-def _clean_specs(category, values):
-    """Оставляет только характеристики, заведённые у этой категории."""
-    if not isinstance(values, dict):
-        return {}
-    allowed = {s["key"] for s in db.list_category_specs(category)}
-    return {k: str(v).strip() for k, v in values.items() if k in allowed and str(v).strip() != ""}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 if __name__ == "__main__":
@@ -2222,8 +1471,24 @@ import server_catalog      # noqa: E402,F401
 # Точки, способы получения и продавцы — в server_shop.py.
 import server_shop         # noqa: E402,F401
 
+# --- Покупатели ---
+# Монеты, рефералы, карточка покупателя — в server_customers.py.
+import server_customers   # noqa: E402,F401
+
 # --- Заказы ---
 # Оформление, чек, отмена, история и управление заказом продавцом —
 # в server_orders.py. Обе половины пути заказа лежат там вместе намеренно:
 # это один денежный узел.
 import server_orders       # noqa: E402,F401
+
+# --- Промокоды ---
+# Ручки админки к db_promos.py — в server_promos.py.
+import server_promos       # noqa: E402,F401
+
+# --- Движение склада ---
+# Приход, списание и журнал движений — в server_stock.py.
+import server_stock        # noqa: E402,F401
+
+# --- Экран владельца ---
+# Настройки магазина, статистика и журнал действий — в server_admin.py.
+import server_admin        # noqa: E402,F401

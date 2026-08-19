@@ -231,10 +231,10 @@ def _raffle_results(raffle):
     return {"title": raffle["title"] or "Розыгрыш",
             "finished_at": raffle["finished_at"] or raffle["ends_at"],
             "photo": raffle["photo"] or "",
-            "winners": [{"place": w.get("place"), "who": server._mask_id(w.get("user_id")),
+            "winners": [{"place": w.get("place"), "who": _mask_id(w.get("user_id")),
                          "prize": w.get("prize") or ""} for w in winners],
             # Победители уже названы выше — в списке участников их не повторяем.
-            "participants": [server._mask_id(u) for u in entrants if u not in winner_ids],
+            "participants": [_mask_id(u) for u in entrants if u not in winner_ids],
             "participants_count": len(entrants)}
 
 
@@ -415,3 +415,21 @@ def api_admin_raffle_draw():
     _draw_raffle(r)
     # Нового не заводим: решать, идёт ли розыгрыш, — дело владельца.
     return jsonify({"ok": True})
+
+
+def _mask_id(uid):
+    """Кто это был — не называя человека. Показывать полный id участникам
+    незачем: по нему пишут в личку."""
+    return "•••" + str(uid)[-3:]
+
+
+@server.app.route("/api/admin/wheel/grant", methods=["POST"])
+def api_admin_wheel_grant():
+    """Тест: начислить админу 3 прокрута колеса."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = server.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    uid = int(admin["id"])
+    return server._gate(admin, "wheel_grant_self", {"user_id": uid, "spins": 3},
+                        f"+3 прокрута колеса админу id {uid}")

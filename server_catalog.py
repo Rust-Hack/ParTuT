@@ -13,6 +13,8 @@ server_catalog.py — админка ассортимента: товары, м�
 база импортируются напрямую — это внешние библиотеки, а не состояние сервера.
 """
 
+import json
+
 from flask import jsonify, request
 
 import db
@@ -152,7 +154,7 @@ def api_admin_product_specs():
     deny = server.deny_city(admin, p["city"])
     if deny:
         return deny
-    server._save_specs(pid, p["category"], data.get("specs"))
+    _save_specs(pid, p["category"], data.get("specs"))
     return jsonify({"ok": True})
 
 
@@ -200,7 +202,7 @@ def api_admin_add():
             if fl:
                 db.add_variant(pid, fl, max(0, st))
         db.recalc_product_stock(pid)
-        server._save_specs(pid, category, data.get("specs"))
+        _save_specs(pid, category, data.get("specs"))
         return jsonify({"ok": True, "id": pid})
 
     # Обычный товар (одно количество, без вкусов).
@@ -212,7 +214,7 @@ def api_admin_add():
     volume = server._text(data.get("volume"))
     pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc,
                          brand=brand, flavor=flavor, strength=strength, volume=volume, cost=cost)
-    server._save_specs(pid, category, data.get("specs"))
+    _save_specs(pid, category, data.get("specs"))
     return jsonify({"ok": True, "id": pid})
 
 
@@ -422,7 +424,7 @@ def api_admin_model_save():
     name = server._text(data.get("name"))
     if category not in db.category_codes() or not name:
         return jsonify({"ok": False, "error": "bad_data"}), 400
-    specs = server._clean_specs(category, data.get("specs"))
+    specs = _clean_specs(category, data.get("specs"))
     flavors, seen = [], set()
     for f in (data.get("flavors") or []):
         f = str(f).strip()
@@ -626,3 +628,55 @@ def api_admin_brand_delete():
         return jsonify({"ok": False, "error": "has_products", "count": used}), 400
     db.delete_brand(bid)
     return jsonify({"ok": True, "count": used})
+
+
+# --- Бренды, вкусы и характеристики ---
+# Приехали из server.py последними: это тот же ассортимент, только
+# читаемый покупателем, и держать его отдельно было незачем.
+
+def _save_specs(product_id, category, values):
+    """Пишет только те характеристики, которые заведены у этой категории.
+
+    Иначе в товар попало бы что угодно из запроса, и карточка бы показывала
+    поля, которых в категории нет."""
+    if not isinstance(values, dict):
+        return
+    allowed = {s["key"] for s in db.list_category_specs(category)}
+    clean = {k: v for k, v in values.items() if k in allowed}
+    if clean:
+        db.set_product_specs(product_id, clean)
+
+
+@server.app.route("/api/brands")
+def api_brands():
+    category = server._text(request.args.get("category")) or None
+    key = f"brands:{category or 'all'}"
+    cached = server._cache_get(key)
+    if cached is not None:
+        return server._json_etag(cached)
+    out = []
+    for b in db.get_brands(category):
+        try:
+            flavors = json.loads(b["flavors"] or "[]")
+        except Exception:
+            flavors = []
+        out.append({"id": b["id"], "name": b["name"], "category": b["category"] or "", "flavors": flavors})
+    return server._json_etag(server._cache_set(key, out, 300))
+
+
+@server.app.route("/api/flavors")
+def api_flavors():
+    """Все вкусы, которые уже встречались — для подсказок при вводе.
+    Без них одна и та же «Мята» набирается по-разному и дробит фильтр."""
+    cached = server._cache_get("flavors")
+    if cached is None:
+        cached = server._cache_set("flavors", db.known_flavors(), 300)
+    return server._json_etag(cached)
+
+
+def _clean_specs(category, values):
+    """Оставляет только характеристики, заведённые у этой категории."""
+    if not isinstance(values, dict):
+        return {}
+    allowed = {s["key"] for s in db.list_category_specs(category)}
+    return {k: str(v).strip() for k, v in values.items() if k in allowed and str(v).strip() != ""}
