@@ -39,9 +39,8 @@ def api_admin_promo_add():
     if not code or len(code) > 24 or " " in code:
         return jsonify({"ok": False, "error": "bad_code"}), 400
     kind = "fixed" if data.get("kind") == "fixed" else "percent"
-    try:
-        value = float(str(data.get("value") or 0).replace(",", "."))
-    except (TypeError, ValueError):
+    value = inputs.дробное(data.get("value") or 0)
+    if value is None:
         return jsonify({"ok": False, "error": "bad_value"}), 400
     if value <= 0 or (kind == "percent" and value > 100):
         return jsonify({"ok": False, "error": "bad_value"}), 400

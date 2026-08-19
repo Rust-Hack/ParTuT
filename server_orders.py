@@ -129,10 +129,7 @@ def api_order():
             continue
         if qty > 0:
             raw_items.append((pid, qty, inputs._text(ri.get("flavor")) or None))
-    try:
-        method_id = int(data.get("delivery_method_id"))
-    except (TypeError, ValueError):
-        method_id = None
+    method_id = inputs.целое(data.get("delivery_method_id"), None)
 
     # ОДИН поход в базу за всем сразу: 18+, монеты, товары, вкусы, способ получения.
     ctx = db.get_checkout_data(user_id, [pid for pid, _, _ in raw_items], method_id)
@@ -214,9 +211,8 @@ def api_order():
     # нет намеренно: он бы означал «функция есть, но её надо найти».
     points = ctx["points"] if not method["needs_address"] else []
     if points:
-        try:
-            point_id = int(data.get("pickup_point_id"))
-        except (TypeError, ValueError):
+        point_id = inputs.целое(data.get("pickup_point_id"))
+        if point_id is None:
             return jsonify({"ok": False, "error": "no_point"}), 400
         point = next((p for p in points if p["id"] == point_id), None)
         if not point:
@@ -328,9 +324,8 @@ def api_receipt():
         return jsonify({"ok": False, "error": "auth"}), 401
     user_id = int(user["id"])
 
-    try:
-        order_id = int(request.form.get("order_id"))
-    except (TypeError, ValueError):
+    order_id = inputs.целое(request.form.get("order_id"))
+    if order_id is None:
         return jsonify({"ok": False, "error": "bad_order"}), 400
 
     order = db.get_order(order_id)
@@ -372,9 +367,8 @@ def api_order_cancel():
     user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
-    try:
-        oid = int(data.get("order_id"))
-    except (TypeError, ValueError):
+    oid = inputs.целое(data.get("order_id"))
+    if oid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     order = db.get_order(oid)
     if not order or order["user_id"] != int(user["id"]):
@@ -556,11 +550,9 @@ def _сколько_пришло(сырое):
     """
     if сырое is None or str(сырое).strip() == "":
         return None
-    try:
-        значение = float(str(сырое).replace(",", ".").replace(" ", ""))
-    except (TypeError, ValueError):
-        return None
-    return round(значение, 2) if значение >= 0 else None
+    значение = inputs.дробное(сырое)
+    # Отрицательное — не «ноль пришло», а мусор в поле: пусть останется «не сверял».
+    return round(значение, 2) if значение is not None and значение >= 0 else None
 
 
 @bp.route("/api/admin/order/status", methods=["POST"])
@@ -570,9 +562,8 @@ def api_admin_order_status():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        oid = int(data.get("id"))
-    except (TypeError, ValueError):
+    oid = inputs.целое(data.get("id"))
+    if oid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
 
     order = db.get_order(oid)

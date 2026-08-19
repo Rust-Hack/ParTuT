@@ -90,9 +90,8 @@ def api_admin_point_update():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        pid = int(data.get("id"))
-    except (TypeError, ValueError):
+    pid = inputs.целое(data.get("id"))
+    if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     address = inputs._text(data.get("address"))
     if not address:
@@ -108,9 +107,8 @@ def api_admin_point_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        pid = int(data.get("id"))
-    except (TypeError, ValueError):
+    pid = inputs.целое(data.get("id"))
+    if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     db.delete_pickup_point(pid)
     return jsonify({"ok": True})
@@ -147,9 +145,8 @@ def api_admin_staff_add():
     data = request.get_json(force=True, silent=True) or {}
     if not (su := auth._super(data)):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        uid = int(str(data.get("user_id", "")).strip())
-    except (TypeError, ValueError):
+    uid = inputs.целое(data.get("user_id", ""))
+    if uid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if uid <= 0:
         return jsonify({"ok": False, "error": "bad_id"}), 400
@@ -167,9 +164,8 @@ def api_admin_staff_remove():
     data = request.get_json(force=True, silent=True) or {}
     if not auth._super(data):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        uid = int(str(data.get("user_id", "")).strip())
-    except (TypeError, ValueError):
+    uid = inputs.целое(data.get("user_id", ""))
+    if uid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     # Супер-админа не трогаем ничем и никогда — это последний ключ от магазина.
     if is_super_admin(uid):
@@ -202,10 +198,7 @@ def api_admin_delivery_add():
     name = inputs._text(data.get("name"))
     if not city or not name:
         return jsonify({"ok": False, "error": "bad_input"}), 400
-    try:
-        fee = float(str(data.get("fee") or 0).replace(",", "."))
-    except (TypeError, ValueError):
-        fee = 0.0
+    fee = inputs.дробное(data.get("fee") or 0, 0.0)
     db.add_delivery_method(
         city, name,
         bool(data.get("needs_address")),
@@ -225,17 +218,13 @@ def api_admin_delivery_update():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        mid = int(data.get("id"))
-    except (TypeError, ValueError):
+    mid = inputs.целое(data.get("id"))
+    if mid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     name = inputs._text(data.get("name"))
     if not name or not db.get_delivery_method(mid):
         return jsonify({"ok": False, "error": "bad_input"}), 400
-    try:
-        fee = float(str(data.get("fee") or 0).replace(",", "."))
-    except (TypeError, ValueError):
-        fee = 0.0
+    fee = inputs.дробное(data.get("fee") or 0, 0.0)
     db.update_delivery_method(
         mid, name,
         bool(data.get("needs_address")),
@@ -254,9 +243,8 @@ def api_admin_delivery_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        mid = int(data.get("id"))
-    except (TypeError, ValueError):
+    mid = inputs.целое(data.get("id"))
+    if mid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     db.delete_delivery_method(mid)
     return jsonify({"ok": True})
@@ -268,9 +256,8 @@ def api_admin_location_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        lid = int(data.get("id"))
-    except (TypeError, ValueError):
+    lid = inputs.целое(data.get("id"))
+    if lid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     loc = db.get_location(lid)
     if not loc:

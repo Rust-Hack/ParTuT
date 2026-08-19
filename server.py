@@ -87,9 +87,8 @@ def api_admin_request_decide():
     user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id") or not is_super_admin(int(user["id"])):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        rid = int(data.get("request_id"))
-    except (TypeError, ValueError):
+    rid = inputs.целое(data.get("request_id"))
+    if rid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     approve = data.get("decision") == "approve"
     req = db.get_admin_request(rid)
@@ -236,9 +235,8 @@ def api_notify_me():
     user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "no_user"}), 403
-    try:
-        pid = int(data.get("product_id"))
-    except (TypeError, ValueError):
+    pid = inputs.целое(data.get("product_id"))
+    if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     p = db.get_product(pid)
     if not p:
@@ -473,9 +471,8 @@ def api_my_settings():
         if raw in (None, "", 0, "0"):
             db.set_user_point(uid, None)             # «не выбрано» — законный вариант
         else:
-            try:
-                pid = int(raw)
-            except (TypeError, ValueError):
+            pid = inputs.целое(raw)
+            if pid is None:
                 return jsonify({"ok": False, "error": "bad_id"}), 400
             # Точка должна существовать: иначе в профиле осядет ссылка в никуда.
             exists = any(p["id"] == pid for loc in db.get_locations()
@@ -551,9 +548,8 @@ def api_reminders():
 @app.route("/api/reviews")
 def api_reviews():
     """Опубликованные отзывы о товаре — их видят все."""
-    try:
-        pid = int(request.args.get("product_id"))
-    except (TypeError, ValueError):
+    pid = inputs.целое(request.args.get("product_id"))
+    if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     rows = db.list_reviews(pid)
     return jsonify({"ok": True, "reviews": [{
@@ -674,9 +670,8 @@ def api_admin_review_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        rid = int(data.get("id"))
-    except (TypeError, ValueError):
+    rid = inputs.целое(data.get("id"))
+    if rid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if not db.delete_review(rid):
         return jsonify({"ok": False, "error": "not_found"}), 404
@@ -690,9 +685,8 @@ def api_admin_review_reply():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        rid = int(data.get("id"))
-    except (TypeError, ValueError):
+    rid = inputs.целое(data.get("id"))
+    if rid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     review = db.get_review(rid)
     if not review:
@@ -711,9 +705,8 @@ def api_admin_review_decide():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        rid = int(data.get("id"))
-    except (TypeError, ValueError):
+    rid = inputs.целое(data.get("id"))
+    if rid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     status = "approved" if data.get("ok") else "hidden"
     if not db.set_review_status(rid, status):
@@ -920,9 +913,8 @@ def api_admin_message():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-    except (TypeError, ValueError):
+    target = inputs.целое(data.get("user_id"))
+    if target is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     text = inputs._text(data.get("text"), 2000)
     if not text:

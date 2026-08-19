@@ -69,19 +69,12 @@ def api_admin_grant():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-    except (TypeError, ValueError):
+    target = inputs.целое(data.get("user_id"))
+    if target is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     coins = spins = 0
-    try:
-        coins = int(data.get("coins") or 0)
-    except (TypeError, ValueError):
-        coins = 0
-    try:
-        spins = int(data.get("spins") or 0)
-    except (TypeError, ValueError):
-        spins = 0
+    coins = inputs.целое(data.get("coins") or 0, 0)
+    spins = inputs.целое(data.get("spins") or 0, 0)
     parts = []
     if coins:
         parts.append(f"{'убрать' if coins < 0 else 'начислить'} {abs(coins)} 🪙")
@@ -175,9 +168,8 @@ def api_admin_customer():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-    except (TypeError, ValueError):
+    target = inputs.целое(data.get("user_id"))
+    if target is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     card = db.customer_card(target)
     if not card:
@@ -193,9 +185,8 @@ def api_admin_referral_unlink():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-    except (TypeError, ValueError):
+    target = inputs.целое(data.get("user_id"))
+    if target is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if is_super_admin(target):
         return jsonify({"ok": False, "error": "protected"}), 403     # супер-админа не трогаем
@@ -220,9 +211,8 @@ def api_admin_user_delete():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        target = int(data.get("user_id"))
-    except (TypeError, ValueError):
+    target = inputs.целое(data.get("user_id"))
+    if target is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if target == int(admin["id"]):
         return jsonify({"ok": False, "error": "self"}), 400     # себя не удаляем

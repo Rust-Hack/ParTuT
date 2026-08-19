@@ -177,10 +177,7 @@ def api_slot_spin():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    try:
-        bet = int(data.get("bet", SLOT_MIN_BET))
-    except (TypeError, ValueError):
-        bet = SLOT_MIN_BET
+    bet = inputs.целое(data.get("bet", SLOT_MIN_BET), SLOT_MIN_BET)
     if bet not in SLOT_BETS:
         return jsonify({"ok": False, "error": "bad_bet"}), 400
     roll = random.random() * 100.0
@@ -361,10 +358,7 @@ def api_admin_raffle_start():
         return jsonify({"ok": False, "error": "forbidden"}), 403
     if db.get_active_raffle():
         return jsonify({"ok": False, "error": "already"}), 409     # двух сразу не бывает
-    try:
-        days = int(data.get("days") or 30)
-    except (TypeError, ValueError):
-        days = 30
+    days = inputs.целое(data.get("days") or 30, 30)
     days = min(365, max(1, days))
     try:
         prize3 = max(0, int(data.get("prize3_coins") or 500))

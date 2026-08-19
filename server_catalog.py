@@ -176,9 +176,8 @@ def api_admin_category_spec_update():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        sid = int(data.get("id"))
-    except (TypeError, ValueError):
+    sid = inputs.целое(data.get("id"))
+    if sid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     options = data.get("options")
     if isinstance(options, str):
@@ -198,9 +197,8 @@ def api_admin_category_spec_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        sid = int(data.get("id"))
-    except (TypeError, ValueError):
+    sid = inputs.целое(data.get("id"))
+    if sid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if not db.delete_category_spec(sid):
         return jsonify({"ok": False, "error": "not_found"}), 404
@@ -246,9 +244,8 @@ def api_admin_product_specs():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        pid = int(data.get("id"))
-    except (TypeError, ValueError):
+    pid = inputs.целое(data.get("id"))
+    if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     p = db.get_product(pid)
     if not p:
@@ -277,9 +274,8 @@ def _закупка(data):
                                "message": "Впишите закупочную цену — без неё прибыль по этому "
                                           "товару не посчитается. Если закупки не было (подарок, "
                                           "образец), поставьте 0."}), 400)
-    try:
-        цена = float(str(сырое).replace(",", "."))
-    except (TypeError, ValueError):
+    цена = inputs.дробное(сырое)
+    if цена is None:
         return None, (jsonify({"ok": False, "error": "bad_number"}), 400)
     if цена < 0:
         return None, (jsonify({"ok": False, "error": "bad_number"}), 400)
@@ -298,9 +294,8 @@ def api_admin_add():
     name = inputs._text(data.get("name"))
     if city not in db.location_names() or category not in db.category_codes() or not name:
         return jsonify({"ok": False, "error": "bad_data"}), 400
-    try:
-        price = float(str(data.get("price")).replace(",", "."))
-    except (TypeError, ValueError):
+    price = inputs.дробное(data.get("price"))
+    if price is None:
         return jsonify({"ok": False, "error": "bad_number"}), 400
     cost, беда = _закупка(data)
     if беда:
@@ -320,10 +315,7 @@ def api_admin_add():
                              brand=brand, flavor="", strength=strength, volume=vol, cost=cost)
         for v in variants:
             fl = str(v.get("flavor", "")).strip()
-            try:
-                st = int(v.get("stock", 0))
-            except (TypeError, ValueError):
-                st = 0
+            st = inputs.целое(v.get("stock", 0), 0)
             if fl:
                 db.add_variant(pid, fl, max(0, st))
         db.recalc_product_stock(pid)
@@ -331,9 +323,8 @@ def api_admin_add():
         return jsonify({"ok": True, "id": pid})
 
     # Обычный товар (одно количество, без вкусов).
-    try:
-        stock = int(data.get("stock"))
-    except (TypeError, ValueError):
+    stock = inputs.целое(data.get("stock"))
+    if stock is None:
         return jsonify({"ok": False, "error": "bad_number"}), 400
     flavor = inputs._text(data.get("flavor"))
     volume = inputs._text(data.get("volume"))
@@ -351,9 +342,8 @@ def api_admin_update():
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
-    try:
-        pid = int(data.get("id"))
-    except (TypeError, ValueError):
+    pid = inputs.целое(data.get("id"))
+    if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     deny = auth.deny_product(admin, pid)
     if deny:
@@ -408,9 +398,8 @@ def api_admin_variants():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        pid = int(data.get("id"))
-    except (TypeError, ValueError):
+    pid = inputs.целое(data.get("id"))
+    if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     deny = auth.deny_product(admin, pid)
     if deny:
@@ -419,10 +408,7 @@ def api_admin_variants():
     db.delete_variants(pid)
     for v in (data.get("variants") or []):
         fl = str(v.get("flavor", "")).strip()
-        try:
-            st = int(v.get("stock", 0))
-        except (TypeError, ValueError):
-            st = 0
+        st = inputs.целое(v.get("stock", 0), 0)
         if fl:
             db.add_variant(pid, fl, max(0, st))
     db.recalc_product_stock(pid)
@@ -436,9 +422,8 @@ def api_admin_delete():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        pid = int(data.get("id"))
-    except (TypeError, ValueError):
+    pid = inputs.целое(data.get("id"))
+    if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     deny = auth.deny_product(admin, pid)
     if deny:
@@ -455,9 +440,8 @@ def api_admin_photo():
     user = auth.get_admin(init_data)
     if not user:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        pid = int(request.form.get("id"))
-    except (TypeError, ValueError):
+    pid = inputs.целое(request.form.get("id"))
+    if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     file = request.files.get("file")
     if not file:
@@ -482,9 +466,8 @@ def api_admin_photo_add():
     user = auth.get_admin(request.form.get("initData", ""))
     if not user:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        mid = int(request.form.get("model_id"))
-    except (TypeError, ValueError):
+    mid = inputs.целое(request.form.get("model_id"))
+    if mid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if not db.get_model(mid):
         return jsonify({"ok": False, "error": "not_found"}), 404
@@ -513,9 +496,8 @@ def api_admin_photo_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        photo_id = int(data.get("photo_id"))
-    except (TypeError, ValueError):
+    photo_id = inputs.целое(data.get("photo_id"))
+    if photo_id is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if photo_id <= 0:
         return jsonify({"ok": False, "error": "main_photo"}), 400
@@ -587,9 +569,8 @@ def api_admin_model_hide():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        mid = int(data.get("id"))
-    except (TypeError, ValueError):
+    mid = inputs.целое(data.get("id"))
+    if mid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if not db.get_model(mid):
         return jsonify({"ok": False, "error": "not_found"}), 404
@@ -604,9 +585,8 @@ def api_admin_model_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        mid = int(data.get("id"))
-    except (TypeError, ValueError):
+    mid = inputs.целое(data.get("id"))
+    if mid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     used = db.count_products_of_model(mid)
     if used and not data.get("force"):
@@ -737,9 +717,8 @@ def api_admin_brand_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    try:
-        bid = int(data.get("id"))
-    except (TypeError, ValueError):
+    bid = inputs.целое(data.get("id"))
+    if bid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
     b = db.get_brand(bid)
     if not b:

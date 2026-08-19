@@ -149,55 +149,38 @@ def api_admin_settings_update():
         return jsonify({"ok": False, "error": "forbidden"}), 403
     if "payment_info" in data:
         db.set_setting("payment_info", inputs._text(data.get("payment_info")))
-    if "confirm_minutes" in data:
-        try:
-            db.set_setting("confirm_minutes", max(1, int(data.get("confirm_minutes"))))
-        except (TypeError, ValueError):
-            pass
-    if "free_delivery_from" in data:
-        try:
-            # 0 — законное значение: порог выключен, доставка платная всегда.
-            db.set_setting("free_delivery_from", max(0.0, float(str(data.get("free_delivery_from") or 0).replace(",", "."))))
-        except (TypeError, ValueError):
-            pass
-    if "remind_after_days" in data:
-        try:
-            db.set_setting("remind_after_days", max(1, int(data.get("remind_after_days"))))
-        except (TypeError, ValueError):
-            pass
-    if "remind_daily_cap" in data:
-        try:
-            # 0 — законное значение: так напоминания выключаются целиком.
-            db.set_setting("remind_daily_cap", max(0, int(data.get("remind_daily_cap"))))
-        except (TypeError, ValueError):
-            pass
-    # --- Щедрость программы лояльности ---
+
     # Границы стоят не «на всякий случай»: 100 монет = 1 Br, и лишний ноль в
-    # кэшбэке превращает 1% в 10% на каждом заказе. Цену монеты (shopinfo.COIN_VALUE)
-    # намеренно НЕ отдаём в настройки: она задним числом меняет стоимость всех
-    # уже накопленных балансов, а это не настройка, а переоценка обязательств.
-    if "coins_per_byn" in data:
-        try:
-            db.set_setting("coins_per_byn", min(10.0, max(0.0, float(
-                str(data.get("coins_per_byn") or 0).replace(",", ".")))))
-        except (TypeError, ValueError):
-            pass
-    if "wheel_step" in data:
-        try:
-            # Ноль означал бы прокрут за каждую покупку — держим нижнюю границу.
-            db.set_setting("wheel_step", min(100000.0, max(1.0, float(
-                str(data.get("wheel_step") or 0).replace(",", ".")))))
-        except (TypeError, ValueError):
-            pass
-    if "referral_bonus" in data:
-        try:
-            db.set_setting("referral_bonus", min(100000, max(0, int(data.get("referral_bonus")))))
-        except (TypeError, ValueError):
-            pass
-    if "compensation_max" in data:
-        try:
-            # Ноль допустим и означает «продавцам компенсации запрещены».
-            db.set_setting("compensation_max", min(100000, max(0, int(data.get("compensation_max")))))
-        except (TypeError, ValueError):
-            pass
+    # кэшбэке превращает 1% в 10% на каждом заказе. Цену монеты
+    # (shopinfo.COIN_VALUE) намеренно НЕ отдаём в настройки: она задним числом
+    # меняет стоимость всех уже накопленных балансов, а это не настройка, а
+    # переоценка обязательств.
+    #
+    # Где нижняя граница ноль — это осознанно, а не забывчивость:
+    #   free_delivery_from = 0  — порога нет, доставка платная всегда;
+    #   remind_daily_cap   = 0  — напоминания выключены целиком;
+    #   compensation_max   = 0  — продавцам компенсации запрещены.
+    # А вот wheel_step и confirm_minutes с нуля начинаться не могут: нулевой шаг
+    # колеса означал бы прокрут за каждую покупку.
+    ЧИСЛА = [
+        # ключ,                 разбор,           минимум, максимум
+        ("confirm_minutes",     inputs.целое,     1,       None),
+        ("free_delivery_from",  inputs.дробное,   0.0,     None),
+        ("remind_after_days",   inputs.целое,     1,       None),
+        ("remind_daily_cap",    inputs.целое,     0,       None),
+        ("coins_per_byn",       inputs.дробное,   0.0,     10.0),
+        ("wheel_step",          inputs.дробное,   1.0,     100000.0),
+        ("referral_bonus",      inputs.целое,     0,       100000),
+        ("compensation_max",    inputs.целое,     0,       100000),
+    ]
+    for ключ, разбор, нижняя, верхняя in ЧИСЛА:
+        if ключ not in data:
+            continue
+        значение = разбор(data.get(ключ), минимум=нижняя, максимум=верхняя)
+        # None здесь — «прислали не число». Молча записать ноль было бы хуже
+        # отказа: нулевой потолок компенсаций запрещает их совсем, и владелец
+        # узнал бы об этом от продавца, а не от нас.
+        if значение is not None:
+            db.set_setting(ключ, значение)
+
     return jsonify({"ok": True})
