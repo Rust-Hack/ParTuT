@@ -710,6 +710,18 @@ def _ensure_order_columns():
         cur.execute("ALTER TABLE orders ADD COLUMN comment TEXT")
     if "phone" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN phone TEXT")
+    # След платежа. Магазин принимает перевод на карту и фото чека, а сверить
+    # это с выпиской банка было нечем: заказ и поступление на счёт связывала
+    # только память продавца. Сумма и последние четыре цифры карты плательщика
+    # — тот минимум, по которому строка выписки находит свой заказ.
+    #
+    # От подделки это не защищает и не должно: защита — дело банка. Это след
+    # для разбора и ловушка на небрежность (заплатил не ту сумму, оплатил
+    # чужой заказ).
+    if "paid_amount" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN paid_amount REAL")
+    if "payer_last4" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN payer_last4 TEXT")
     if "reminded_at" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN reminded_at TEXT")   # для повторного напоминания продавцу
     if "promo_code" not in cols:
@@ -3415,12 +3427,21 @@ def set_order_status_if(order_id, new_status, allowed):
     return changed
 
 
-def set_order_receipt(order_id, file_id):
-    """Сохраняет фото чека и переводит заказ в статус 'paid'."""
+def set_order_receipt(order_id, file_id, paid_amount=None, payer_last4=""):
+    """Сохраняет фото чека, след платежа и переводит заказ в статус 'paid'.
+
+    Сумму и последние цифры карты пишем как СКАЗАННОЕ покупателем, а не как
+    проверенное: проверить может только банк. Ценность в другом — по этой паре
+    строка банковской выписки находит свой заказ, а несовпадение суммы видно
+    продавцу сразу, а не при пересчёте кассы в конце дня.
+    """
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("UPDATE orders SET receipt_file_id = %s, status = 'paid' WHERE id = %s"),
-                (file_id, order_id))
+    cur.execute(_q("""UPDATE orders
+                         SET receipt_file_id = %s, status = 'paid',
+                             paid_amount = %s, payer_last4 = %s
+                       WHERE id = %s"""),
+                (file_id, paid_amount, (payer_last4 or "")[:4], order_id))
     conn.commit()
     conn.close()
 

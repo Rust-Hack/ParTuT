@@ -234,6 +234,17 @@ function renderOrders() {
     const items = (o.items || []).map(it =>
       `<div class="oitem"><span>${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} Br</span></div>`).join("");
     const receipt = o.receipt_url ? `<div class="oreceipt"><img src="${o.receipt_url}" alt="чек"></div>` : "";
+    // След платежа: что покупатель сказал о переводе. Не доказательство —
+    // доказывает банк, — но по этой паре строка выписки находит свой заказ,
+    // а несошедшаяся сумма должна попасться на глаза ДО выдачи товара.
+    const trail = (o.paid_amount != null || o.payer_last4)
+      ? `<div class="ptrail ${o.payment_matches === false ? "bad" : ""}">
+           ${o.payment_matches === false ? "⚠️ " : "🧾 "}
+           Перевод: <b>${o.paid_amount != null ? (+o.paid_amount).toFixed(2) + " Br" : "сумма не указана"}</b>
+           ${o.payer_last4 ? ` · карта •••• ${esc(o.payer_last4)}` : ""}
+           ${o.payment_matches === false ? `<div class="ptrail-note">Не сходится с итогом ${(+o.total).toFixed(2)} Br — проверьте чек и выписку перед выдачей.</div>` : ""}
+         </div>`
+      : "";
     const who = o.username ? "@" + esc(o.username) : "id " + o.user_id;
     const PM = { card: "💳 картой", cash: "💵 наличными", none: "🚕 при получении" };
     const deliv = o.delivery_method
@@ -257,7 +268,7 @@ function renderOrders() {
       </div>
       ${deliv}${contact}
       <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} Br</span></div></div>
-      ${receipt}
+      ${trail}${receipt}
       <div class="oacts">${acts}<button class="omsg" data-omsg="${o.user_id}" data-owho="${esc(who)}">✍️ Написать</button>${edit}<button class="omsg" data-ocomp="${o.id}" data-owho="${esc(who)}">🎁 Компенсация</button></div>
     </div>`;
   }).join("");

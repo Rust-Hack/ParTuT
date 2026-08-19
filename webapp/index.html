@@ -181,7 +181,17 @@
   <div class="view" id="payView">
     <div class="icon">💳</div><h2 id="payTitle">Оплата заказа</h2>
     <p>Переведите сумму по реквизитам, затем загрузите фото чека.</p>
-    <div class="req" id="payReq"></div><div class="spacer"></div>
+    <div class="req" id="payReq"></div>
+    <div class="req form payform">
+      <div class="rowf">
+        <div><label for="paySum">Сумма перевода (Br)</label>
+          <input id="paySum" inputmode="decimal" autocomplete="off"></div>
+        <div><label for="payLast4">Последние 4 цифры карты</label>
+          <input id="payLast4" inputmode="numeric" maxlength="4" placeholder="1234" autocomplete="off"></div>
+      </div>
+      <p class="payhint">Нужно, чтобы продавец нашёл ваш перевод среди прочих и подтвердил заказ быстрее.</p>
+    </div>
+    <div class="spacer"></div>
     <button class="bigbtn" id="uploadBtn">📷 Загрузить чек</button>
     <input type="file" id="receiptFile" accept="image/*" style="display:none">
     <button class="closebtn" id="payCancel">Оплачу позже (чек — в «Мои заказы»)</button>

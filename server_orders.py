@@ -309,6 +309,20 @@ def api_order():
     })
 
 
+def _сумма_платежа(сырое):
+    """Сколько покупатель говорит, что перевёл. Пусто и мусор = «не сказал».
+
+    Не отказываем и не спорим: человек уже заплатил, и потерять чек из-за
+    придирки к полю хуже, чем принять его без суммы. Расхождение увидит
+    продавец — решать ему.
+    """
+    try:
+        значение = float(str(сырое or "").replace(",", ".").replace(" ", ""))
+    except (TypeError, ValueError):
+        return None
+    return round(значение, 2) if значение > 0 else None
+
+
 @server.app.route("/api/receipt", methods=["POST"])
 def api_receipt():
     """Принимает фото чека (файлом), подтверждает клиенту, шлёт заказ продавцу города."""
@@ -332,6 +346,13 @@ def api_receipt():
         return jsonify({"ok": False, "error": "no_file"}), 400
     photo_bytes = file.read()
 
+    # След платежа. Спрашиваем ровно два поля: сумму (она подставлена итогом,
+    # покупателю остаётся подтвердить) и последние четыре цифры карты, с
+    # которой платили. По этой паре строка банковской выписки находит свой
+    # заказ — сегодня их не связывает ничего, кроме памяти продавца.
+    сумма = _сумма_платежа(request.form.get("amount"))
+    last4 = server._digits(request.form.get("last4") or "")[-4:]
+
     # Отправляем чек самому клиенту (подтверждение) — заодно получаем file_id,
     # который переиспользуем при отправке продавцу.
     try:
@@ -346,7 +367,7 @@ def api_receipt():
         file_id = None
 
     if file_id:
-        db.set_order_receipt(order_id, file_id)     # статус -> paid, чек сохранён
+        db.set_order_receipt(order_id, file_id, сумма, last4)   # статус -> paid
         # Сам заказ продавец уже получил при оформлении — теперь только чек.
         server._bg(notifications.notify_receipt, server.tg, order_id)
         return jsonify({"ok": True})
@@ -482,7 +503,26 @@ def _order_json(o, init_data=""):
         # Скидки — чтобы правка состава показывала ту же сумму, что посчитает сервер.
         "promo_discount": round(o["promo_discount"] or 0, 2) if "promo_discount" in o.keys() else 0,
         "coins_discount": round(int(o["coins_used"] or 0) * server.COIN_VALUE, 2) if "coins_used" in o.keys() else 0,
+        **_след_платежа(o),
     }
+
+
+def _след_платежа(o):
+    """Что покупатель сказал о переводе — и сошлось ли это с заказом.
+
+    Расхождение не отказ и не обвинение: человек мог заплатить двумя
+    переводами, ошибиться на копейку или оплатить не тот заказ. Но продавец
+    обязан увидеть это ДО того, как выдаст товар, а не при пересчёте кассы.
+    """
+    ключи = o.keys()
+    сумма = o["paid_amount"] if "paid_amount" in ключи else None
+    last4 = (o["payer_last4"] or "") if "payer_last4" in ключи else ""
+    итог = float(o["total"] or 0)
+    # Копейка расхождения — не расхождение: суммы хранятся дробными числами.
+    сошлось = None if сумма is None else abs(float(сумма) - итог) < 0.01
+    return {"paid_amount": (round(float(сумма), 2) if сумма is not None else None),
+            "payer_last4": last4,
+            "payment_matches": сошлось}
 
 
 @server.app.route("/api/admin/orders", methods=["POST"])

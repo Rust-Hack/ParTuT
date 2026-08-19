@@ -98,6 +98,22 @@ def notify_receipt(bot, order_id):
         return
     text = (f"🧾 <b>Чек по заказу #{order['id']}</b>\n"
             f"🏙 {CITIES.get(order['city'], order['city'])} · {order['total']:.2f} BYN")
+
+    # След платежа — прямо в сообщении. Продавец чаще смотрит в чат, чем в
+    # приложение, и решение «подтверждать или нет» принимает здесь. Несошедшаяся
+    # сумма должна попасться ему на глаза до, а не после выдачи товара.
+    ключи = order.keys()
+    сумма = order["paid_amount"] if "paid_amount" in ключи else None
+    last4 = (order["payer_last4"] or "") if "payer_last4" in ключи else ""
+    if сумма is not None or last4:
+        сказано = f"{float(сумма):.2f} BYN" if сумма is not None else "сумма не указана"
+        строка = f"\n💳 Перевод: {сказано}"
+        if last4:
+            строка += f" · карта •••• {last4}"
+        if сумма is not None and abs(float(сумма) - float(order["total"] or 0)) >= 0.01:
+            строка += (f"\n⚠️ <b>Не сходится с итогом {float(order['total'] or 0):.2f} BYN</b> — "
+                       f"проверьте чек и выписку до выдачи.")
+        text += строка
     kb = _orders_kb()
     for admin_id in admins_for_city(order["city"]):
         try:
