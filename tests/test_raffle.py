@@ -17,8 +17,10 @@ import datetime
 import json
 import threading
 
-from _common import (db, client, server, Checker, as_user, as_admin, deny_admin,
+from _common import (db, client, server, Checker, as_user, as_admin, deny_admin,  # noqa: F401
                      SENT, reset_sent)
+
+import server_games
 
 UIDS = [8901, 8902, 8903, 8904]
 
@@ -111,7 +113,7 @@ def run():
     db.get_raffle_user_ids = lambda _rid: [UIDS[0], UIDS[0], UIDS[0]]
     try:
         reset_sent()
-        server._draw_raffle(db.get_active_raffle())
+        server_games._draw_raffle(db.get_active_raffle())
     finally:
         db.get_raffle_user_ids = настоящие
     winners = json.loads(db.get_last_finished_raffle()["winners"] or "[]")

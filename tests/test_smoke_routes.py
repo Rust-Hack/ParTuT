@@ -60,6 +60,16 @@ def run():
     ручек = len(list(_routes()))
     c(f"ручки найдены сами ({ручек} шт.)", ручек > 50)
 
+    # server.py режут на модули, и маршруты регистрируются уже из разных мест.
+    # Потеряться при переезде они должны громко, а не молча: забытый импорт
+    # модуля — это исчезнувший экран, о котором узнают от покупателя.
+    ЖДЁМ = ["/api/products", "/api/order", "/api/me", "/api/raffle", "/api/wheel",
+            "/api/slot", "/api/admin/orders", "/api/admin/raffle/start",
+            "/api/admin/order/compensate", "/api/photo", "/health"]
+    пути = {путь for _, путь in _routes()}
+    пропали = [п for п in ЖДЁМ if п not in пути]
+    c("ключевые ручки на месте" + ("" if not пропали else f": нет {пропали}"), not пропали)
+
     лица = [
         ("посторонний", lambda: (real_auth(), deny_admin())),
         ("покупатель", lambda: (as_user(9801, "покупатель"), deny_admin())),
