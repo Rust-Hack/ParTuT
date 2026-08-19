@@ -18,7 +18,6 @@ server.py — веб-сервер Mini App (вся витрина внутри �
 
 import os
 import gzip
-import hmac
 import hashlib
 import html
 import json
@@ -26,32 +25,24 @@ import threading
 import time
 
 import requests
-import telebot
 from flask import Flask, g, jsonify, request, Response
 
 import auth
 import cache
 import db
+import photos
+import inputs
+import tgsend
 import errors
 import notifications
-from config import (BOT_TOKEN, PAYMENT_INFO, SUPER_ADMIN_IDS, SUPPORT_IDS, CONFIRM_MINUTES, is_admin, is_super_admin, admin_city, admin_role, all_admin_ids)
+from config import (BOT_TOKEN, SUPPORT_IDS, is_admin, is_super_admin, admin_city, admin_role, all_admin_ids)
 
 db.init_db()      # схема, разовые переносы и права из окружения — внутри
 
 # Отдельный экземпляр бота — ТОЛЬКО чтобы отправлять сообщения/картинки.
-tg = telebot.TeleBot(BOT_TOKEN)
 
 # Имя бота для реферальных ссылок (t.me/<bot>?startapp=...).
-try:
-    BOT_USERNAME = tg.get_me().username
-except Exception as e:
-    print(f"Не смог узнать имя бота: {e}")
-    BOT_USERNAME = ""
 
-REFERRAL_BONUS = 50        # vapecoins пригласившему за нового друга
-COINS_PER_BYN = 1          # vapecoins клиенту за каждый Br выданного заказа
-COIN_VALUE = 0.01          # сколько стоит 1 монета при списании (100 монет = 1 Br)
-LOW_STOCK = 3              # с этого остатка товар считается «заканчивается» (везде одинаково)
 
 
 app = Flask(__name__, static_folder="webapp", static_url_path="")
@@ -72,47 +63,9 @@ _photo_cache_lock = threading.Lock()
 _photo_cache_bytes = 0     # сколько памяти занято картинками
 PHOTO_CACHE_MAX_BYTES = int(os.environ.get("PHOTO_CACHE_MB", "48")) * 1024 * 1024
 
-def _bg(fn, *args, **kwargs):
-    """Запускает побочный эффект (уведомления в Telegram) в фоне — чтобы ответ клиенту
-    не ждал сетевых обращений к Telegram. Заказ уже сохранён в БД до вызова."""
-    def _run():
-        try:
-            fn(*args, **kwargs)
-        except Exception as e:
-            # Здесь живут уведомления продавцам о новых заказах. Молчаливое
-            # падение тут означает «заказ пришёл, но никто о нём не узнал» —
-            # худший сорт поломки, поэтому сообщаем владельцу.
-            errors.report(tg, f"фоновая задача {getattr(fn, '__name__', fn)}", e)
-    threading.Thread(target=_run, daemon=True).start()
-
-
 # ============================================================
 #  ПРОВЕРКА ПОДЛИННОСТИ (initData от Telegram)
 # ============================================================
-
-def _notify_supers_request(rid, admin, summary):
-    """Шлёт супер-админам запрос на подтверждение с кнопками Разрешить/Отклонить."""
-    text = (f"🔐 Запрос #{rid} на подтверждение\n"
-            f"От админа: {auth._admin_display(admin)} (id {admin['id']})\n\n{summary}")
-    kb = telebot.types.InlineKeyboardMarkup()
-    kb.add(telebot.types.InlineKeyboardButton("✅ Разрешить", callback_data=f"areq:ok:{rid}"),
-           telebot.types.InlineKeyboardButton("✖️ Отклонить", callback_data=f"areq:no:{rid}"))
-    for sid in SUPER_ADMIN_IDS:
-        try:
-            tg.send_message(sid, text, reply_markup=kb)
-        except Exception as e:
-            print(f"Не смог уведомить супер-админа {sid}: {e}")
-
-
-def _gate(admin, action, payload, summary):
-    """Супер-админ — выполняет сразу; обычный админ — создаёт заявку на подтверждение."""
-    if is_super_admin(int(admin["id"])):
-        return jsonify({"ok": True, "pending": False,
-                        "result": notifications.run_admin_request(tg, action, payload)})
-    rid = db.create_admin_request(int(admin["id"]), auth._admin_display(admin), action, payload, summary)
-    _notify_supers_request(rid, admin, summary)
-    return jsonify({"ok": True, "pending": True, "request_id": rid})
-
 
 @app.route("/api/admin/requests", methods=["POST"])
 def api_admin_requests_pending():
@@ -147,12 +100,12 @@ def api_admin_request_decide():
         return jsonify({"ok": False, "error": "already"}), 409     # уже обработана
     if approve:
         try:
-            notifications.run_admin_request(tg, req["action"], json.loads(req["payload"]))
+            notifications.run_admin_request(tgsend.tg, req["action"], json.loads(req["payload"]))
         except Exception as e:
             print(f"Ошибка выполнения заявки #{rid}: {e}")
-        _notify_client(req["requester_id"], f"✅ Ваш запрос одобрен:\n{req['summary']}")
+        tgsend.notify_client(req["requester_id"], f"✅ Ваш запрос одобрен:\n{req['summary']}")
     else:
-        _notify_client(req["requester_id"], f"✖️ Ваш запрос отклонён:\n{req['summary']}")
+        tgsend.notify_client(req["requester_id"], f"✖️ Ваш запрос отклонён:\n{req['summary']}")
     return jsonify({"ok": True, "decided": new_status})
 
 
@@ -200,7 +153,7 @@ def _report_unhandled(e):
     from werkzeug.exceptions import HTTPException
     if isinstance(e, HTTPException):
         return e                      # 404 и прочие штатные ответы — не поломка
-    errors.report(tg, f"{request.method} {request.path}", e)
+    errors.report(tgsend.tg, f"{request.method} {request.path}", e)
     return jsonify({"ok": False, "error": "server_error"}), 500
 
 
@@ -214,7 +167,7 @@ def _bust_cache_on_write(resp):
             # отклонение заказа. Ловим это в ОДНОМ месте, а не в каждом маршруте
             # — иначе новый способ менять склад однажды забудут сюда вписать.
             if keys is _STOCK_KEYS or request.path.startswith("/api/admin/product"):
-                _bg(_flush_stock_alerts)
+                tgsend.bg(_flush_stock_alerts)
         _write_admin_log(resp)
     return resp
 
@@ -264,7 +217,7 @@ def _flush_stock_alerts():
     done = set()
     for uid, pid, name in ready:
         try:
-            tg.send_message(uid, f"🔔 «{name}» снова в наличии.\nОткройте приложение — товар доступен к заказу.")
+            tgsend.tg.send_message(uid, f"🔔 «{name}» снова в наличии.\nОткройте приложение — товар доступен к заказу.")
         except Exception as e:
             print(f"Не смог сообщить о поступлении {pid} покупателю {uid}: {e}")
         done.add(pid)
@@ -466,7 +419,7 @@ def api_me():
     # Запоминаем, как человека зовут. Telegram присылает имя при каждом открытии
     # приложения, а мы его нигде не сохраняли: в списке покупателей все, кто ещё
     # не сделал заказ, выглядели голым числом.
-    _bg(db.remember_user_name, uid, user.get("username") or "", user.get("first_name") or "")
+    tgsend.bg(db.remember_user_name, uid, user.get("username") or "", user.get("first_name") or "")
 
     # Реферал: friend открыл Mini App с параметром start_param=refN (дубль к боту).
     # Только ЗАПОМИНАЕМ пригласившего — монеты дадим, когда друг сделает заказ.
@@ -535,8 +488,8 @@ def api_my_settings():
         # Пустой телефон — законный ответ («не хочу указывать»), а вот огрызок
         # вроде «+375» хуже пустого: он молча подставится в заказ, и продавец
         # будет звонить в никуда. Тот же порог, что при оформлении доставки.
-        phone = _text(data.get("phone"))
-        if phone and len(_digits(phone)) < 7:
+        phone = inputs._text(data.get("phone"))
+        if phone and len(inputs._digits(phone)) < 7:
             return jsonify({"ok": False, "error": "bad_phone"}), 400
         db.set_user_phone(uid, phone)
     if "reminders_on" in data:
@@ -651,7 +604,7 @@ def api_review():
     rid = db.add_review(pid, uid, rating, data.get("text") or "", user.get("username") or "")
     if not rid:
         return jsonify({"ok": False, "error": "not_allowed"}), 403
-    _bg(_notify_new_review, rid)
+    tgsend.bg(_notify_new_review, rid)
     return jsonify({"ok": True, "id": rid})
 
 
@@ -667,7 +620,7 @@ def _notify_new_review(review_id):
             f"Опубликовать — в приложении: Админ → Отзывы")
     for aid in all_admin_ids():
         try:
-            tg.send_message(aid, text)
+            tgsend.tg.send_message(aid, text)
         except Exception as e:
             print(f"Не смог сообщить админу {aid} об отзыве: {e}")
 
@@ -807,180 +760,13 @@ def api_also_bought():
     return jsonify(cached)
 
 
-def _delivery_json(m):
-    return {
-        "id": m["id"], "name": m["name"],
-        "needs_address": bool(m["needs_address"]),
-        "address_label": m["address_label"] or "Адрес",
-        "pickup_address": m["pickup_address"] or "",
-        "needs_point": bool(m["needs_point"]),     # покупатель выбирает точку из списка
-        "fee": round(m["fee"] or 0, 2),
-        "needs_payment": bool(m["needs_payment"]),
-    }
-
-
 # ============================================================
 #  ТОВАРЫ
 # ============================================================
 
-def _all_products_payload():
-    """Полный список товаров (все точки). Кэш 30с — витрина открывается без похода в базу.
-    Заказ всё равно проверяет остаток по живой базе, так что кратковременный лаг склада не опасен."""
-    cached = cache.get("products")
-    if cached is not None:
-        return cached
-    variants_by = {}
-    for v in db.get_all_variants():
-        variants_by.setdefault(v["product_id"], []).append({"flavor": v["flavor"], "stock": v["stock"]})
-    try:
-        waiting = db.stock_alert_counts()
-    except Exception as e:
-        waiting = {}                      # счётчик — не повод ронять витрину
-        print(f"Не удалось посчитать ожидающих: {e}")
-    try:
-        ratings = db.product_ratings()
-    except Exception as e:
-        ratings = {}                      # без оценок витрина живёт
-        print(f"Не удалось прочитать оценки товаров: {e}")
-    gallery, model_gallery = {}, {}
-    try:
-        for ph in db.all_product_photos():
-            gallery.setdefault(ph["product_id"], []).append(ph)
-        for ph in db.all_model_photos():
-            model_gallery.setdefault(ph["model_id"], []).append(ph)
-    except Exception as e:
-        print(f"Не удалось прочитать галерею товаров: {e}")   # без галереи витрина живёт
-    out = []
-    for p in db.get_all_products():
-        # Главное фото всегда первое: покупатель видит ту же картинку, что и в каталоге.
-        photos = ([{"id": 0, "url": f"/api/photo?file_id={p['photo']}",
-                    "thumb": f"/api/photo?file_id={p['photo_thumb'] or p['photo']}"}] if p["photo"] else [])
-        mid = p["model_id"] if "model_id" in p.keys() else None
-        # Галерея — свойство модели; у товаров, заведённых до неё, остаётся своя.
-        extra = model_gallery.get(mid) if mid else gallery.get(p["id"], [])
-        for ph in (extra or []):
-            photos.append({"id": ph["id"], "url": f"/api/photo?file_id={ph['file_id']}",
-                           "thumb": f"/api/photo?file_id={ph['thumb_id'] or ph['file_id']}"})
-        out.append({
-            "photos": photos,
-            "rating": ratings.get(p["id"], {"avg": 0, "count": 0}),
-            "id": p["id"], "name": p["name"], "price": p["price"],
-            # Ссылка на модель из «Ассортимента»: у товара, заведённого по ней,
-            # описание правится там, а здесь остаются цена, закупка и остаток.
-            "model_id": p["model_id"] if "model_id" in p.keys() else None,
-            "stock": p["stock"], "is_hit": p["is_hit"],
-            "category": p["category"], "city": p["city"],
-            "description": p["description"] or "",
-            "cost": round(float(p["cost"] or 0), 2),   # видит только админка
-            "brand": p["brand"] or "", "flavor": p["flavor"] or "",
-            "strength": p["strength"] or "", "volume": p["volume"] or "",
-            # Характеристики своей категории: сопротивление у картриджа,
-            # мощность и аккумулятор у пода.
-            "specs": db.product_specs(p),
-            "variants": variants_by.get(p["id"], []),
-            # Снят с витрины: в каталог такой товар не попадает вовсе, но
-            # остаток, история и отзывы при нём остаются.
-            "hidden": bool(p["hidden"]) if "hidden" in p.keys() else False,
-            # Сколько человек ждут поступления — админу видно, что завозить.
-            "waiting": waiting.get(p["id"], 0),
-            "photo_url": (f"/api/photo?file_id={p['photo']}" if p["photo"] else None),
-            # Для сетки каталога — копия поменьше. У старых товаров её нет, тогда
-            # отдаём полноразмерную: витрина в любом случае что-то покажет.
-            "thumb_url": (f"/api/photo?file_id={p['photo_thumb'] or p['photo']}" if p["photo"] else None),
-        })
-    return cache.put("products", out, 30)
-
-
-@app.route("/api/products")
-def api_products():
-    """Витрина покупателя. Снятое с продажи сюда не попадает — не полагаемся на
-    то, что каждый экран приложения не забудет его отфильтровать.
-
-    Закупочная цена вырезается здесь же: она лежала в том же ответе, что и
-    витрина, и любой покупатель мог прочитать, почём мы берём товар."""
-    city = _text(request.args.get("city")) or None
-    out = [_public_product(p) for p in _all_products_payload() if not p["hidden"]]
-    if city:
-        out = [p for p in out if p["city"] == city]
-    return cache.json_etag(out)
-
-
 # Что в товаре не для покупателя: закупка (наша маржа), число ждущих
 # поступления (наша кухня) и пометка «снят с витрины» (его тут и не будет).
-_ADMIN_ONLY_FIELDS = ("cost", "waiting", "hidden")
-
-
-def _public_product(p):
-    return {k: v for k, v in p.items() if k not in _ADMIN_ONLY_FIELDS}
-
-
-RECEIPT_TOKEN_TTL = 6 * 3600       # ссылка на чек живёт полдня, не вечно
-
-
-def photo_token(file_id):
-    """Короткий пропуск к картинке чека. Выдаём его тому, кто уже доказал право
-    на заказ; в самой ссылке пропуск ничего не раскрывает и через полдня гаснет.
-
-    Класть в адрес картинки строку входа Telegram нельзя: адреса попадают в
-    логи сервера и историю браузера, а она — ключ от аккаунта на сутки."""
-    exp = int(time.time()) + RECEIPT_TOKEN_TTL
-    sig = hmac.new(BOT_TOKEN.encode(), f"{file_id}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
-    return f"{exp}.{sig}"
-
-
-def _token_ok(file_id, token):
-    try:
-        exp_s, sig = (token or "").split(".", 1)
-        exp = int(exp_s)
-    except (ValueError, AttributeError):
-        return False
-    if exp < time.time():
-        return False
-    want = hmac.new(BOT_TOKEN.encode(), f"{file_id}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
-    return hmac.compare_digest(want, sig)
-
-
-def _text(value, limit=None):
-    """Строка из того, что прислал клиент, — что бы он ни прислал.
-
-    Раньше по всему серверу стояло `(data.get("x") or "").strip()`. Приложение
-    шлёт строку, и всё работало; но стоило прийти списку или числу — обработчик
-    падал с 500. Причём каждое такое падение ещё и отправляло разработчику
-    письмо о сбое, то есть любой желающий мог завалить почту, зная адрес.
-    Списки и словари строкой не считаем: это не «текст с опечаткой», а мусор.
-    """
-    if value is None or isinstance(value, (dict, list, tuple, set)):
-        return ""
-    s = value if isinstance(value, str) else str(value)
-    # Нулевой байт: SQLite его молча глотает, а Postgres отказывается принимать
-    # такую строку вовсе — и запрос падает с 500. Пришёл он из адреса или из
-    # тела, для нас это мусор в любом случае.
-    s = s.replace("\x00", "").strip()
-    return s[:limit] if limit else s
-
-
-def _digits(s):
-    return "".join(ch for ch in (s or "") if ch.isdigit())
-
-
-def _may_see_photo(file_id, token=""):
-    """Картинки товаров открыты всем — это витрина. Всё остальное здесь —
-    чеки об оплате: к ним нужен пропуск.
-
-    Раньше по этой ссылке чек забирал кто угодно: адрес вида
-    /api/photo?file_id=… ничем не защищён, а живёт он вечно — достаточно,
-    чтобы он попал в чужой лог, историю браузера или на скриншот.
-    """
-    try:
-        if db.is_product_photo(file_id):
-            return True
-        owner = db.receipt_owner(file_id)
-    except Exception as e:
-        print(f"Не смог проверить права на фото {file_id}: {e}")
-        return True                     # база отвечает плохо — витрина важнее
-    if owner is None:
-        return True                     # ни товар, ни чек: старые картинки из чата
-    return _token_ok(file_id, token)
+photos.RECEIPT_TOKEN_TTL = 6 * 3600       # ссылка на чек живёт полдня, не вечно
 
 
 @app.route("/api/photo")
@@ -988,7 +774,7 @@ def api_photo():
     file_id = request.args.get("file_id", "")
     if not file_id:
         return Response("no file_id", status=404)
-    if not _may_see_photo(file_id, request.args.get("t", "")):
+    if not photos._may_see_photo(file_id, request.args.get("t", "")):
         return Response("not found", status=404)
 
     # file_id намертво привязан к содержимому картинки: оно никогда не меняется.
@@ -1016,14 +802,14 @@ def api_photo():
     try:
         path = _file_path_cache.get(file_id)
         if not path:
-            path = tg.get_file(file_id).file_path
+            path = tgsend.tg.get_file(file_id).file_path
             _file_path_cache[file_id] = path
         url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}"
         r = requests.get(url, timeout=15)
         r.raise_for_status()
         ctype = r.headers.get("Content-Type", "image/jpeg")
         _photo_cache_put(file_id, r.content, ctype)
-        _bg(_store_photo_blob, file_id, ctype, r.content)   # запись в базу не задерживает ответ
+        tgsend.bg(_store_photo_blob, file_id, ctype, r.content)   # запись в базу не задерживает ответ
         return _photo_response(r.content, ctype, file_id)
     except Exception as e:
         _file_path_cache.pop(file_id, None)      # путь мог протухнуть — сбросим, чтобы взять заново
@@ -1031,23 +817,7 @@ def api_photo():
         return Response("photo error", status=404)
 
 
-GRID_PHOTO_MIN_WIDTH = 480     # карточка каталога ~190px, но экраны телефонов 2-3x
-
-
-def _pick_photo_sizes(sizes):
-    """Из набора копий, который вернул Telegram, берём две: большую и для сетки.
-
-    Telegram сам хранит одну картинку в нескольких размерах (обычно 90/320/800/1280).
-    Раньше мы всегда брали самую большую — и гоняли её в каталог, где она
-    показывается в ~190 пикселей шириной. Теперь для сетки берём копию поменьше,
-    а полноразмерную оставляем для карточки товара. Своего ресайза не нужно."""
-    sizes = list(sizes or [])
-    if not sizes:
-        return None, None
-    ordered = sorted(sizes, key=lambda s: getattr(s, "width", 0) or 0)
-    full = ordered[-1]
-    grid = next((s for s in ordered if (getattr(s, "width", 0) or 0) >= GRID_PHOTO_MIN_WIDTH), full)
-    return full.file_id, grid.file_id
+photos.GRID_PHOTO_MIN_WIDTH = 480     # карточка каталога ~190px, но экраны телефонов 2-3x
 
 
 def _store_photo_blob(file_id, ctype, content):
@@ -1094,56 +864,6 @@ def _photo_not_modified(file_id):
 #  ЗАКАЗ
 # ============================================================
 
-def _payment_info():
-    """Реквизиты оплаты: из настроек магазина, иначе — значение из config.
-    Кэшируем: настройки меняются раз в год, а читались на каждом оформлении заказа."""
-    cached = cache.get("settings:payment_info")
-    if cached is None:
-        cached = cache.put("settings:payment_info", db.get_setting("payment_info", PAYMENT_INFO), 300)
-    return cached
-
-
-# Ниже этого числа хвастаться нечем: «выполнено 3 заказа» отпугивает сильнее,
-# чем молчание. Показываем счётчик, только когда он работает на доверие.
-ORDERS_DONE_MIN = 15
-
-
-def _orders_done():
-    cached = cache.get("orders_done")
-    if cached is None:
-        try:
-            n = db.issued_orders_count()
-        except Exception:
-            n = 0
-        cached = cache.put("orders_done", n if n >= ORDERS_DONE_MIN else 0, 300)
-    return cached
-
-
-def _free_delivery_from():
-    """С какой суммы доставка бесплатна. 0 = порога нет.
-    Кэшируем: читается на каждом оформлении, а меняется раз в год."""
-    cached = cache.get("settings:free_delivery_from")
-    if cached is None:
-        try:
-            val = float(db.get_setting("free_delivery_from", 0) or 0)
-        except (TypeError, ValueError):
-            val = 0.0
-        cached = cache.put("settings:free_delivery_from", max(0.0, val), 300)
-    return cached
-
-
-def _confirm_minutes():
-    """Через сколько минут продавец подтверждает: из настроек, иначе — из config."""
-    cached = cache.get("settings:confirm_minutes")
-    if cached is None:
-        try:
-            val = int(db.get_setting("confirm_minutes", CONFIRM_MINUTES))
-        except (TypeError, ValueError):
-            val = CONFIRM_MINUTES
-        cached = cache.put("settings:confirm_minutes", val, 300)
-    return cached
-
-
 SUPPORT_COOLDOWN = 20          # антиспам: не чаще 1 сообщения в поддержку за столько секунд
 _support_last = {}             # uid -> время последнего сообщения (в памяти процесса)
 
@@ -1155,7 +875,7 @@ def api_support():
     user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
-    text = _text(data.get("text"), 2000)
+    text = inputs._text(data.get("text"), 2000)
     if not text:
         return jsonify({"ok": False, "error": "empty"}), 400
     uid = int(user["id"])
@@ -1168,7 +888,7 @@ def api_support():
     _support_last[uid] = now
     uname = user.get("username")
     name = user.get("first_name") or (f"@{uname}" if uname else "клиент")
-    who = _contact_link(uname, uid, name)   # кликабельно: открыть чат с клиентом
+    who = tgsend.contact_link(uname, uid, name)   # кликабельно: открыть чат с клиентом
 
     # Необязательная привязка к заказу: проверяем, что заказ принадлежит клиенту.
     order_tag = ""
@@ -1182,11 +902,11 @@ def api_support():
 
     msg = (f"💬 Вопрос от {who} (id <code>{uid}</code>){order_tag}:\n"
            f"{html.escape(text)}\n\n"
-           f"Открыть чат: {_contact_link(uname, uid, 'написать клиенту')}  ·  или /reply {uid} ваш текст")
+           f"Открыть чат: {tgsend.contact_link(uname, uid, 'написать клиенту')}  ·  или /reply {uid} ваш текст")
     delivered = 0
     for sid in SUPPORT_IDS:
         try:
-            tg.send_message(sid, msg, parse_mode="HTML")
+            tgsend.tg.send_message(sid, msg, parse_mode="HTML")
             delivered += 1
         except Exception as e:
             print(f"Не смог доставить вопрос в поддержку {sid}: {e}")
@@ -1204,7 +924,7 @@ def api_admin_message():
         target = int(data.get("user_id"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    text = _text(data.get("text"), 2000)
+    text = inputs._text(data.get("text"), 2000)
     if not text:
         return jsonify({"ok": False, "error": "empty"}), 400
     # Продавец пишет по своим заказам, а не всей базе покупателей: иначе с одной
@@ -1213,11 +933,11 @@ def api_admin_message():
     if scope and not any(o["city"] == scope for o in db.get_orders_by_user(target, 50)):
         return jsonify({"ok": False, "error": "other_city",
                         "message": "Этот покупатель не заказывал на вашей точке."}), 403
-    contact = _contact_link(admin.get("username"), int(admin["id"]), "написать менеджеру")
+    contact = tgsend.contact_link(admin.get("username"), int(admin["id"]), "написать менеджеру")
     msg = (f"💬 Сообщение от магазина:\n{html.escape(text)}\n\n"
            f"По любым вопросам: {contact}")
     try:
-        tg.send_message(target, msg, parse_mode="HTML")
+        tgsend.tg.send_message(target, msg, parse_mode="HTML")
         return jsonify({"ok": True, "sent": True})
     except Exception as e:
         print(f"Не смог отправить сообщение клиенту {target}: {e}")
@@ -1232,92 +952,38 @@ def api_admin_message():
 # Сами заказы уехали в server_orders.py, а эти двое остались здесь: ими
 # пользуется и поддержка, и разбор запросов продавцов, не только заказы.
 
-def _contact_link(username, uid, label=None):
-    """HTML-ссылка «открыть чат в ТГ» по @username (t.me) или по id (tg://user).
-    label — текст ссылки (по умолчанию @username или имя/id)."""
-    username = (username or "").lstrip("@").strip()
-    if username:
-        url = f"https://t.me/{username}"
-        text = label or f"@{username}"
-    else:
-        url = f"tg://user?id={uid}"
-        text = label or str(uid)
-    return f'<a href="{url}">{html.escape(text)}</a>'
-
-
-def _notify_client(user_id, text):
-    """Сообщение клиенту о смене статуса заказа (не роняем запрос, если заблокировал бота)."""
-    if not text:
-        return
-    try:
-        tg.send_message(int(user_id), text)
-    except Exception as e:
-        print(f"Не смог уведомить клиента {user_id}: {e}")
-
-
 # ------------------- Админы и продавцы (только супер-админ) -------------------
 
-def _super(data):
-    """Проверка «это супер-админ» — общая для всех операций с правами."""
-    user = auth.get_user(data.get("initData", ""))
-    if not user or not user.get("id") or not is_super_admin(int(user["id"])):
-        return None
-    return user
 
 
-def _notify_new_admin(uid, city):
-    """Сообщаем человеку, что доступ выдан: иначе он не узнает, что теперь админ."""
-    where = f" по точке «{city}»" if city else ""
-    try:
-        tg.send_message(uid, f"🛠 Вам выдали доступ продавца{where}.\n"
-                             f"Откройте приложение — появится раздел «Управление».")
-    except Exception as e:
-        print(f"Не смог уведомить нового админа {uid}: {e}")
+# ============================================================
+#  СБОРКА ПРИЛОЖЕНИЯ
+# ============================================================
+# Раньше здесь стояли импорты «ради регистрации маршрутов»: модули лезли в
+# server.app, а server внизу импортировал их обратно. Четырнадцать кругов,
+# работавших только потому, что импорты стояли в самом низу файла.
+#
+# Теперь каждый модуль объявляет свои маршруты на Blueprint и про сервер не
+# знает ничего. Стрелка одна: server подключает их, они его — нет. Забыть
+# модуль в этом списке нельзя незаметно — сторожит tests/test_server_split.
+import server_admin        # noqa: E402
+import server_catalog      # noqa: E402
+import server_customers    # noqa: E402
+import server_games        # noqa: E402
+import server_orders       # noqa: E402
+import server_promos       # noqa: E402
+import server_shop         # noqa: E402
+import server_stock        # noqa: E402
+
+for _модуль in (server_admin, server_catalog, server_customers, server_games,
+                server_orders, server_promos, server_shop, server_stock):
+    app.register_blueprint(_модуль.bp)
 
 
 if __name__ == "__main__":
-    # «python server.py» делает из ЭТОГО файла модуль __main__. Вынесенные ниже
-    # модули импортируют server — и Python заводит его ВТОРОЙ раз, отдельным
-    # модулем со своим Flask-приложением. Маршруты регистрируются на нём, а
-    # порт слушало бы это, первое: половина ручек молча отвечала бы 404.
-    # Наступали ровно на это, поэтому порт отдаём настоящему модулю.
+    # «python server.py» делает из ЭТОГО файла модуль __main__, и вынесенные
+    # модули, импортируй они server, завели бы его вторым экземпляром. Круга
+    # больше нет, но привычку оставляем: порт отдаём настоящему модулю.
     import server as настоящий
     port = int(os.environ.get("PORT", 5000))
     настоящий.app.run(host="0.0.0.0", port=port)
-
-
-# --- Развлечения ---
-# Колесо, слот и розыгрыши — в server_games.py. Маршруты регистрируются на этом
-# же приложении, права проверяет тот же общий страж. Импорт внизу намеренно:
-# модуль обращается к помощникам через server, и к этому моменту они готовы.
-import server_games        # noqa: E402,F401  (импорт ради регистрации маршрутов)
-
-# --- Ассортимент ---
-# Товары, модели, бренды, категории и фото — в server_catalog.py.
-import server_catalog      # noqa: E402,F401
-
-# --- Устройство магазина ---
-# Точки, способы получения и продавцы — в server_shop.py.
-import server_shop         # noqa: E402,F401
-
-# --- Покупатели ---
-# Монеты, рефералы, карточка покупателя — в server_customers.py.
-import server_customers   # noqa: E402,F401
-
-# --- Заказы ---
-# Оформление, чек, отмена, история и управление заказом продавцом —
-# в server_orders.py. Обе половины пути заказа лежат там вместе намеренно:
-# это один денежный узел.
-import server_orders       # noqa: E402,F401
-
-# --- Промокоды ---
-# Ручки админки к db_promos.py — в server_promos.py.
-import server_promos       # noqa: E402,F401
-
-# --- Движение склада ---
-# Приход, списание и журнал движений — в server_stock.py.
-import server_stock        # noqa: E402,F401
-
-# --- Экран владельца ---
-# Настройки магазина, статистика и журнал действий — в server_admin.py.
-import server_admin        # noqa: E402,F401

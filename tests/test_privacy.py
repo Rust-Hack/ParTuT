@@ -11,7 +11,9 @@
 """
 import io
 
-from _common import db, client, server, Checker, as_user, as_admin, real_auth, deny_admin
+from _common import db, client, Checker, as_user, as_admin, real_auth, deny_admin
+
+import photos
 
 import auth
 
@@ -66,14 +68,14 @@ def run():
 
     # --- Пропуск к чеку ---
     c3 = Checker("Пропуск к чеку")
-    good = server.photo_token("fid_alice")
-    c3("с верным пропуском чек открывается", server._may_see_photo("fid_alice", good) is True)
-    c3("без пропуска — нет", server._may_see_photo("fid_alice", "") is False)
-    c3("с подделанным — нет", server._may_see_photo("fid_alice", "12345.deadbeef") is False)
+    good = photos.photo_token("fid_alice")
+    c3("с верным пропуском чек открывается", photos._may_see_photo("fid_alice", good) is True)
+    c3("без пропуска — нет", photos._may_see_photo("fid_alice", "") is False)
+    c3("с подделанным — нет", photos._may_see_photo("fid_alice", "12345.deadbeef") is False)
     c3("пропуск от другого файла не подходит",
-       server._may_see_photo("fid_alice", server.photo_token("fid_other")) is False)
-    c3("просроченный не подходит", server._token_ok("fid_alice", "1000000000.abc") is False)
-    c3("картинки товаров открыты всем", server._may_see_photo("не_чек", "") is True)
+       photos._may_see_photo("fid_alice", photos.photo_token("fid_other")) is False)
+    c3("просроченный не подходит", photos._token_ok("fid_alice", "1000000000.abc") is False)
+    c3("картинки товаров открыты всем", photos._may_see_photo("не_чек", "") is True)
     c3("чек без пропуска не отдаётся по ссылке",
        client.get("/api/photo?file_id=fid_alice").status_code == 404)
 

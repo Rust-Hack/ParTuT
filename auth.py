@@ -23,10 +23,14 @@ import json
 import time
 from urllib.parse import parse_qsl
 
+import telebot
 from flask import g, jsonify, request
 
 import db
-from config import (BOT_TOKEN, DEV_MODE, DEV_USER_ID, admin_city, admin_role, is_admin)
+import notifications
+import tgsend
+from config import (BOT_TOKEN, DEV_MODE, DEV_USER_ID, SUPER_ADMIN_IDS, admin_city,
+                    admin_role, is_admin, is_super_admin)
 
 
 INIT_DATA_MAX_AGE = 24 * 3600      # сутки: дольше одной сессии приложения не живут
@@ -181,3 +185,40 @@ def deny_product(admin, pid):
         return None                      # полный доступ — читать товар незачем
     p = db.get_product(pid)
     return None if (p and may_city(admin, p["city"])) else _foreign()
+
+
+# --- Заявки на подтверждение ---
+# Продавец не может раздавать монеты сам, но и запрещать ему всё — значит
+# оставить покупателя без компенсации до вечера. Поэтому щель: он оформляет
+# заявку, владелец подтверждает одним нажатием.
+
+def _notify_supers_request(rid, admin, summary):
+    """Шлёт супер-админам запрос на подтверждение с кнопками Разрешить/Отклонить."""
+    text = (f"🔐 Запрос #{rid} на подтверждение\n"
+            f"От админа: {_admin_display(admin)} (id {admin['id']})\n\n{summary}")
+    kb = telebot.types.InlineKeyboardMarkup()
+    kb.add(telebot.types.InlineKeyboardButton("✅ Разрешить", callback_data=f"areq:ok:{rid}"),
+           telebot.types.InlineKeyboardButton("✖️ Отклонить", callback_data=f"areq:no:{rid}"))
+    for sid in SUPER_ADMIN_IDS:
+        try:
+            tgsend.tg.send_message(sid, text, reply_markup=kb)
+        except Exception as e:
+            print(f"Не смог уведомить супер-админа {sid}: {e}")
+
+
+def _gate(admin, action, payload, summary):
+    """Супер-админ — выполняет сразу; обычный админ — создаёт заявку на подтверждение."""
+    if is_super_admin(int(admin["id"])):
+        return jsonify({"ok": True, "pending": False,
+                        "result": notifications.run_admin_request(tgsend.tg, action, payload)})
+    rid = db.create_admin_request(int(admin["id"]), _admin_display(admin), action, payload, summary)
+    _notify_supers_request(rid, admin, summary)
+    return jsonify({"ok": True, "pending": True, "request_id": rid})
+
+
+def _super(data):
+    """Проверка «это супер-админ» — общая для всех операций с правами."""
+    user = get_user(data.get("initData", ""))
+    if not user or not user.get("id") or not is_super_admin(int(user["id"])):
+        return None
+    return user

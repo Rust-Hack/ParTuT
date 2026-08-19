@@ -6,6 +6,10 @@ import io
 
 from _common import db, client, server, Checker, as_admin
 
+import photos
+
+import tgsend
+
 import cache
 
 
@@ -25,10 +29,10 @@ def run():
     downloads = []          # сюда заглушка пишет каждое обращение к Telegram
     picture = b"\xff\xd8\xff" + b"vape" * 100
 
-    real_get, real_get_file, real_bg = server.requests.get, server.tg.get_file, server._bg
+    real_get, real_get_file, real_bg = server.requests.get, tgsend.tg.get_file, tgsend.bg
     server.requests.get = lambda url, **kw: (downloads.append(url), _FakeResp(picture))[1]
-    server.tg.get_file = lambda fid: type("F", (), {"file_path": f"photos/{fid}.jpg"})()
-    server._bg = lambda fn, *a, **k: fn(*a, **k)   # запись в базу — сразу, без потока
+    tgsend.tg.get_file = lambda fid: type("F", (), {"file_path": f"photos/{fid}.jpg"})()
+    tgsend.bg = lambda fn, *a, **k: fn(*a, **k)   # запись в базу — сразу, без потока
 
     try:
         conn = db.connect(); conn.cursor().execute("DELETE FROM photo_blobs"); conn.commit(); conn.close()
@@ -72,19 +76,19 @@ def run():
         c("в память сверх лимита не положили", "photo1" not in server._photo_cache)
         server._photo_cache_bytes = 0
     finally:
-        server.requests.get, server.tg.get_file, server._bg = real_get, real_get_file, real_bg
+        server.requests.get, tgsend.tg.get_file, tgsend.bg = real_get, real_get_file, real_bg
 
     # --- Два размера ---
     c2 = Checker("Фото: для сетки берём копию поменьше")
     sizes = [type("P", (), {"file_id": "s90", "width": 90})(),
              type("P", (), {"file_id": "s800", "width": 800})(),
              type("P", (), {"file_id": "s1280", "width": 1280})()]
-    full, grid = server._pick_photo_sizes(sizes)
+    full, grid = photos._pick_photo_sizes(sizes)
     c2("полная = самая большая", full == "s1280")
     c2("для сетки = не самая большая", grid == "s800")
-    c2("пустой список не падает", server._pick_photo_sizes([]) == (None, None))
+    c2("пустой список не падает", photos._pick_photo_sizes([]) == (None, None))
     only = [type("P", (), {"file_id": "one", "width": 90})()]
-    c2("если крупных нет — берём что есть", server._pick_photo_sizes(only) == ("one", "one"))
+    c2("если крупных нет — берём что есть", photos._pick_photo_sizes(only) == ("one", "one"))
 
     # Загрузка фото товара через админку сохраняет ОБА file_id.
     pid = db.add_product("minsk", "pods", "PhotoPod", 10, 1)

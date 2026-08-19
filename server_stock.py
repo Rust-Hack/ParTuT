@@ -11,12 +11,17 @@ server_stock.py — движение склада: приход, списани�
 Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), auth.deny_city()).
 """
 
-from flask import jsonify, request
+from flask import Blueprint, jsonify, request
 
 import auth
 import db
-import server
-@server.app.route("/api/admin/stock/move", methods=["POST"])
+import inputs
+
+# Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
+# НЕ импортирует server, и граф зависимостей остаётся деревом.
+# Подключает его фабрика в server.py.
+bp = Blueprint("stock", __name__)
+@bp.route("/api/admin/stock/move", methods=["POST"])
 def api_admin_stock_move():
     """Приход или списание с причиной. Остаток меняется только так — тогда на
     любой вопрос «куда делось» есть ответ с именем и датой."""
@@ -47,13 +52,13 @@ def api_admin_stock_move():
         cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
     except (TypeError, ValueError):
         cost = 0.0
-    flavor = server._text(data.get("flavor")) or None
+    flavor = inputs._text(data.get("flavor")) or None
     stock = db.move_stock(pid, delta, reason, flavor=flavor, cost=cost,
                           note=data.get("note"), admin_id=int(admin["id"]))
     return jsonify({"ok": True, "stock": stock})
 
 
-@server.app.route("/api/admin/stock/moves", methods=["POST"])
+@bp.route("/api/admin/stock/moves", methods=["POST"])
 def api_admin_stock_moves():
     data = request.get_json(force=True, silent=True) or {}
     admin = auth.get_admin(data.get("initData", ""))

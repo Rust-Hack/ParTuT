@@ -7,7 +7,7 @@ server_games.py — ручки развлечений: колесо, слот, �
 Маршруты регистрируются на том же приложении (server.app), права проверяет тот
 же общий страж — переезд для магазина невидим.
 
-Помощники берутся ЧЕРЕЗ модуль (auth.get_user(), server.db), а не копиями
+Помощники берутся ЧЕРЕЗ модуль (auth.get_user(), db), а не копиями
 имён: копия не заметила бы подмены в тестах. То же правило, что и у модулей
 базы, — см. db_raffles.py.
 """
@@ -15,12 +15,19 @@ server_games.py — ручки развлечений: колесо, слот, �
 import json
 import random
 
-from flask import jsonify, request
+from flask import Blueprint, jsonify, request
 
 import auth
 import db
+import photos
+import tgsend
+import inputs
 import notifications
-import server
+
+# Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
+# НЕ импортирует server, и граф зависимостей остаётся деревом.
+# Подключает его фабрика в server.py.
+bp = Blueprint("games", __name__)
 
 
 # Колесо фортуны: секторы (монеты + вес вероятности). Малые призы — часто, крупные — редко.
@@ -39,7 +46,7 @@ WHEEL_SECTORS = [
 ]
 
 
-@server.app.route("/api/wheel", methods=["POST"])
+@bp.route("/api/wheel", methods=["POST"])
 def api_wheel():
     """Состояние колеса: секторы, доступные прокруты, прогресс."""
     data = request.get_json(force=True, silent=True) or {}
@@ -53,7 +60,7 @@ def api_wheel():
                     "spins": w["spins"], "progress": w["progress"], "step": w["step"]})
 
 
-@server.app.route("/api/wheel/spin", methods=["POST"])
+@bp.route("/api/wheel/spin", methods=["POST"])
 def api_wheel_spin():
     """Прокрут колеса: списываем прокрут, выбираем приз по весам, начисляем монеты."""
     data = request.get_json(force=True, silent=True) or {}
@@ -151,7 +158,7 @@ def _slot_grid(win_emoji, line_idx):
     return grid
 
 
-@server.app.route("/api/slot", methods=["POST"])
+@bp.route("/api/slot", methods=["POST"])
 def api_slot():
     data = request.get_json(force=True, silent=True) or {}
     user = auth.get_user(data.get("initData", ""))
@@ -163,7 +170,7 @@ def api_slot():
                     "lines": [{"name": n, "cells": ln} for n, ln in zip(SLOT_LINE_NAMES, SLOT_LINES)]})
 
 
-@server.app.route("/api/slot/spin", methods=["POST"])
+@bp.route("/api/slot/spin", methods=["POST"])
 def api_slot_spin():
     data = request.get_json(force=True, silent=True) or {}
     user = auth.get_user(data.get("initData", ""))
@@ -204,7 +211,7 @@ def api_slot_spin():
 
 def _draw_raffle(raffle):
     """Итоги розыгрыша. Сама работа — в notifications: её зовёт и бот по ночам."""
-    return notifications.draw_raffle(server.tg, raffle)
+    return notifications.draw_raffle(tgsend.tg, raffle)
 
 
 def _close_expired_raffle():
@@ -215,7 +222,7 @@ def _close_expired_raffle():
     было нельзя в принципе. Теперь розыгрыш идёт только тогда, когда владелец
     его начал.
     """
-    return notifications.close_expired_raffle(server.tg)
+    return notifications.close_expired_raffle(tgsend.tg)
 
 
 def _raffle_results(raffle):
@@ -259,7 +266,7 @@ def _raffle_public_from_state(st):
     }
 
 
-@server.app.route("/api/raffle", methods=["POST"])
+@bp.route("/api/raffle", methods=["POST"])
 def api_raffle():
     data = request.get_json(force=True, silent=True) or {}
     user = auth.get_user(data.get("initData", ""))
@@ -280,7 +287,7 @@ def api_raffle():
     return jsonify({"ok": True, "raffle": _raffle_public_from_state(st)})
 
 
-@server.app.route("/api/raffle/join", methods=["POST"])
+@bp.route("/api/raffle/join", methods=["POST"])
 def api_raffle_join():
     data = request.get_json(force=True, silent=True) or {}
     user = auth.get_user(data.get("initData", ""))
@@ -299,7 +306,7 @@ def api_raffle_join():
     return jsonify({"ok": True, "entered": True})
 
 
-@server.app.route("/api/admin/raffle", methods=["POST"])
+@bp.route("/api/admin/raffle", methods=["POST"])
 def api_admin_raffle():
     """Текущий розыгрыш для настройки."""
     data = request.get_json(force=True, silent=True) or {}
@@ -317,7 +324,7 @@ def api_admin_raffle():
     }})
 
 
-@server.app.route("/api/admin/raffle/update", methods=["POST"])
+@bp.route("/api/admin/raffle/update", methods=["POST"])
 def api_admin_raffle_update():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
@@ -342,7 +349,7 @@ def api_admin_raffle_update():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/raffle/start", methods=["POST"])
+@bp.route("/api/admin/raffle/start", methods=["POST"])
 def api_admin_raffle_start():
     """Начать розыгрыш. Пока владелец его не начал, розыгрыша нет вовсе.
 
@@ -368,14 +375,14 @@ def api_admin_raffle_start():
     except (TypeError, ValueError):
         threshold = 25.0
     rid = db.create_raffle(
-        title=server._text(data.get("title"), 100) or "Розыгрыш месяца",
-        prize1=server._text(data.get("prize1"), 100) or "Одноразка",
-        prize2=server._text(data.get("prize2"), 100) or "Жидкость",
+        title=inputs._text(data.get("title"), 100) or "Розыгрыш месяца",
+        prize1=inputs._text(data.get("prize1"), 100) or "Одноразка",
+        prize2=inputs._text(data.get("prize2"), 100) or "Жидкость",
         prize3_coins=prize3, threshold=threshold, days=days)
     return jsonify({"ok": True, "raffle_id": rid})
 
 
-@server.app.route("/api/admin/raffle/photo", methods=["POST"])
+@bp.route("/api/admin/raffle/photo", methods=["POST"])
 def api_admin_raffle_photo():
     """Фото разыгрываемого товара.
 
@@ -392,9 +399,9 @@ def api_admin_raffle_photo():
     if not file:
         return jsonify({"ok": False, "error": "no_file"}), 400
     try:
-        msg = server.tg.send_photo(int(user["id"]), file.read(),
+        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
                             caption="🖼 Фото приза сохранено", disable_notification=True)
-        file_id, _thumb = server._pick_photo_sizes(msg.photo)
+        file_id, _thumb = photos._pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото приза: {e}")
         return jsonify({"ok": False, "error": "send_failed"}), 500
@@ -402,7 +409,7 @@ def api_admin_raffle_photo():
     return jsonify({"ok": True, "photo": file_id})
 
 
-@server.app.route("/api/admin/raffle/draw", methods=["POST"])
+@bp.route("/api/admin/raffle/draw", methods=["POST"])
 def api_admin_raffle_draw():
     """Подвести итоги сейчас и завершить розыгрыш.
 
@@ -424,7 +431,7 @@ def _mask_id(uid):
     return "•••" + str(uid)[-3:]
 
 
-@server.app.route("/api/admin/wheel/grant", methods=["POST"])
+@bp.route("/api/admin/wheel/grant", methods=["POST"])
 def api_admin_wheel_grant():
     """Тест: начислить админу 3 прокрута колеса."""
     data = request.get_json(force=True, silent=True) or {}
@@ -432,5 +439,5 @@ def api_admin_wheel_grant():
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     uid = int(admin["id"])
-    return server._gate(admin, "wheel_grant_self", {"user_id": uid, "spins": 3},
+    return auth._gate(admin, "wheel_grant_self", {"user_id": uid, "spins": 3},
                         f"+3 прокрута колеса админу id {uid}")

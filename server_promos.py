@@ -8,15 +8,20 @@ server_promos.py — промокоды: ручки админки.
 заказа, потому что код надо не только узнать, но и списать — одной транзакцией
 вместе с самим заказом.
 
-Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), server._text()).
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), inputs._text()).
 """
 
-from flask import jsonify, request
+from flask import Blueprint, jsonify, request
 
 import auth
 import db
-import server
-@server.app.route("/api/admin/promos", methods=["POST"])
+import inputs
+
+# Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
+# НЕ импортирует server, и граф зависимостей остаётся деревом.
+# Подключает его фабрика в server.py.
+bp = Blueprint("promos", __name__)
+@bp.route("/api/admin/promos", methods=["POST"])
 def api_admin_promos():
     """Коды со статистикой: сколько заказов и выручки принёс каждый."""
     data = request.get_json(force=True, silent=True) or {}
@@ -25,12 +30,12 @@ def api_admin_promos():
     return jsonify({"ok": True, "promos": db.list_promos()})
 
 
-@server.app.route("/api/admin/promo", methods=["POST"])
+@bp.route("/api/admin/promo", methods=["POST"])
 def api_admin_promo_add():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    code = server._text(data.get("code")).upper()
+    code = inputs._text(data.get("code")).upper()
     if not code or len(code) > 24 or " " in code:
         return jsonify({"ok": False, "error": "bad_code"}), 400
     kind = "fixed" if data.get("kind") == "fixed" else "percent"
@@ -55,7 +60,7 @@ def api_admin_promo_add():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/promo/toggle", methods=["POST"])
+@bp.route("/api/admin/promo/toggle", methods=["POST"])
 def api_admin_promo_toggle():
     """Выключить код, не удаляя: статистика по нему должна остаться."""
     data = request.get_json(force=True, silent=True) or {}
@@ -65,7 +70,7 @@ def api_admin_promo_toggle():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/promo/delete", methods=["POST"])
+@bp.route("/api/admin/promo/delete", methods=["POST"])
 def api_admin_promo_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):

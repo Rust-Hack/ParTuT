@@ -7,7 +7,9 @@
 Второе правило: пока отзыв не опубликован, он не влияет ни на среднюю оценку,
 ни на витрину. Модерация без этого была бы декорацией.
 """
-from _common import db, client, server, Checker, as_user, as_admin, deny_admin, SENT, reset_sent
+from _common import db, client, Checker, as_user, as_admin, deny_admin, SENT, reset_sent
+
+import tgsend
 
 import cache
 
@@ -65,12 +67,12 @@ def run():
     c("некупленный товар не предложен", all(p["id"] != other for p in can["can"]))
 
     reset_sent()
-    real_bg = server._bg
-    server._bg = lambda fn, *a, **k: fn(*a, **k)   # уведомление — сразу, без потока
+    real_bg = tgsend.bg
+    tgsend.bg = lambda fn, *a, **k: fn(*a, **k)   # уведомление — сразу, без потока
     try:
         r = client.post("/api/review", json={"initData": "x", "product_id": pid, "rating": 5, "text": "Держит долго, пар густой"})
     finally:
-        server._bg = real_bg
+        tgsend.bg = real_bg
     c("отзыв принят", (r.get_json() or {}).get("ok"))
     c("админу пришло уведомление", any("отзыв" in (t or "").lower() for _, t, _ in SENT))
 

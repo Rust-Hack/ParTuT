@@ -4,7 +4,9 @@
 На Neon каждое подключение — это поездка по сети, и раньше их было ~20 → кнопка «Оформить» висла.
 """
 import time
-from _common import db, client, server, Checker, as_user
+from _common import db, client, Checker, as_user
+
+import tgsend
 
 CLIENT = 6161
 COINS_CLIENT = 6162
@@ -35,8 +37,8 @@ def run():
     mid = db.get_delivery_methods("ordercity")[0]["id"]
 
     # делаем отправку в Telegram МЕДЛЕННОЙ: если бы она шла в ответе — запрос завис бы на 0.5с.
-    orig = server.tg.send_message
-    server.tg.send_message = lambda *a, **k: time.sleep(0.5)
+    orig = tgsend.tg.send_message
+    tgsend.tg.send_message = lambda *a, **k: time.sleep(0.5)
 
     t0 = time.time()
     r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
@@ -55,7 +57,7 @@ def run():
     c(f"ответ быстрый ({elapsed*1000:.0f}мс), уведомления в фоне", elapsed < 0.4)
 
     time.sleep(0.6)                     # даём медленному фоновому потоку завершиться
-    server.tg.send_message = orig
+    tgsend.tg.send_message = orig
 
     # --- Батчинг: сколько раз ходим в базу за один заказ ---
     # Считаем ТОЛЬКО путь запроса. Уведомления продавцу и клиенту уходят фоновым
@@ -63,13 +65,13 @@ def run():
     # ждал чека и никого не оповещал), и счёт случайно совпадал. Теперь заказ
     # картой уведомляет продавца сразу, поэтому фон нужно отключить явно —
     # иначе тест меряет не скорость оформления, а гонку с чужим потоком.
-    orig_bg = server._bg
-    server._bg = lambda fn, *a, **k: None
+    orig_bg = tgsend.bg
+    tgsend.bg = lambda fn, *a, **k: None
     calls, restore = _count_connects()
     r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
                                         "payment_method": "card", "items": [{"id": pid, "qty": 1}]})
     restore()
-    server._bg = orig_bg
+    tgsend.bg = orig_bg
     n = len(calls)
     d = r.get_json() or {}
     c(f"заказ укладывается в ≤3 подключения к базе (сейчас {n})", d.get("ok") and n <= 3)

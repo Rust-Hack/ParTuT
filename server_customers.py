@@ -12,17 +12,24 @@ server_customers.py — покупатель глазами магазина: м
 потолком из настроек и только по своему городу. Проверяет это общий страж по
 списку путей в server.py, а не эти ручки.
 
-Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), server._text()), а Flask и
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), inputs._text()), а Flask и
 база импортируются напрямую.
 """
 
-from flask import jsonify, request
+from flask import Blueprint, jsonify, request
 
 import auth
 import db
-import server
+import shopinfo
+import tgsend
+import inputs
 from config import is_super_admin
-@server.app.route("/api/bonus", methods=["POST"])
+
+# Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
+# НЕ импортирует server, и граф зависимостей остаётся деревом.
+# Подключает его фабрика в server.py.
+bp = Blueprint("customers", __name__)
+@bp.route("/api/bonus", methods=["POST"])
 def api_bonus():
     """Бонусы клиента: баланс vapecoins, число приглашённых, реферальная ссылка."""
     data = request.get_json(force=True, silent=True) or {}
@@ -30,7 +37,7 @@ def api_bonus():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
-    link = f"https://t.me/{server.BOT_USERNAME}?start=ref{uid}" if server.BOT_USERNAME else ""
+    link = f"https://t.me/{tgsend.BOT_USERNAME}?start=ref{uid}" if tgsend.BOT_USERNAME else ""
 
     st = db.get_bonus_stats(uid)              # всё за одно подключение
     active = st["active"]
@@ -52,10 +59,10 @@ def api_bonus():
                     "referrals_list": st["referrals_list"],
                     "ref_link": link,
                     "referral_bonus": db.referral_bonus(),
-                    "coin_value": server.COIN_VALUE})
+                    "coin_value": shopinfo.COIN_VALUE})
 
 
-@server.app.route("/api/admin/grant", methods=["POST"])
+@bp.route("/api/admin/grant", methods=["POST"])
 def api_admin_grant():
     """Начислить пользователю монеты и/или прокруты колеса (по id). Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
@@ -81,10 +88,10 @@ def api_admin_grant():
     if spins:
         parts.append(f"{'убрать' if spins < 0 else 'начислить'} {abs(spins)} прокрутов")
     summary = f"Пользователю id {target}: " + (", ".join(parts) if parts else "—")
-    return server._gate(admin, "grant", {"user_id": target, "coins": coins, "spins": spins}, summary)
+    return auth._gate(admin, "grant", {"user_id": target, "coins": coins, "spins": spins}, summary)
 
 
-@server.app.route("/api/admin/order/compensate", methods=["POST"])
+@bp.route("/api/admin/order/compensate", methods=["POST"])
 def api_admin_order_compensate():
     """Компенсация покупателю монетами по конкретному заказу.
 
@@ -112,16 +119,16 @@ def api_admin_order_compensate():
     if coins < 1 or coins > cap:
         return jsonify({"ok": False, "error": "bad_amount",
                         "message": f"Компенсация — от 1 до {cap} 🪙 за раз."}), 400
-    reason = server._text(data.get("reason"), 200)
+    reason = inputs._text(data.get("reason"), 200)
     target = int(order["user_id"])
     summary = (f"Компенсация {coins} 🪙 покупателю id {target} по заказу #{oid}"
                + (f"\nПричина: {reason}" if reason else ""))
-    return server._gate(admin, "compensate",
+    return auth._gate(admin, "compensate",
                  {"user_id": target, "coins": coins, "order_id": oid, "reason": reason},
                  summary)
 
 
-@server.app.route("/api/admin/referrals", methods=["POST"])
+@bp.route("/api/admin/referrals", methods=["POST"])
 def api_admin_referrals():
     """Список рефералов текущего админа (для управления/отвязки)."""
     data = request.get_json(force=True, silent=True) or {}
@@ -132,7 +139,7 @@ def api_admin_referrals():
     return jsonify({"ok": True, "referrals": [{"id": r["user_id"], "active": bool(r["ref_activated"])} for r in rows]})
 
 
-@server.app.route("/api/admin/coins/adjust", methods=["POST"])
+@bp.route("/api/admin/coins/adjust", methods=["POST"])
 def api_admin_coins_adjust():
     """Изменить баланс монет пользователя на delta (±). Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
@@ -147,10 +154,10 @@ def api_admin_coins_adjust():
     if is_super_admin(target) and not is_super_admin(int(admin["id"])):
         return jsonify({"ok": False, "error": "protected"}), 403     # монеты супер-админа не трогаем
     summary = (f"Убрать {abs(delta)} 🪙 у id {target}" if delta < 0 else f"Начислить {delta} 🪙 id {target}")
-    return server._gate(admin, "coins_adjust", {"user_id": target, "delta": delta}, summary)
+    return auth._gate(admin, "coins_adjust", {"user_id": target, "delta": delta}, summary)
 
 
-@server.app.route("/api/admin/users", methods=["POST"])
+@bp.route("/api/admin/users", methods=["POST"])
 def api_admin_users():
     """Список всех пользователей (поиск по id) — для админа (просмотр)."""
     data = request.get_json(force=True, silent=True) or {}
@@ -162,7 +169,7 @@ def api_admin_users():
     return jsonify({"ok": True, "users": users, "total": total, "shown": len(users)})
 
 
-@server.app.route("/api/admin/customer", methods=["POST"])
+@bp.route("/api/admin/customer", methods=["POST"])
 def api_admin_customer():
     """Карточка покупателя: история заказов, суммы, любимые товары."""
     data = request.get_json(force=True, silent=True) or {}
@@ -179,7 +186,7 @@ def api_admin_customer():
     return jsonify({"ok": True, "card": card})
 
 
-@server.app.route("/api/admin/referral/unlink", methods=["POST"])
+@bp.route("/api/admin/referral/unlink", methods=["POST"])
 def api_admin_referral_unlink():
     """Отвязать конкретного реферала по его id. Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
@@ -192,10 +199,10 @@ def api_admin_referral_unlink():
         return jsonify({"ok": False, "error": "bad_id"}), 400
     if is_super_admin(target):
         return jsonify({"ok": False, "error": "protected"}), 403     # супер-админа не трогаем
-    return server._gate(admin, "referral_unlink", {"user_id": target}, f"Отвязать реферала id {target}")
+    return auth._gate(admin, "referral_unlink", {"user_id": target}, f"Отвязать реферала id {target}")
 
 
-@server.app.route("/api/admin/referral/clear", methods=["POST"])
+@bp.route("/api/admin/referral/clear", methods=["POST"])
 def api_admin_referral_clear():
     """Отвязать ВСЕХ рефералов текущего админа. Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
@@ -203,10 +210,10 @@ def api_admin_referral_clear():
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     uid = int(admin["id"])
-    return server._gate(admin, "referral_clear", {"requester_id": uid}, f"Отвязать ВСЕХ рефералов админа id {uid}")
+    return auth._gate(admin, "referral_clear", {"requester_id": uid}, f"Отвязать ВСЕХ рефералов админа id {uid}")
 
 
-@server.app.route("/api/admin/user/delete", methods=["POST"])
+@bp.route("/api/admin/user/delete", methods=["POST"])
 def api_admin_user_delete():
     """Полностью удалить пользователя по id. Обычный админ — через подтверждение."""
     data = request.get_json(force=True, silent=True) or {}
@@ -221,4 +228,4 @@ def api_admin_user_delete():
         return jsonify({"ok": False, "error": "self"}), 400     # себя не удаляем
     if is_super_admin(target):
         return jsonify({"ok": False, "error": "protected"}), 403     # супер-админа удалить нельзя
-    return server._gate(admin, "user_delete", {"user_id": target}, f"Удалить пользователя id {target}")
+    return auth._gate(admin, "user_delete", {"user_id": target}, f"Удалить пользователя id {target}")

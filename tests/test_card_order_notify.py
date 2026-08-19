@@ -12,7 +12,9 @@
 """
 import importlib
 
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import tgsend
 
 import cache
 import config
@@ -40,8 +42,8 @@ def run():
     sent_orders, sent_receipts = [], []
     notifications.notify_sellers = lambda bot, oid: sent_orders.append(oid)
     notifications.notify_receipt = lambda bot, oid: sent_receipts.append(oid)
-    orig_bg = server._bg
-    server._bg = lambda fn, *a, **k: fn(*a, **k)     # фон выполняем сразу
+    orig_bg = tgsend.bg
+    tgsend.bg = lambda fn, *a, **k: fn(*a, **k)     # фон выполняем сразу
 
     try:
         db.add_delivery_method("Минск", "Самовывоз", False, "", "ул. Тест", 0, True, 0)
@@ -108,7 +110,7 @@ def run():
         config.refresh_staff()
     finally:
         notifications.notify_sellers = stub      # дальше по стенду снова тихо
-        server._bg = orig_bg
+        tgsend.bg = orig_bg
         as_admin()
         _clean()
 

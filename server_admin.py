@@ -10,19 +10,25 @@ server_admin.py — экран владельца: настройки магаз
 сотрёт реквизиты по-настоящему. На этом уже спотыкались, поэтому умолчания
 живут прямо здесь, рядом с чтением, а не разбросаны по коду.
 
-Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), server._super()).
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), auth._super()).
 """
 
-from flask import jsonify, request
+from flask import Blueprint, jsonify, request
 
 import cache
 import auth
 import db
-import server
+import shopinfo
+import inputs
 from config import CONFIRM_MINUTES, PAYMENT_INFO, is_super_admin
 
+# Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
+# НЕ импортирует server, и граф зависимостей остаётся деревом.
+# Подключает его фабрика в server.py.
+bp = Blueprint("admin", __name__)
+
 PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "all": None}
-@server.app.route("/api/admin/stats", methods=["POST"])
+@bp.route("/api/admin/stats", methods=["POST"])
 def api_admin_stats():
     """Бизнес-аналитика для админа за период: KPI, графики, товары, юзеры, монеты, склад, игры."""
     data = request.get_json(force=True, silent=True) or {}
@@ -30,7 +36,7 @@ def api_admin_stats():
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
     # Период уходит в ключ кэша: списком или словарём он быть не может.
-    period = server._text(data.get("period")) or "30d"
+    period = inputs._text(data.get("period")) or "30d"
     # Тяжёлый расчёт (~15 запросов) — кэшируем на 60с. Сбрасывается при изменении заказов
     # (через _WRITE_PATHS), так что цифры остаются актуальными после реальных продаж.
     cached = cache.get(f"stats:{period}")
@@ -42,7 +48,7 @@ def api_admin_stats():
 
     products = db.get_all_products()             # склад — не зависит от периода
     stats["low_stock"] = [{"name": p["name"], "city": p["city"], "stock": p["stock"]}
-                          for p in products if 0 < p["stock"] <= server.LOW_STOCK][:12]
+                          for p in products if 0 < p["stock"] <= shopinfo.LOW_STOCK][:12]
     stats["out_stock"] = [{"name": p["name"], "city": p["city"]}
                           for p in products if p["stock"] <= 0][:12]
     stats["out_of_stock"] = sum(1 for p in products if p["stock"] <= 0)
@@ -54,7 +60,7 @@ def api_admin_stats():
         # вернулось скидками. Считаем по летописи движений, а не по балансам —
         # потраченного на балансах уже нет, и раздача выглядела бы меньше.
         stats["coins"] = db.coin_flow(days)
-        stats["coin_value"] = server.COIN_VALUE
+        stats["coin_value"] = shopinfo.COIN_VALUE
     except Exception as e:
         stats["coins"] = {"granted": 0, "spent": 0, "by_reason": []}
         print(f"Не удалось посчитать движение монет: {e}")
@@ -67,7 +73,7 @@ def api_admin_stats():
     return jsonify({"ok": True, "stats": stats})
 
 
-@server.app.route("/api/admin/stats/reset", methods=["POST"])
+@bp.route("/api/admin/stats/reset", methods=["POST"])
 def api_admin_stats_reset():
     """Сброс тестовой статистики (заказы + счётчики игр) — только супер-админ."""
     data = request.get_json(force=True, silent=True) or {}
@@ -78,12 +84,12 @@ def api_admin_stats_reset():
     return jsonify({"ok": True, **res})
 
 
-@server.app.route("/api/admin/log", methods=["POST"])
+@bp.route("/api/admin/log", methods=["POST"])
 def api_admin_log():
     """Кто и что менял. Остаток всегда писался в журнал движений, а цена,
     удаление товара и правка настроек не оставляли следа вовсе."""
     data = request.get_json(force=True, silent=True) or {}
-    if not server._super(data):
+    if not auth._super(data):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     rows = db.list_admin_log(limit=150)
     return jsonify({"ok": True, "log": [{
@@ -95,19 +101,7 @@ def api_admin_log():
     } for r in rows]})
 
 
-def _num(value, default, as_int=False):
-    """Число из настройки. Настройки хранятся строками, и мусор в них не должен
-    ронять целый экран — возвращаем то, что задумано по умолчанию."""
-    if value is None or value == "":
-        return default
-    try:
-        n = float(str(value).replace(",", "."))
-    except (TypeError, ValueError):
-        return default
-    return int(n) if as_int else n
-
-
-@server.app.route("/api/admin/settings", methods=["POST"])
+@bp.route("/api/admin/settings", methods=["POST"])
 def api_admin_settings():
     """Текущие настройки магазина для админ-панели."""
     data = request.get_json(force=True, silent=True) or {}
@@ -130,31 +124,31 @@ def api_admin_settings():
          "compensation_max": db.COMPENSATION_MAX_DEFAULT})
     return jsonify({"ok": True, "settings": {
         "payment_info": opts["payment_info"] or "",
-        "confirm_minutes": _num(opts["confirm_minutes"], CONFIRM_MINUTES, as_int=True),
-        "free_delivery_from": _num(opts["free_delivery_from"], 0),
-        "remind_after_days": _num(opts["remind_after_days"], 21, as_int=True),
-        "remind_daily_cap": _num(opts["remind_daily_cap"], 20, as_int=True),
+        "confirm_minutes": inputs._num(opts["confirm_minutes"], CONFIRM_MINUTES, as_int=True),
+        "free_delivery_from": inputs._num(opts["free_delivery_from"], 0),
+        "remind_after_days": inputs._num(opts["remind_after_days"], 21, as_int=True),
+        "remind_daily_cap": inputs._num(opts["remind_daily_cap"], 20, as_int=True),
         # Щедрость программы лояльности. Раньше эти числа жили в коде, и любая
         # правка требовала выкладки новой версии.
-        "coins_per_byn": _num(opts["coins_per_byn"], 1.0),
-        "wheel_step": _num(opts["wheel_step"], db.WHEEL_STEP_DEFAULT),
-        "referral_bonus": _num(opts["referral_bonus"], db.REFERRAL_BONUS, as_int=True),
+        "coins_per_byn": inputs._num(opts["coins_per_byn"], 1.0),
+        "wheel_step": inputs._num(opts["wheel_step"], db.WHEEL_STEP_DEFAULT),
+        "referral_bonus": inputs._num(opts["referral_bonus"], db.REFERRAL_BONUS, as_int=True),
         # Потолок компенсации: сколько монет продавец может начислить покупателю
         # за раз. Раньше эта строка по ошибке стояла в экране бонусов покупателя,
         # а здесь её не было вовсе — поле в настройках всегда пустовало.
-        "compensation_max": _num(opts["compensation_max"], db.COMPENSATION_MAX_DEFAULT, as_int=True),
-        "coin_value": server.COIN_VALUE,          # только для показа: менять нельзя, см. ниже
+        "compensation_max": inputs._num(opts["compensation_max"], db.COMPENSATION_MAX_DEFAULT, as_int=True),
+        "coin_value": shopinfo.COIN_VALUE,          # только для показа: менять нельзя, см. ниже
     }})
 
 
-@server.app.route("/api/admin/settings/update", methods=["POST"])
+@bp.route("/api/admin/settings/update", methods=["POST"])
 def api_admin_settings_update():
     """Сохранить настройки магазина (реквизиты оплаты, время подтверждения)."""
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     if "payment_info" in data:
-        db.set_setting("payment_info", server._text(data.get("payment_info")))
+        db.set_setting("payment_info", inputs._text(data.get("payment_info")))
     if "confirm_minutes" in data:
         try:
             db.set_setting("confirm_minutes", max(1, int(data.get("confirm_minutes"))))
@@ -179,7 +173,7 @@ def api_admin_settings_update():
             pass
     # --- Щедрость программы лояльности ---
     # Границы стоят не «на всякий случай»: 100 монет = 1 Br, и лишний ноль в
-    # кэшбэке превращает 1% в 10% на каждом заказе. Цену монеты (COIN_VALUE)
+    # кэшбэке превращает 1% в 10% на каждом заказе. Цену монеты (shopinfo.COIN_VALUE)
     # намеренно НЕ отдаём в настройки: она задним числом меняет стоимость всех
     # уже накопленных балансов, а это не настройка, а переоценка обязательств.
     if "coins_per_byn" in data:

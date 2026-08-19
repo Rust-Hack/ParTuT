@@ -3,7 +3,9 @@
 Отдельно проверяем, что сам отчёт безопасен: если Telegram недоступен или
 что-то не так внутри отчёта, вызвавший его код не должен упасть.
 """
-from _common import db, client, server, Checker, as_user
+from _common import db, client, Checker, as_user
+
+import tgsend
 
 import errors
 
@@ -82,7 +84,7 @@ def run():
     # цепочка — Flask действительно зовёт обработчик, а клиент получает 500.
     c2 = Checker("Сбой запроса доходит до владельца")
     errors.reset()
-    real_tg, server.tg = server.tg, _Tg()
+    real_tg, tgsend.tg = tgsend.tg, _Tg()
     real_fn = db.get_orders_by_user
     db.get_orders_by_user = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("база отвалилась"))
     try:
@@ -90,19 +92,19 @@ def run():
         r = client.post("/api/orders", json={"initData": "x"})
         c2("клиент получает честную 500, а не пустоту", r.status_code == 500)
         c2("и понятный ответ", (r.get_json() or {}).get("error") == "server_error")
-        c2("владельцу пришло сообщение", len(server.tg.sent) == 1)
-        c2("в нём есть адрес запроса", "/api/orders" in server.tg.sent[0][1])
-        c2("и причина", "база отвалилась" in server.tg.sent[0][1])
+        c2("владельцу пришло сообщение", len(tgsend.tg.sent) == 1)
+        c2("в нём есть адрес запроса", "/api/orders" in tgsend.tg.sent[0][1])
+        c2("и причина", "база отвалилась" in tgsend.tg.sent[0][1])
     finally:
         db.get_orders_by_user = real_fn
 
     # Штатная 404 — не поломка, беспокоить владельца незачем.
-    server.tg.sent.clear()
+    tgsend.tg.sent.clear()
     r = client.post("/api/такого-маршрута-нет", json={})
     c2("несуществующий адрес — штатный отказ, не сбой", 400 <= r.status_code < 500)
-    c2("и владельцу НЕ шлётся", not server.tg.sent)
+    c2("и владельцу НЕ шлётся", not tgsend.tg.sent)
 
-    server.tg = real_tg
+    tgsend.tg = real_tg
     errors.reset()
     return c.fails + c2.fails
 

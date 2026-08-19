@@ -14,7 +14,9 @@
 """
 import itertools
 
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import shopinfo
 
 import cache
 
@@ -76,7 +78,7 @@ def run():
             if not (round(d["total"], 2) == round(float(o["total"]), 2) == свой):
                 расхождения.append(f"{какой}: назвали {d['total']}, в базе {o['total']}, "
                                    f"пересчёт {свой}")
-            if монеты and d["discount"] != round(d["coins_used"] * server.COIN_VALUE, 2):
+            if монеты and d["discount"] != round(d["coins_used"] * shopinfo.COIN_VALUE, 2):
                 расхождения.append(f"{какой}: скидка монетами не равна списанным монетам")
 
             as_admin()

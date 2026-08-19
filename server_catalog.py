@@ -9,26 +9,126 @@ server_catalog.py — админка ассортимента: товары, м�
 всех точек, им распоряжается владелец; цена и остаток на точке — дело продавца.
 Проверяет это общий страж по списку путей в server.py, а не эти ручки.
 
-Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), server._text()), а Flask и
+Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), inputs._text()), а Flask и
 база импортируются напрямую — это внешние библиотеки, а не состояние сервера.
 """
 
 import json
 
-from flask import jsonify, request
+from flask import Blueprint, jsonify, request
 
 import cache
 import auth
 import db
-import server
+import photos
+import tgsend
+import inputs
+
+# Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
+# НЕ импортирует server, и граф зависимостей остаётся деревом.
+# Подключает его фабрика в server.py.
+bp = Blueprint("catalog", __name__)
 
 
-@server.app.route("/api/admin/category", methods=["POST"])
+def _all_products_payload():
+    """Полный список товаров (все точки). Кэш 30с — витрина открывается без похода в базу.
+    Заказ всё равно проверяет остаток по живой базе, так что кратковременный лаг склада не опасен."""
+    cached = cache.get("products")
+    if cached is not None:
+        return cached
+    variants_by = {}
+    for v in db.get_all_variants():
+        variants_by.setdefault(v["product_id"], []).append({"flavor": v["flavor"], "stock": v["stock"]})
+    try:
+        waiting = db.stock_alert_counts()
+    except Exception as e:
+        waiting = {}                      # счётчик — не повод ронять витрину
+        print(f"Не удалось посчитать ожидающих: {e}")
+    try:
+        ratings = db.product_ratings()
+    except Exception as e:
+        ratings = {}                      # без оценок витрина живёт
+        print(f"Не удалось прочитать оценки товаров: {e}")
+    gallery, model_gallery = {}, {}
+    try:
+        for ph in db.all_product_photos():
+            gallery.setdefault(ph["product_id"], []).append(ph)
+        for ph in db.all_model_photos():
+            model_gallery.setdefault(ph["model_id"], []).append(ph)
+    except Exception as e:
+        print(f"Не удалось прочитать галерею товаров: {e}")   # без галереи витрина живёт
+    out = []
+    for p in db.get_all_products():
+        # Главное фото всегда первое: покупатель видит ту же картинку, что и в каталоге.
+        photos = ([{"id": 0, "url": f"/api/photo?file_id={p['photo']}",
+                    "thumb": f"/api/photo?file_id={p['photo_thumb'] or p['photo']}"}] if p["photo"] else [])
+        mid = p["model_id"] if "model_id" in p.keys() else None
+        # Галерея — свойство модели; у товаров, заведённых до неё, остаётся своя.
+        extra = model_gallery.get(mid) if mid else gallery.get(p["id"], [])
+        for ph in (extra or []):
+            photos.append({"id": ph["id"], "url": f"/api/photo?file_id={ph['file_id']}",
+                           "thumb": f"/api/photo?file_id={ph['thumb_id'] or ph['file_id']}"})
+        out.append({
+            "photos": photos,
+            "rating": ratings.get(p["id"], {"avg": 0, "count": 0}),
+            "id": p["id"], "name": p["name"], "price": p["price"],
+            # Ссылка на модель из «Ассортимента»: у товара, заведённого по ней,
+            # описание правится там, а здесь остаются цена, закупка и остаток.
+            "model_id": p["model_id"] if "model_id" in p.keys() else None,
+            "stock": p["stock"], "is_hit": p["is_hit"],
+            "category": p["category"], "city": p["city"],
+            "description": p["description"] or "",
+            "cost": round(float(p["cost"] or 0), 2),   # видит только админка
+            "brand": p["brand"] or "", "flavor": p["flavor"] or "",
+            "strength": p["strength"] or "", "volume": p["volume"] or "",
+            # Характеристики своей категории: сопротивление у картриджа,
+            # мощность и аккумулятор у пода.
+            "specs": db.product_specs(p),
+            "variants": variants_by.get(p["id"], []),
+            # Снят с витрины: в каталог такой товар не попадает вовсе, но
+            # остаток, история и отзывы при нём остаются.
+            "hidden": bool(p["hidden"]) if "hidden" in p.keys() else False,
+            # Сколько человек ждут поступления — админу видно, что завозить.
+            "waiting": waiting.get(p["id"], 0),
+            "photo_url": (f"/api/photo?file_id={p['photo']}" if p["photo"] else None),
+            # Для сетки каталога — копия поменьше. У старых товаров её нет, тогда
+            # отдаём полноразмерную: витрина в любом случае что-то покажет.
+            "thumb_url": (f"/api/photo?file_id={p['photo_thumb'] or p['photo']}" if p["photo"] else None),
+        })
+    return cache.put("products", out, 30)
+
+
+# --- Витрина покупателя ---
+# Живёт здесь же: и витрина, и админский список собираются из одного
+# _all_products_payload(), и держать их порознь значило бы тянуть его через
+# server и снова замкнуть круг импортов.
+@bp.route("/api/products")
+def api_products():
+    """Витрина покупателя. Снятое с продажи сюда не попадает — не полагаемся на
+    то, что каждый экран приложения не забудет его отфильтровать.
+
+    Закупочная цена вырезается здесь же: она лежала в том же ответе, что и
+    витрина, и любой покупатель мог прочитать, почём мы берём товар."""
+    city = inputs._text(request.args.get("city")) or None
+    out = [_public_product(p) for p in _all_products_payload() if not p["hidden"]]
+    if city:
+        out = [p for p in out if p["city"] == city]
+    return cache.json_etag(out)
+
+
+def _public_product(p):
+    return {k: v for k, v in p.items() if k not in _ADMIN_ONLY_FIELDS}
+
+
+_ADMIN_ONLY_FIELDS = ("cost", "waiting", "hidden")
+
+
+@bp.route("/api/admin/category", methods=["POST"])
 def api_admin_category_add():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    name = server._text(data.get("name"))
+    name = inputs._text(data.get("name"))
     if not name:
         return jsonify({"ok": False, "error": "bad_name"}), 400
     code = db.add_category(name, data.get("emoji") or "")
@@ -37,12 +137,12 @@ def api_admin_category_add():
     return jsonify({"ok": True, "code": code})
 
 
-@server.app.route("/api/admin/category/update", methods=["POST"])
+@bp.route("/api/admin/category/update", methods=["POST"])
 def api_admin_category_update():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    code = server._text(data.get("code"))
+    code = inputs._text(data.get("code"))
     if code not in db.category_codes():
         return jsonify({"ok": False, "error": "not_found"}), 404
     sort = data.get("sort")
@@ -52,13 +152,13 @@ def api_admin_category_update():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/category/spec", methods=["POST"])
+@bp.route("/api/admin/category/spec", methods=["POST"])
 def api_admin_category_spec_add():
     """Добавить характеристику категории («Сопротивление, Ом» у расходников)."""
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    category = server._text(data.get("category"))
+    category = inputs._text(data.get("category"))
     if category not in db.category_codes():
         return jsonify({"ok": False, "error": "not_found"}), 404
     options = data.get("options")
@@ -71,7 +171,7 @@ def api_admin_category_spec_add():
     return jsonify({"ok": True, "id": sid})
 
 
-@server.app.route("/api/admin/category/spec/update", methods=["POST"])
+@bp.route("/api/admin/category/spec/update", methods=["POST"])
 def api_admin_category_spec_update():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
@@ -91,7 +191,7 @@ def api_admin_category_spec_update():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/category/spec/delete", methods=["POST"])
+@bp.route("/api/admin/category/spec/delete", methods=["POST"])
 def api_admin_category_spec_delete():
     """Убрать характеристику из категории. Значения у товаров остаются в базе:
     вернули поле — вернулись и они, а удалять чужие данные молча нельзя."""
@@ -107,14 +207,14 @@ def api_admin_category_spec_delete():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/category/delete", methods=["POST"])
+@bp.route("/api/admin/category/delete", methods=["POST"])
 def api_admin_category_delete():
     """Удалить можно только пустую категорию: иначе товары остались бы в разделе,
     которого нет, и пропали бы из витрины молча."""
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    code = server._text(data.get("code"))
+    code = inputs._text(data.get("code"))
     if code not in db.category_codes():
         return jsonify({"ok": False, "error": "not_found"}), 404
     used = db.count_products_in_category(code) + len(db.list_models(code))
@@ -128,18 +228,18 @@ def api_admin_category_delete():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/products", methods=["POST"])
+@bp.route("/api/admin/products", methods=["POST"])
 def api_admin_products():
     """То же, но целиком — со снятыми с витрины. Только для админов."""
     data = request.get_json(force=True, silent=True) or {}
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    out = [p for p in server._all_products_payload() if auth.may_city(admin, p["city"])]
+    out = [p for p in _all_products_payload() if auth.may_city(admin, p["city"])]
     return jsonify({"ok": True, "products": out})
 
 
-@server.app.route("/api/admin/product/specs", methods=["POST"])
+@bp.route("/api/admin/product/specs", methods=["POST"])
 def api_admin_product_specs():
     """Сохранить характеристики товара (все разом)."""
     data = request.get_json(force=True, silent=True) or {}
@@ -186,7 +286,7 @@ def _закупка(data):
     return цена, None
 
 
-@server.app.route("/api/admin/product", methods=["POST"])
+@bp.route("/api/admin/product", methods=["POST"])
 def api_admin_add():
     """Добавить товар из приложения."""
     data = request.get_json(force=True, silent=True) or {}
@@ -195,7 +295,7 @@ def api_admin_add():
 
     city = data.get("city")
     category = data.get("category")
-    name = server._text(data.get("name"))
+    name = inputs._text(data.get("name"))
     if city not in db.location_names() or category not in db.category_codes() or not name:
         return jsonify({"ok": False, "error": "bad_data"}), 400
     try:
@@ -207,9 +307,9 @@ def api_admin_add():
         return беда
 
     is_hit = 1 if data.get("is_hit") else 0
-    desc = server._text(data.get("description"))
-    brand = server._text(data.get("brand"))
-    strength = server._text(data.get("strength"))
+    desc = inputs._text(data.get("description"))
+    brand = inputs._text(data.get("brand"))
+    strength = inputs._text(data.get("strength"))
 
     # Товар-модель со вкусами (одноразки/жидкости): список variants + свои поля.
     # Объём: у одноразок приходит как puffs (затяжки), у жидкостей как volume (мл).
@@ -235,15 +335,15 @@ def api_admin_add():
         stock = int(data.get("stock"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_number"}), 400
-    flavor = server._text(data.get("flavor"))
-    volume = server._text(data.get("volume"))
+    flavor = inputs._text(data.get("flavor"))
+    volume = inputs._text(data.get("volume"))
     pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc,
                          brand=brand, flavor=flavor, strength=strength, volume=volume, cost=cost)
     _save_specs(pid, category, data.get("specs"))
     return jsonify({"ok": True, "id": pid})
 
 
-@server.app.route("/api/admin/product/update", methods=["POST"])
+@bp.route("/api/admin/product/update", methods=["POST"])
 def api_admin_update():
     """Изменить одно поле товара (price / stock / name / description / is_hit)."""
     data = request.get_json(force=True, silent=True) or {}
@@ -301,7 +401,7 @@ def api_admin_update():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/product/variants", methods=["POST"])
+@bp.route("/api/admin/product/variants", methods=["POST"])
 def api_admin_variants():
     """Заменяет список вкусов товара целиком (добавить/убрать/изменить остаток)."""
     data = request.get_json(force=True, silent=True) or {}
@@ -329,7 +429,7 @@ def api_admin_variants():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/product/delete", methods=["POST"])
+@bp.route("/api/admin/product/delete", methods=["POST"])
 def api_admin_delete():
     """Удалить товар."""
     data = request.get_json(force=True, silent=True) or {}
@@ -348,7 +448,7 @@ def api_admin_delete():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/photo", methods=["POST"])
+@bp.route("/api/admin/photo", methods=["POST"])
 def api_admin_photo():
     """Загрузить фото товара. Отправляем картинку админу (тихо), чтобы получить file_id."""
     init_data = request.form.get("initData", "")
@@ -364,9 +464,9 @@ def api_admin_photo():
         return jsonify({"ok": False, "error": "no_file"}), 400
 
     try:
-        msg = server.tg.send_photo(int(user["id"]), file.read(),
+        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
                             caption="🖼 Фото товара сохранено", disable_notification=True)
-        file_id, thumb_id = server._pick_photo_sizes(msg.photo)
+        file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото товара: {e}")
         return jsonify({"ok": False, "error": "send_failed"}), 500
@@ -376,7 +476,7 @@ def api_admin_photo():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/photo/add", methods=["POST"])
+@bp.route("/api/admin/photo/add", methods=["POST"])
 def api_admin_photo_add():
     """Добавить фото в галерею МОДЕЛИ (главное фото при этом не меняется)."""
     user = auth.get_admin(request.form.get("initData", ""))
@@ -395,9 +495,9 @@ def api_admin_photo_add():
         # Проверяем ДО отправки в Telegram: иначе картинка уедет впустую.
         return jsonify({"ok": False, "error": "too_many", "max": db.MAX_EXTRA_PHOTOS}), 400
     try:
-        msg = server.tg.send_photo(int(user["id"]), file.read(),
+        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
                             caption="🖼 Фото модели сохранено", disable_notification=True)
-        file_id, thumb_id = server._pick_photo_sizes(msg.photo)
+        file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото модели: {e}")
         return jsonify({"ok": False, "error": "send_failed"}), 500
@@ -407,7 +507,7 @@ def api_admin_photo_add():
     return jsonify({"ok": True, "photo_id": photo_id})
 
 
-@server.app.route("/api/admin/photo/delete", methods=["POST"])
+@bp.route("/api/admin/photo/delete", methods=["POST"])
 def api_admin_photo_delete():
     """Убрать фото из галереи. Главное фото (id 0) так не удаляется — его заменяют."""
     data = request.get_json(force=True, silent=True) or {}
@@ -422,7 +522,7 @@ def api_admin_photo_delete():
     return jsonify({"ok": True, "deleted": db.delete_product_photo(photo_id)})
 
 
-@server.app.route("/api/admin/models", methods=["POST"])
+@bp.route("/api/admin/models", methods=["POST"])
 def api_admin_models():
     """Ассортимент: что магазин вообще продаёт (независимо от наличия на точках)."""
     data = request.get_json(force=True, silent=True) or {}
@@ -439,14 +539,14 @@ def api_admin_models():
     return jsonify({"ok": True, "models": models})
 
 
-@server.app.route("/api/admin/model", methods=["POST"])
+@bp.route("/api/admin/model", methods=["POST"])
 def api_admin_model_save():
     """Создать или изменить модель. Правка расходится по всем её товарам."""
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    category = server._text(data.get("category"))
-    name = server._text(data.get("name"))
+    category = inputs._text(data.get("category"))
+    name = inputs._text(data.get("name"))
     if category not in db.category_codes() or not name:
         return jsonify({"ok": False, "error": "bad_data"}), 400
     specs = _clean_specs(category, data.get("specs"))
@@ -461,7 +561,7 @@ def api_admin_model_save():
     # раздвоенная статистика: остатки и продажи разъедутся по двум карточкам.
     twin = next((m for m in db.list_models(category)
                  if m["name"].strip().lower() == name.lower()
-                 and (m["brand"] or "").strip().lower() == server._text(data.get("brand")).lower()
+                 and (m["brand"] or "").strip().lower() == inputs._text(data.get("brand")).lower()
                  and (not mid or int(m["id"]) != int(mid))), None)
     if twin:
         return jsonify({"ok": False, "error": "exists", "name": twin["name"]}), 400
@@ -478,7 +578,7 @@ def api_admin_model_save():
     return jsonify({"ok": True, "id": new_id})
 
 
-@server.app.route("/api/admin/model/hide", methods=["POST"])
+@bp.route("/api/admin/model/hide", methods=["POST"])
 def api_admin_model_hide():
     """Снять модель с витрины на всех точках сразу (или вернуть).
 
@@ -497,7 +597,7 @@ def api_admin_model_hide():
     return jsonify({"ok": True, "hidden": hidden, "count": db.hide_model_products(mid, hidden)})
 
 
-@server.app.route("/api/admin/model/delete", methods=["POST"])
+@bp.route("/api/admin/model/delete", methods=["POST"])
 def api_admin_model_delete():
     """Убрать модель из ассортимента. Товары на точках остаются: их снимают
     с продажи отдельно, иначе одно нажатие обнуляло бы все точки разом."""
@@ -516,7 +616,7 @@ def api_admin_model_delete():
     return jsonify({"ok": True, "count": used})
 
 
-@server.app.route("/api/admin/model/photo", methods=["POST"])
+@bp.route("/api/admin/model/photo", methods=["POST"])
 def api_admin_model_photo():
     """Фото модели — оно же появляется у всех её товаров на точках."""
     user = auth.get_admin(request.form.get("initData", ""))
@@ -534,9 +634,9 @@ def api_admin_model_photo():
     if not file:
         return jsonify({"ok": False, "error": "no_file"}), 400
     try:
-        msg = server.tg.send_photo(int(user["id"]), file.read(),
+        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
                             caption="🖼 Фото модели сохранено", disable_notification=True)
-        file_id, thumb_id = server._pick_photo_sizes(msg.photo)
+        file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото модели: {e}")
         return jsonify({"ok": False, "error": "send_failed"}), 500
@@ -544,7 +644,7 @@ def api_admin_model_photo():
     return jsonify({"ok": True})
 
 
-@server.app.route("/api/admin/product/from-model", methods=["POST"])
+@bp.route("/api/admin/product/from-model", methods=["POST"])
 def api_admin_product_from_model():
     """Завоз: модель появляется на точке с ценой и остатком."""
     data = request.get_json(force=True, silent=True) or {}
@@ -557,7 +657,7 @@ def api_admin_product_from_model():
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_data"}), 400
     m = db.get_model(mid)
-    city = server._text(data.get("city"))
+    city = inputs._text(data.get("city"))
     if not m or city not in db.location_names():
         return jsonify({"ok": False, "error": "bad_data"}), 400
     # Завозить на свою точку продавец вправе — это его работа. На чужую нет.
@@ -594,16 +694,16 @@ def api_admin_product_from_model():
     return jsonify({"ok": True, "id": pid})
 
 
-@server.app.route("/api/admin/brand", methods=["POST"])
+@bp.route("/api/admin/brand", methods=["POST"])
 def api_admin_brand():
     """Создать или обновить бренд (если пришёл id — обновляем)."""
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    name = server._text(data.get("name"))
+    name = inputs._text(data.get("name"))
     # Пустая категория — бренд общий: Vaporesso делает и поды, и картриджи,
     # и заводить его в каждой категории заново незачем.
-    category = server._text(data.get("category"))
+    category = inputs._text(data.get("category"))
     if not name or (category and category not in db.category_codes()):
         return jsonify({"ok": False, "error": "bad_data"}), 400
     # Вкусы храним без повторов и лишних пробелов: «Мята» и «мята » в фильтре
@@ -632,7 +732,7 @@ def api_admin_brand():
     return jsonify({"ok": True, "id": new_id})
 
 
-@server.app.route("/api/admin/brand/delete", methods=["POST"])
+@bp.route("/api/admin/brand/delete", methods=["POST"])
 def api_admin_brand_delete():
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
@@ -671,9 +771,9 @@ def _save_specs(product_id, category, values):
         db.set_product_specs(product_id, clean)
 
 
-@server.app.route("/api/brands")
+@bp.route("/api/brands")
 def api_brands():
-    category = server._text(request.args.get("category")) or None
+    category = inputs._text(request.args.get("category")) or None
     key = f"brands:{category or 'all'}"
     cached = cache.get(key)
     if cached is not None:
@@ -688,7 +788,7 @@ def api_brands():
     return cache.json_etag(cache.put(key, out, 300))
 
 
-@server.app.route("/api/flavors")
+@bp.route("/api/flavors")
 def api_flavors():
     """Все вкусы, которые уже встречались — для подсказок при вводе.
     Без них одна и та же «Мята» набирается по-разному и дробит фильтр."""

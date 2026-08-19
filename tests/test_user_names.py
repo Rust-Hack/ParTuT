@@ -7,7 +7,9 @@
 
 Telegram присылает имя при каждом открытии приложения. Осталось его запомнить.
 """
-from _common import db, client, server, Checker, as_user, as_admin
+from _common import db, client, Checker, as_user, as_admin
+
+import tgsend
 
 import cache
 
@@ -28,8 +30,8 @@ def run():
     c = Checker("Имя покупателя")
     _clean()
     # Фоновые задачи в тесте выполняем сразу: иначе проверка гонится с потоком.
-    orig_bg = server._bg
-    server._bg = lambda fn, *a, **k: fn(*a, **k)
+    orig_bg = tgsend.bg
+    tgsend.bg = lambda fn, *a, **k: fn(*a, **k)
     try:
         # --- Человек просто открыл приложение, ничего не купив ---
         as_user(9701, username="vasya", first_name="Вася")
@@ -82,7 +84,7 @@ def run():
         card = client.post("/api/admin/customer", json={"initData": "x", "user_id": 9701}).get_json()["card"]
         c3("в карточке покупателя тоже имя", card["username"] == "vasya_new")
     finally:
-        server._bg = orig_bg
+        tgsend.bg = orig_bg
         as_admin()
         _clean()
     return c.fails + c2.fails + c3.fails

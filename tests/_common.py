@@ -34,6 +34,7 @@ db.init_db()
 
 import auth                          # noqa: E402
 import server                        # noqa: E402
+import tgsend                        # noqa: E402
 import notifications                 # noqa: E402
 
 # Заглушки Telegram: копим отправленное, ничего не шлём наружу.
@@ -55,15 +56,15 @@ def _send_photo(cid, *a, **kw):
     return type("M", (), {"photo": sizes})()
 
 
-server.tg.send_message = _send_message
-server.tg.send_photo = _send_photo
+tgsend.tg.send_message = _send_message
+tgsend.tg.send_photo = _send_photo
 
 
 def _send_document(cid, *a, **kw):
     SENT.append((cid, kw.get("caption", ""), kw.get("parse_mode")))
 
 
-# У бота СВОЙ экземпляр telebot, и заглушки server.tg его не покрывают: без
+# У бота СВОЙ экземпляр telebot, и заглушки tgsend.tg его не покрывают: без
 # этого тест, дёрнувший функцию бота, уходит в настоящий Telegram с боевым
 # токеном. Глушим здесь, чтобы об этом нельзя было забыть в отдельном модуле.
 os.environ["WEBAPP_URL"] = ""          # иначе bot при импорте лезет в сеть за меню

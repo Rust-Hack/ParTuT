@@ -3,7 +3,9 @@
 Раньше покупатель, попавший на закончившийся товар, просто уходил. Теперь он
 оставляет заявку, а продавец видит, сколько человек ждут — что и завозить.
 """
-from _common import db, client, server, Checker, as_user, as_admin, SENT, reset_sent
+from _common import db, client, Checker, as_user, as_admin, SENT, reset_sent
+
+import tgsend
 
 import cache
 
@@ -19,8 +21,8 @@ def run():
     cache.bust()
     # Рассылка уходит в фоновом потоке — в тесте выполняем сразу, иначе проверка
     # обгонит поток и результат будет случайным.
-    real_bg = server._bg
-    server._bg = lambda fn, *a, **k: fn(*a, **k)
+    real_bg = tgsend.bg
+    tgsend.bg = lambda fn, *a, **k: fn(*a, **k)
 
     pid = db.add_product("Минск", "pods", "ЖдуновТовар", 20, 0)     # закончился
     have = db.add_product("Минск", "pods", "ЕстьТовар", 20, 5)      # в наличии
@@ -86,7 +88,7 @@ def run():
     client.post("/api/admin/product/update", json={"initData": "x", "id": pid, "field": "stock", "value": 9})
     c("второй раз молчим", not SENT)
 
-    server._bg = real_bg
+    tgsend.bg = real_bg
     conn = db.connect(); conn.cursor().execute("DELETE FROM stock_alerts"); conn.commit(); conn.close()
     return c.fails
 

@@ -15,6 +15,8 @@
 
 from _common import db, client, server, Checker, as_admin, as_user
 
+import inputs
+
 # Значения нарочно не тех типов, каких ждёт обработчик.
 JUNK = [
     {},
@@ -88,7 +90,7 @@ def run():
 
     # --- Сам помощник, ради которого всё затевалось ---
     c2 = Checker("Приведение к строке")
-    t = server._text
+    t = inputs._text
     c2("список — это не текст", t(["а"]) == "")
     c2("словарь — тоже", t({"a": 1}) == "")
     c2("None — пусто", t(None) == "")

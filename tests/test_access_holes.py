@@ -11,6 +11,8 @@ from urllib.parse import urlencode
 
 from _common import db, client, server, Checker, as_admin, REAL_GET_USER, real_auth
 
+import photos
+
 import auth
 
 import cache
@@ -90,23 +92,23 @@ def run():
                           [{"id": pid, "name": "Elf Bar", "price": 10.0, "qty": 1}], 10.0, "")
     db.set_order_receipt(oid, "receipt_file_777")
     c4("хозяин чека определяется", db.receipt_owner("receipt_file_777") == BUYER)
-    c4("посторонний чек не получит", not server._may_see_photo("receipt_file_777"))
+    c4("посторонний чек не получит", not photos._may_see_photo("receipt_file_777"))
     c4("и по прямой ссылке тоже",
       client.get("/api/photo?file_id=receipt_file_777").status_code == 404)
 
     # Пропуск выдаётся вместе с заказом тому, кому заказ и так показывают.
-    token = server.photo_token("receipt_file_777")
-    c4("с пропуском чек открывается", server._may_see_photo("receipt_file_777", token))
+    token = photos.photo_token("receipt_file_777")
+    c4("с пропуском чек открывается", photos._may_see_photo("receipt_file_777", token))
     c4("чужой пропуск не подходит",
-      not server._may_see_photo("receipt_file_777", server.photo_token("другой_файл")))
-    c4("подделанный пропуск не подходит", not server._may_see_photo("receipt_file_777", token[:-3] + "000"))
+      not photos._may_see_photo("receipt_file_777", photos.photo_token("другой_файл")))
+    c4("подделанный пропуск не подходит", not photos._may_see_photo("receipt_file_777", token[:-3] + "000"))
     stale = f"{int(time.time()) - 10}.{'0' * 32}"
-    c4("просроченный пропуск не подходит", not server._may_see_photo("receipt_file_777", stale))
+    c4("просроченный пропуск не подходит", not photos._may_see_photo("receipt_file_777", stale))
     c4("в ссылке на чек нет строки входа",
       "initData" not in (server_orders._order_json(db.get_order(oid), "секрет")["receipt_url"] or ""))
     c4("зато есть пропуск", "&t=" in server_orders._order_json(db.get_order(oid))["receipt_url"])
     c4("картинка товара остаётся открытой всем",
-      server._may_see_photo(db.get_product(pid)["photo"] or "нет-такого") is True
+      photos._may_see_photo(db.get_product(pid)["photo"] or "нет-такого") is True
       or db.get_product(pid)["photo"] is None)
 
     # --- Бот не должен быть обходной дверью ---
