@@ -2,7 +2,7 @@
 server.py — веб-сервер Mini App (вся витрина внутри приложения).
 
 Отдаёт:
-  • страницу-витрину (webapp/index.html)
+  • страницу-витрину (webapp/: index.html + styles.css + app.js, склеиваются на лету)
   • /api/me       — узнать, подтверждён ли 18+ у пользователя
   • /api/age      — подтвердить 18+
   • /api/products — список товаров из базы
@@ -540,8 +540,29 @@ def _compress(resp):
     return resp
 
 
-_INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp", "index.html")
+# Приложение лежит в трёх файлах, а к покупателю уходит одной страницей.
+# Разложено ради чтения: 6600 строк разметки, стилей и кода в одном файле
+# правились вслепую. Склеено ради скорости: Телеграм открывает приложение
+# во встроенном браузере, и каждый лишний запрос — это лишняя задержка на
+# мобильной сети, ещё до того как человек увидит витрину.
+# Сборки при этом нет никакой: подстановка двух кусков в разметку, здесь и
+# сейчас. Правишь файл — обновляешь страницу, как и раньше.
+_WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+_INDEX_PATH = os.path.join(_WEBAPP_DIR, "index.html")
+_STYLES_PATH = os.path.join(_WEBAPP_DIR, "styles.css")
+_APP_DIR = os.path.join(_WEBAPP_DIR, "app")
 
+
+def _app_parts():
+    """Куски приложения по порядку имён: 01-core.js, 02-games.js, …
+
+    Порядок берётся из имени файла, а не из списка в коде: список пришлось бы
+    править при каждом новом куске, а забытая строчка означала бы приложение
+    без части кода — молча. Имена нумерованы, потому что это одна программа,
+    разложенная по файлам, а не независимые модули: порядок склейки важен.
+    """
+    return [os.path.join(_APP_DIR, и) for и in sorted(os.listdir(_APP_DIR))
+            if и.endswith(".js")]
 
 _index_cache = {"key": None, "raw": b"", "gz": b"", "etag": ""}
 _index_lock = threading.Lock()
@@ -552,15 +573,30 @@ def _index_payload():
 
     Файл на 430 КБ читался с диска и сжимался заново на КАЖДОЕ открытие
     приложения, хотя меняется он только при деплое. Держим результат в памяти
-    и пересобираем, когда у файла изменилось время правки или размер.
+    и пересобираем, когда у любого из трёх файлов изменилось время правки
+    или размер.
     """
-    st = os.stat(_INDEX_PATH)
-    key = (st.st_mtime_ns, st.st_size)
+    части = [_INDEX_PATH, _STYLES_PATH] + _app_parts()
+    key = tuple((st.st_mtime_ns, st.st_size) for st in (os.stat(п) for п in части))
     with _index_lock:
         if _index_cache["key"] == key:
             return dict(_index_cache)
-    with open(_INDEX_PATH, "rb") as f:
-        raw = f.read()
+
+    def прочитать(путь):
+        with open(путь, encoding="utf-8") as f:
+            return f.read()
+
+    страница = прочитать(_INDEX_PATH)
+    вставки = (("/*{{СТИЛИ}}*/", прочитать(_STYLES_PATH)),
+               ("//{{ПРИЛОЖЕНИЕ}}", "\n".join(прочитать(п) for п in _app_parts())))
+    for метка, текст in вставки:
+        # Молчаливая подстановка опаснее падения: не найдись метка — магазин
+        # открылся бы без стилей или без кода, и понять почему было бы нечем.
+        if метка not in страница:
+            raise RuntimeError(f"в webapp/index.html нет метки {метка}")
+        страница = страница.replace(метка, текст, 1)
+
+    raw = страница.encode("utf-8")
     entry = {"key": key, "raw": raw, "gz": gzip.compress(raw, 6),
              "etag": '"%s"' % hashlib.md5(raw).hexdigest()}
     with _index_lock:
@@ -1453,8 +1489,14 @@ def _notify_new_admin(uid, city):
 
 
 if __name__ == "__main__":
+    # «python server.py» делает из ЭТОГО файла модуль __main__. Вынесенные ниже
+    # модули импортируют server — и Python заводит его ВТОРОЙ раз, отдельным
+    # модулем со своим Flask-приложением. Маршруты регистрируются на нём, а
+    # порт слушало бы это, первое: половина ручек молча отвечала бы 404.
+    # Наступали ровно на это, поэтому порт отдаём настоящему модулю.
+    import server as настоящий
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    настоящий.app.run(host="0.0.0.0", port=port)
 
 
 # --- Развлечения ---

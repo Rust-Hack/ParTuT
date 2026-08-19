@@ -99,3 +99,66 @@ def run():
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)
+
+
+def run_standalone():
+    """«python server.py» обязан отдавать ВСЕ ручки, а не половину.
+
+    Запуск файла напрямую делает из него модуль __main__, и вынесенные модули
+    импортируют server ВТОРОЙ раз — отдельным модулем со своим Flask-приложением.
+    Маршруты регистрируются на нём, а порт слушает первое: ручки из вынесенных
+    модулей молча отвечают 404.
+
+    Это не выдумка: так и случилось после разрезов, и нашлось только когда
+    приложение открыли в браузере. Ни один разбор текста такого не видит —
+    поэтому здесь настоящий запуск и настоящий запрос.
+    """
+    import socket
+    import subprocess
+    import time
+    import urllib.error
+    import urllib.request
+
+    c = Checker("Сайт, запущенный напрямую (python server.py)")
+
+    с_сокетом = socket.socket()
+    с_сокетом.bind(("127.0.0.1", 0))
+    порт = с_сокетом.getsockname()[1]
+    с_сокетом.close()
+
+    окружение = dict(os.environ)
+    окружение.update({"BOT_TOKEN": "000000:TEST-NO-SEND", "PORT": str(порт),
+                      "DATABASE_URL": "", "KEEP_WARM": "0"})
+    процесс = subprocess.Popen(["python3", os.path.join(КОРЕНЬ, "server.py")],
+                               cwd=КОРЕНЬ, env=окружение,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        адрес = f"http://127.0.0.1:{порт}"
+        поднялся = False
+        for _ in range(60):
+            try:
+                urllib.request.urlopen(адрес + "/health", timeout=1).read()
+                поднялся = True
+                break
+            except Exception:
+                time.sleep(0.5)
+        c("сайт поднялся", поднялся)
+        if not поднялся:
+            return c.fails
+
+        # По одной ручке из каждого вынесенного модуля: они и пропадали.
+        for путь in ("/api/products", "/api/locations", "/api/categories", "/api/brands"):
+            try:
+                код = urllib.request.urlopen(адрес + путь, timeout=5).getcode()
+            except urllib.error.HTTPError as e:
+                код = e.code
+            except Exception as e:
+                код = f"не ответил ({type(e).__name__})"
+            c(f"{путь} отвечает (было 404 после разрезов): {код}", код == 200)
+    finally:
+        процесс.terminate()
+        try:
+            процесс.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            процесс.kill()
+    return c.fails

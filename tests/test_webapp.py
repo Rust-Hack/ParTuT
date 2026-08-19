@@ -12,23 +12,51 @@ catch, и владелец видел «Сеть недоступна», хот�
   • обращение к элементу, которого нет в разметке;
   • запрос на адрес, которого нет в сервере (переименовали ручку — забыли клиент);
   • незакрытые фигурные скобки в шаблонных строках приложения.
+
+Разбираем не файл с диска, а страницу, СОБРАННУЮ сервером из разметки, стилей
+и кода. Так проверка смотрит ровно на то, что уходит покупателю: не склеься
+куски — это увидится здесь, а не в чужом телефоне.
 """
 import re
 
 from _common import Checker, server
 
-ФАЙЛ = "webapp/index.html"
-
 
 def _текст():
-    import os
-    корень = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(корень, ФАЙЛ), encoding="utf-8") as f:
-        return f.read()
+    """Страница целиком — как её отдаёт сервер."""
+    return server._index_payload()["raw"].decode("utf-8")
 
 
 def run():
     html = _текст()
+
+    c0 = Checker("Приложение собирается из кусков целиком")
+    c0("метки подстановки не остались в странице",
+       "{{СТИЛИ}}" not in html and "{{ПРИЛОЖЕНИЕ}}" not in html)
+    c0("стили попали в страницу", "--glow-rgb" in html)
+    c0("код попал в страницу", "function start(" in html)
+    c0("разметка на месте", 'id="splash"' in html)
+
+    # Ни один кусок не должен потеряться по дороге. Потеряйся — приложение
+    # откроется без части кода и сломается молча, в чужом телефоне.
+    import os
+    куски = server._app_parts()
+    c0(f"кусков приложения найдено ({len(куски)})", len(куски) >= 2)
+    for путь in куски:
+        with open(путь, encoding="utf-8") as f:
+            тело = [s.rstrip() for s in f.read().splitlines()
+                    if s.strip() and not s.strip().startswith("//")]
+        целиком = all(s in html for s in тело)
+        c0(f"{os.path.basename(путь)} попал в страницу целиком ({len(тело)} строк)", целиком)
+
+    # Порядок склейки берётся из имени, поэтому имя обязано его задавать.
+    # Кусок без номера встал бы в произвольное место — это одна программа,
+    # разложенная по файлам, и порядок в ней значит ровно то же, что и раньше.
+    import re as _re
+    безымянные = [os.path.basename(п) for п in куски
+                  if not _re.match(r"^\d\d-", os.path.basename(п))]
+    c0("у каждого куска номер в имени, он же порядок склейки"
+       + ("" if not безымянные else f": {безымянные}"), not безымянные)
 
     c = Checker("Элементы, к которым обращается приложение")
     обращения = set(re.findall(r'\$\("([A-Za-z0-9_-]+)"\)', html))
@@ -64,7 +92,7 @@ def run():
     if not shutil.which("node"):
         # Молчать нельзя: пропуск не должен выглядеть как успех.
         c3("node не найден — разбор пропущен", True)
-        return c.fails + c2.fails + c3.fails
+        return c0.fails + c.fails + c2.fails + c3.fails
 
     import subprocess, tempfile, os
     путь = tempfile.mktemp(suffix=".js")
@@ -82,7 +110,7 @@ def run():
         except OSError:
             pass
 
-    return c.fails + c2.fails + c3.fails
+    return c0.fails + c.fails + c2.fails + c3.fails
 
 
 if __name__ == "__main__":
