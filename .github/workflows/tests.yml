@@ -77,3 +77,38 @@ jobs:
           TZ: ${{ matrix.tz }}
           TEST_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgresql://partut:partut@127.0.0.1:5432/partut' || '' }}
         run: python tests/run_all.py
+
+  # Деплой — только после зелёных проверок, и только с main.
+  #
+  # Сейчас Render выкатывает магазин по самому пушу: проверки идут уже вслед
+  # уехавшему коду, и красный прогон ничему не мешает. Эта работа переворачивает
+  # порядок — сначала проверки, потом выкатка.
+  #
+  # Чтобы включить, нужны два действия в панели Render (руками, здесь их не
+  # сделать):
+  #   1. Settings → Build & Deploy → Auto-Deploy: Off;
+  #   2. Settings → Deploy Hook: скопировать адрес и положить его в секреты
+  #      GitHub под именем RENDER_DEPLOY_HOOK.
+  # Пока секрета нет, шаг молча пропускается и ничего не меняет.
+  deploy:
+    name: Выкатить на хостинг
+    needs: [lint, checks]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Позвать Render
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK не задан — выкатка пропущена."
+            echo "Это не ошибка: пока хостинг деплоит сам, по пушу."
+            exit 0
+          fi
+          # Имя переменной — латиницей: кириллицу в именах bash не принимает.
+          # Ровно на этом уже спотыкались в идентификаторах работ этого файла.
+          status=$(curl -s -o /dev/null -w "%{http_code}" "$HOOK")
+          echo "Render ответил $status"
+          # Молчаливый отказ хуже падения: не позовись хостинг — мы бы думали,
+          # что выкатили, а в магазине остался старый код.
+          [ "$status" = "200" ] || exit 1
