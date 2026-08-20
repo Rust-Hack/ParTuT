@@ -2,6 +2,7 @@
 from _common import db, client, server, SENT, reset_sent, Checker, as_user, as_admin
 
 from partut import limits
+from partut.integrations import tgsend
 
 CLIENT = 555
 
@@ -87,8 +88,49 @@ def run():
     r, d = support({"text": "   "})
     c7("пустой → 400", r.status_code == 400)
 
+    # H. Несколько менеджеров.
+    #
+    # Ручка ждёт ОДНУ удачную отправку и уходит, дописывая остальным в фоне:
+    # цикл по всем держал поток запроса на каждом по очереди, а их восемь.
+    # Проверяем обе половины обещания — что доходит до всех и что ответ
+    # «доставлено» не выдаётся авансом.
+    c8 = Checker("H. Несколько менеджеров: ждём одного, остальным пишем в фоне")
+    tgsend.дождаться_фона()          # хвосты прошлых проверок — не наши
+    as_user(CLIENT, "vasya")
+    server.SUPPORT_IDS = {999000, 999001, 999002}
+    r, d = support({"text": "вопрос всем"})
+    c8("вопрос дошёл до всех троих", {x[0] for x in SENT} == {999000, 999001, 999002})
+    c8("покупателю сказано «доставлено»", d.get("delivered") == 1)
+
+    настоящая_отправка = tgsend.tg.send_message
+
+    def молчит_первый(cid, text, **kw):
+        if cid == 999000:
+            raise RuntimeError("бот заблокирован")
+        return настоящая_отправка(cid, text, **kw)
+
+    def молчат_все(cid, text, **kw):
+        raise RuntimeError("Telegram недоступен")
+
+    try:
+        # Первый в списке заблокировал бота. Врать покупателю нельзя: ответ
+        # «доставлено» обязан опираться на живую отправку, а не на попытку.
+        tgsend.tg.send_message = молчит_первый
+        r, d = support({"text": "первый недоступен"})
+        c8("вопрос подхватил следующий менеджер", {x[0] for x in SENT} == {999001, 999002})
+        c8("и это по-прежнему «доставлено»", d.get("delivered") == 1)
+
+        tgsend.tg.send_message = молчат_все
+        r, d = support({"text": "никого нет"})
+        c8("никто не принял — доставку не обещаем", d.get("delivered") == 0)
+        c8("и запрос всё равно не падает", r.status_code == 200)
+    finally:
+        tgsend.tg.send_message = настоящая_отправка
+        server.SUPPORT_IDS = {999000}
+
     db.get_order = orig_get_order
-    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails + c7.fails
+    return (c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails
+            + c7.fails + c8.fails)
 
 
 if __name__ == "__main__":

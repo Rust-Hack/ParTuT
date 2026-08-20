@@ -1112,14 +1112,38 @@ def api_support():
     msg = (f"💬 Вопрос от {who} (id <code>{uid}</code>){order_tag}:\n"
            f"{html.escape(text)}\n\n"
            f"Открыть чат: {tgsend.contact_link(uname, uid, 'написать клиенту')}  ·  или /reply {uid} ваш текст")
-    delivered = 0
-    for sid in SUPPORT_IDS:
+    # Ждём ОДНУ удачную отправку, остальным пишем в фоне.
+    #
+    # Ждать всех нельзя: менеджеров может быть несколько, и цикл держал поток
+    # запроса на каждом по очереди — а потоков у waitress восемь. Но и убрать
+    # в фон целиком нельзя: приложение по ответу «доставлено» закрывает окно и
+    # говорит человеку, что его прочитали. Это обещание, и оно должно
+    # опираться хотя бы на одну настоящую отправку, а не на надежду.
+    #
+    # Порядок постоянный (sorted), а не случайный, как у множества: иначе
+    # «кому ушло первым» менялось бы от запуска к запуску, и разбирать жалобу
+    # «вопрос не дошёл» было бы не по чему.
+    получатели = sorted(SUPPORT_IDS)
+    delivered, остальные = 0, []
+    for n, sid in enumerate(получатели):
         try:
             tgsend.tg.send_message(sid, msg, parse_mode="HTML")
-            delivered += 1
+            delivered = 1
+            остальные = получатели[n + 1:]
+            break
         except Exception as e:
             print(f"Не смог доставить вопрос в поддержку {sid}: {e}")
+    for sid in остальные:
+        tgsend.bg(_вопрос_в_поддержку, sid, msg)
     return jsonify({"ok": True, "delivered": delivered})
+
+
+def _вопрос_в_поддержку(sid, msg):
+    """Тот же вопрос — остальным менеджерам, уже не задерживая покупателя."""
+    try:
+        tgsend.tg.send_message(sid, msg, parse_mode="HTML")
+    except Exception as e:
+        print(f"Не смог доставить вопрос в поддержку {sid}: {e}")
 
 
 @app.route("/api/admin/message", methods=["POST"])
