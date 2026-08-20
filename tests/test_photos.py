@@ -74,6 +74,35 @@ def run():
         r4 = client.get("/api/photo?file_id=photo1")
         c("при переполнении кэша картинка всё равно отдаётся", r4.data == picture)
         c("в память сверх лимита не положили", "photo1" not in server._photo_cache)
+
+        # Кэш обязан ОБНОВЛЯТЬСЯ, а не застывать. Раньше при переполнении он
+        # просто переставал принимать новое: в памяти навсегда оседали те
+        # картинки, что попали туда первыми, а ходовой товар до конца жизни
+        # процесса читался из базы каждый раз.
+        cL = Checker("Кэш картинок вытесняет давние")
+        server._photo_cache.clear()
+        server._photo_cache_bytes = 0
+        старый_предел = server.PHOTO_CACHE_MAX_BYTES
+        server.PHOTO_CACHE_MAX_BYTES = 30            # места ровно на три картинки по 10 байт
+        try:
+            for имя in ("a", "b", "c"):
+                server._photo_cache_put(имя, b"0123456789", "image/jpeg")
+            cL("поместились все три", list(server._photo_cache) == ["a", "b", "c"])
+
+            server._photo_cache_get("a")             # «a» снова в ходу
+            server._photo_cache_put("d", b"0123456789", "image/jpeg")
+            cL("новая картинка принята", "d" in server._photo_cache)
+            cL("вытеснена самая давняя", "b" not in server._photo_cache)
+            cL("недавно спрошенная осталась", "a" in server._photo_cache)
+            cL("вес сошёлся с содержимым",
+               server._photo_cache_bytes == 10 * len(server._photo_cache))
+            cL("предел не превышен",
+               server._photo_cache_bytes <= server.PHOTO_CACHE_MAX_BYTES)
+        finally:
+            server.PHOTO_CACHE_MAX_BYTES = старый_предел
+            server._photo_cache.clear()
+            server._photo_cache_bytes = 0
+        лишние = cL.fails
         server._photo_cache_bytes = 0
     finally:
         server.requests.get, tgsend.tg.get_file, tgsend.bg = real_get, real_get_file, real_bg
@@ -105,7 +134,7 @@ def run():
     c2("в каталог уходит thumb_url", p["thumb_url"] == "/api/photo?file_id=fid_m")
     c2("карточка товара получает полную", p["photo_url"] == "/api/photo?file_id=fid")
 
-    return c.fails + c2.fails
+    return c.fails + c2.fails + лишние
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ server.py — веб-сервер Mini App (вся витрина внутри �
 
 import os
 import gzip
+from collections import OrderedDict
 import hashlib
 import html
 import json
@@ -99,8 +100,9 @@ def _вернуть_соединения(_беда=None):
 # один раз скопировать переменные с локальной машины на сервер. Поэтому боевая
 # база (DATABASE_URL) выключает DEV_MODE намертво, что бы ни стояло в env.
 
-_file_path_cache = {}      # кэш путей к файлам Telegram (чтобы не звать get_file каждый раз)
-_photo_cache = {}          # кэш самих картинок в памяти: file_id -> (bytes, content_type)
+_file_path_cache = OrderedDict()   # file_id -> путь у Telegram (чтобы не звать get_file каждый раз)
+FILE_PATH_CACHE_MAX = 2000         # потолок: ключи приходят снаружи, расти без края нельзя
+_photo_cache = OrderedDict()       # сами картинки: file_id -> (bytes, content_type)
 _photo_cache_lock = threading.Lock()
 _photo_cache_bytes = 0     # сколько памяти занято картинками
 PHOTO_CACHE_MAX_BYTES = int(os.environ.get("PHOTO_CACHE_MB", "48")) * 1024 * 1024
@@ -870,7 +872,7 @@ def api_photo():
         return _photo_not_modified(file_id)
 
     # 1. Уже в памяти этого процесса — отдаём мгновенно.
-    cached = _photo_cache.get(file_id)
+    cached = _photo_cache_get(file_id)
     if cached:
         return _photo_response(cached[0], cached[1], file_id)
 
@@ -890,7 +892,12 @@ def api_photo():
         path = _file_path_cache.get(file_id)
         if not path:
             path = tgsend.tg.get_file(file_id).file_path
+            # Ключи здесь приходят из адреса запроса, то есть снаружи. Словарь
+            # без потолка на таких ключах — это утечка памяти с чужой рукой на
+            # кране, пусть и медленная.
             _file_path_cache[file_id] = path
+            while len(_file_path_cache) > FILE_PATH_CACHE_MAX:
+                _file_path_cache.popitem(last=False)
         url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}"
         r = requests.get(url, timeout=15)
         r.raise_for_status()
@@ -915,17 +922,42 @@ def _store_photo_blob(file_id, ctype, content):
         print(f"Не удалось сохранить фото {file_id} в базу: {e}")
 
 
+def _photo_cache_get(file_id):
+    """Достаёт картинку и отмечает её как свежеиспользованную.
+
+    Отметка — половина дела: без неё вытеснять было бы нечем, кроме порядка
+    попадания, а он к спросу отношения не имеет."""
+    with _photo_cache_lock:
+        cached = _photo_cache.get(file_id)
+        if cached is not None:
+            _photo_cache.move_to_end(file_id)
+        return cached
+
+
 def _photo_cache_put(file_id, content, ctype):
-    """Кладёт картинку в память под общий лимит по весу.
+    """Кладёт картинку в память под общий лимит по весу, вытесняя самую давнюю.
 
     Считаем именно байты, а не штуки: раньше лимит был «200 картинок», и при
-    полноразмерных фото это могло съесть сотни мегабайт — на Render их нет."""
+    полноразмерных фото это могло съесть сотни мегабайт — на Render их нет.
+
+    А вот при переполнении кэш РАНЬШЕ просто отказывался принимать новое — и
+    навсегда застывал на тех картинках, что попали в него первыми. То есть
+    после деплоя в памяти оседали случайные сорок восемь мегабайт, а весь
+    свежий и ходовой товар до конца жизни процесса ходил в базу каждый раз.
+    Кэш, который нельзя обновить, — это не кэш, а балласт.
+    """
+    global _photo_cache_bytes
+    if len(content) > PHOTO_CACHE_MAX_BYTES:
+        return                       # одна картинка больше всего кэша — не наш случай
     with _photo_cache_lock:
         if file_id in _photo_cache:
+            _photo_cache.move_to_end(file_id)
             return
-        global _photo_cache_bytes
+        while _photo_cache and _photo_cache_bytes + len(content) > PHOTO_CACHE_MAX_BYTES:
+            _, (старое, _) = _photo_cache.popitem(last=False)    # самая давняя
+            _photo_cache_bytes -= len(старое)
         if _photo_cache_bytes + len(content) > PHOTO_CACHE_MAX_BYTES:
-            return
+            return               # вытеснять больше нечего, а место так и не нашлось
         _photo_cache[file_id] = (content, ctype)
         _photo_cache_bytes += len(content)
 
