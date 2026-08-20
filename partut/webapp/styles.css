@@ -832,3 +832,28 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 .checkbox img { max-width: 100%; max-height: 72vh; object-fit: contain;
                 border-radius: 14px; background: var(--surface); }
 .checkbox .closebtn { width: 100%; }
+
+/* Документы магазина: оферта и политика обработки данных.
+   Класс .doctab, а не .tab: .tab в проекте уже занят экранами-вкладками и
+   скрыт по умолчанию (display:none) — кнопки переключения были бы невидимы. */
+/* stretch и flex внутри кнопки — чтобы вкладки были одной высоты: надпись
+   «Обработка данных» переносится на две строки, и без этого правая кнопка
+   оказывалась выше левой. */
+.doctabs { display: flex; gap: 8px; margin: 0 0 12px; align-items: stretch }
+.doctab {
+  flex: 1; padding: 10px 12px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--line); background: transparent; color: var(--hint);
+  font-size: 14px; font-weight: 600; line-height: 1.3;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+}
+.doctab.on { background: var(--surface-2); color: var(--text); border-color: transparent }
+/* Документ читают с телефона и целиком: узкая колонка и воздух между абзацами
+   важнее плотности — иначе до нужного пункта не доскроллить. */
+.doctext {
+  font-size: 14px; line-height: 1.65; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+}
+.doctext b { display: inline-block; margin: 14px 0 2px; font-size: 15px }
+/* Строка согласия при оформлении: заметная, но не спорящая с кнопкой заказа. */
+.termsnote { font-size: 12px; line-height: 1.5; color: var(--hint); margin: 10px 0 0; text-align: center }
+.termsnote a { color: var(--text); text-decoration: underline; cursor: pointer }

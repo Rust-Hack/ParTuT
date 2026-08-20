@@ -767,10 +767,16 @@ function renderCart() {
       : `<div class="freehint">До бесплатной доставки — ещё ${(freeFrom - total).toFixed(2)} ${CUR}</div>`;
   $("tab-cart").innerHTML = `<div class="clist">${rows}</div>${freeHtml}${upsHtml}
     <div class="checkoutbar">${coinsHtml}${totalLine}
-      <button class="bigbtn" id="checkout">Оформить · ${payable.toFixed(2)} ${CUR}</button></div>`;
+      <button class="bigbtn" id="checkout">Оформить · ${payable.toFixed(2)} ${CUR}</button>
+      <div class="termsnote">Оформляя заказ, вы соглашаетесь с
+        <a id="termsOffer">офертой</a> и <a id="termsPrivacy">обработкой данных</a>.</div></div>`;
   bindCardButtons($("tab-cart"));
   if ($("useCoinsChk")) $("useCoinsChk").onchange = () => { useCoins = $("useCoinsChk").checked; renderCart(); };
   $("checkout").onclick = openDelivery;
+  // Ссылки рядом с кнопкой, а не в дальнем разделе: согласие, до которого надо
+  // искать дорогу, согласием не является.
+  if ($("termsOffer")) $("termsOffer").onclick = () => openDocs("offer");
+  if ($("termsPrivacy")) $("termsPrivacy").onclick = () => openDocs("privacy");
 }
 // Что покупали вместе — приходит с сервера, считается по выданным заказам.
 let alsoBought = {};
@@ -848,6 +854,44 @@ function renderProfile() {
 // заказ. В самом заказе всё остаётся сменяемым — возвращаться сюда не надо.
 let myPointId = null, myPoints = [];
 $("myClose").onclick = () => $("myView").classList.remove("show");
+
+// ----- Документы магазина -----
+// Оферта и политика обработки данных. Тексты приходят с сервера, а не зашиты
+// в приложение: правит их владелец из админки, и ждать выкатки ради запятой
+// нельзя. Раз загруженные — держим в памяти: документ читают один раз.
+let docsCache = null;
+
+async function openDocs(which) {
+  $("docsView").classList.add("show");
+  showDocTab(which || "offer");
+  if (!docsCache) {
+    $("docsText").textContent = "Загрузка…";
+    try {
+      docsCache = await (await fetch("/api/docs")).json();
+    } catch (e) {
+      $("docsText").textContent = "Не удалось загрузить. Проверьте связь и попробуйте снова.";
+      return;
+    }
+  }
+  showDocTab(which || "offer");
+}
+
+function showDocTab(which) {
+  document.querySelectorAll("#docsTabs .doctab").forEach(b =>
+    b.classList.toggle("on", b.dataset.doc === which));
+  if (!docsCache) return;
+  // Текст приходит с разметкой <b> — вставляем как разметку, но ТОЛЬКО её:
+  // документ пишет владелец, а не покупатель, и всё же лишние теги убираем.
+  const сырое = (which === "privacy" ? docsCache.privacy : docsCache.offer) || "";
+  $("docsText").innerHTML = сырое
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/&lt;b&gt;/g, "<b>").replace(/&lt;\/b&gt;/g, "</b>");
+}
+
+$("docsClose").onclick = () => $("docsView").classList.remove("show");
+document.querySelectorAll("#docsTabs .doctab").forEach(b =>
+  b.onclick = () => showDocTab(b.dataset.doc));
+$("myDocs").onclick = () => openDocs("offer");
 
 async function openMySettings() {
   $("myView").classList.add("show");

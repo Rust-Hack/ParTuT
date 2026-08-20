@@ -500,3 +500,58 @@ def count_products_in_location(name):
     n = cur.fetchone()["c"]
     conn.close()
     return n
+
+
+# --- Оферта и политика обработки данных ---
+# Тексты правит владелец из админки: настоящие документы пишет юрист, и ждать
+# выкатки ради запятой нельзя. Пока владелец их не трогал, отдаём черновик из
+# partut/documents.py — пусто быть не должно, отсутствие документов заметнее
+# любого черновика.
+
+КЛЮЧ_ОФЕРТЫ = "doc_offer"
+КЛЮЧ_ПОЛИТИКИ = "doc_privacy"
+КЛЮЧ_РЕДАКЦИИ = "doc_version"
+
+
+def documents():
+    """Тексты, действующие сейчас, и номер их редакции."""
+    from partut import documents as черновики
+    return {
+        "offer": db.get_setting(КЛЮЧ_ОФЕРТЫ) or черновики.ОФЕРТА,
+        "privacy": db.get_setting(КЛЮЧ_ПОЛИТИКИ) or черновики.ПОЛИТИКА,
+        "version": documents_version(),
+        "своими_словами": bool(db.get_setting(КЛЮЧ_ОФЕРТЫ) or db.get_setting(КЛЮЧ_ПОЛИТИКИ)),
+    }
+
+
+def documents_version():
+    """Номер редакции. Растёт при каждой правке — его и пишем в заказ.
+
+    Согласие без указания, С ЧЕМ согласились, не доказывает ничего: тексты
+    правятся, и через год не восстановить, что человек видел при заказе.
+    """
+    try:
+        return int(db.get_setting(КЛЮЧ_РЕДАКЦИИ) or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def set_documents(offer=None, privacy=None):
+    """Сохраняет тексты и поднимает номер редакции. Возвращает новый номер.
+
+    Редакцию поднимаем, даже если поменяли один документ из двух: заказы
+    ссылаются на пару целиком, и разводить два счётчика значило бы хранить
+    состояние, которое некому проверить.
+    """
+    менялось = False
+    if offer is not None and offer.strip():
+        db.set_setting(КЛЮЧ_ОФЕРТЫ, offer.strip())
+        менялось = True
+    if privacy is not None and privacy.strip():
+        db.set_setting(КЛЮЧ_ПОЛИТИКИ, privacy.strip())
+        менялось = True
+    if not менялось:
+        return documents_version()
+    новая = documents_version() + 1
+    db.set_setting(КЛЮЧ_РЕДАКЦИИ, str(новая))
+    return новая

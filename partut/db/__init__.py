@@ -759,6 +759,10 @@ def _ensure_order_columns():
         cur.execute("ALTER TABLE orders ADD COLUMN coins_used INTEGER DEFAULT 0")
     if "delivery_method" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN delivery_method TEXT")
+    # Какая редакция документов действовала в момент заказа. Согласие без
+    # указания, с ЧЕМ согласились, доказывает ровно ничего: тексты правятся.
+    if "terms_version" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN terms_version INTEGER DEFAULT 0")
     if "delivery_address" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN delivery_address TEXT")
     if "delivery_fee" not in cols:
@@ -2256,6 +2260,7 @@ from partut.db.shop import (                                            # noqa: 
     update_category, count_products_in_category, delete_category,           # noqa: F401
     list_staff, add_staff, remove_staff, staff_ids_by_city,                 # noqa: F401
     log_admin_action, list_admin_log,                                       # noqa: F401
+    documents, documents_version, set_documents,                            # noqa: F401
 )
 
 

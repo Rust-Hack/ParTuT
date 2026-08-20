@@ -184,13 +184,13 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
             """INSERT INTO orders (user_id, username, city, items, total, pickup_time, status,
                                    created_at, coins_used, delivery_method, delivery_address,
                                    delivery_fee, payment_method, comment, phone,
-                                   promo_code, promo_discount, client_token)
-               VALUES (%s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                   promo_code, promo_discount, client_token, terms_version)
+               VALUES (%s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (user_id, username, city, json.dumps(items, ensure_ascii=False), total, status,
              created_at, coins_used, method_name, address, float(fee or 0), payment,
              (comment or "").strip()[:500], (phone or "").strip()[:40],
              (promo_code or "").strip().upper() or None, promo_off,
-             (client_token or "").strip() or None),
+             (client_token or "").strip() or None, db.documents_version()),
         )
 
         # 3. Склад: у товаров со вкусами списываем вариант, у обычных — сам товар.

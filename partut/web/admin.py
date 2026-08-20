@@ -141,6 +141,40 @@ def api_admin_settings():
     }})
 
 
+@bp.route("/api/admin/docs", methods=["POST"])
+def api_admin_docs():
+    """Прочитать или переписать оферту и политику обработки данных.
+
+    Только владелец, не продавец точки: это документы магазина, а не настройка
+    смены. Правка поднимает номер редакции, и он попадает в каждый следующий
+    заказ — иначе через год не восстановить, с чем именно человек соглашался.
+    """
+    # Права проверяет общий страж: путь стоит в _OWNER_ONLY (partut/web/auth.py).
+    # Своя проверка здесь была бы вторым местом, где живёт одно правило, — и
+    # однажды они разошлись бы.
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    if "offer" not in data and "privacy" not in data:
+        return jsonify({"ok": True, "docs": db.documents()})
+
+    # Пустой текст — не «удалить», а промах: очищенное поле оставило бы магазин
+    # без документов молча. Пусто пропускаем, о чём и говорим.
+    оферта = inputs._text(data.get("offer"), 40000) if "offer" in data else None
+    политика = inputs._text(data.get("privacy"), 40000) if "privacy" in data else None
+    if (оферта is not None and not оферта) or (политика is not None and not политика):
+        return jsonify({"ok": False, "error": "empty",
+                        "message": "Пустой документ не сохраняем — текст обязан быть."}), 400
+
+    редакция = db.set_documents(оферта, политика)
+    cache.bust()
+    db.log_admin_action(int(admin["id"]), admin.get("name", ""), "docs/update",
+                        f"редакция {редакция}")
+    return jsonify({"ok": True, "version": редакция, "docs": db.documents()})
+
+
 @bp.route("/api/admin/settings/update", methods=["POST"])
 def api_admin_settings_update():
     """Сохранить настройки магазина (реквизиты оплаты, время подтверждения)."""

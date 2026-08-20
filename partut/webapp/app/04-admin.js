@@ -10,6 +10,8 @@ async function openAdmin() {
   if ($("mRequests")) $("mRequests").style.display = (me && me.is_super) ? "" : "none";
   // Раздавать доступ может только владелец: иначе продавец выпишет права сам себе.
   if ($("mStaff")) $("mStaff").style.display = (me && me.is_super) ? "" : "none";
+  // Документы магазина — только владельцу: это не настройка смены.
+  if ($("mDocs")) $("mDocs").style.display = (me && me.is_super) ? "" : "none";
   if ($("mLog")) $("mLog").style.display = (me && me.is_super) ? "" : "none";
   applyAdminScope();
   if (me && me.is_super) loadReqBadge();
@@ -1203,6 +1205,50 @@ $("clearRefs").onclick = () => {
 };
 
 // ----- Настройки магазина -----
+// ----- Документы магазина (правит владелец) -----
+$("mDocs").onclick = openDocsAdmin;
+$("docsAdminClose").onclick = () => $("docsAdminView").classList.remove("show");
+
+async function postDocs(body) {
+  const r = await fetch("/api/admin/docs", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(Object.assign({ initData }, body)) });
+  return r.json();
+}
+
+async function openDocsAdmin() {
+  $("docsAdminView").classList.add("show");
+  $("docsAdminState").textContent = "Загрузка…";
+  try {
+    const d = await postDocs({});
+    const док = (d && d.docs) || {};
+    $("setOffer").value = док.offer || "";
+    $("setPrivacy").value = док.privacy || "";
+    $("docsAdminState").textContent = док["своими_словами"]
+      ? `Редакция ${док.version}. Тексты ваши.`
+      : `Редакция ${док.version}. Сейчас показывается ЧЕРНОВИК — замените его.`;
+  } catch (e) {
+    $("docsAdminState").textContent = "Не удалось загрузить.";
+  }
+}
+
+$("docsAdminSave").onclick = async () => {
+  const offer = $("setOffer").value.trim(), privacy = $("setPrivacy").value.trim();
+  if (!offer || !privacy) { alertMsg("Оба документа обязаны быть непустыми."); return; }
+  $("docsAdminSave").disabled = true; $("docsAdminSave").textContent = "Сохраняю…";
+  try {
+    const d = await postDocs({ offer, privacy });
+    if (d && d.ok) {
+      docsCache = null;             // покупателю показываем уже новое
+      $("docsAdminState").textContent = `Редакция ${d.version}. Тексты ваши.`;
+      alertMsg("Сохранено ✅");
+    } else {
+      alertMsg((d && d.message) || "Не удалось сохранить.");
+    }
+  } catch (e) { alertMsg("Сеть недоступна."); }
+  finally { $("docsAdminSave").disabled = false; $("docsAdminSave").textContent = "Сохранить"; }
+};
+
 $("mSettings").onclick = openSettings;
 $("settingsClose").onclick = () => $("settingsView").classList.remove("show");
 async function openSettings() {

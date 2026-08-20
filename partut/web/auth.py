@@ -108,6 +108,8 @@ _OWNER_ONLY = (
     "/api/admin/users", "/api/admin/user/delete", "/api/admin/referral",
     "/api/admin/customer",          # история покупок и телефон — по всем точкам
     "/api/admin/staff/", "/api/admin/log",
+    # оферта и политика данных — документы магазина, а не настройка смены
+    "/api/admin/docs",
     # заявки на подтверждение: решает их владелец. Маршруты и сами это проверяют,
     # но пусть правило будет и здесь — в одном месте видно всё, что не продавцу.
     "/api/admin/requests", "/api/admin/request/",

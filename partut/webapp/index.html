@@ -259,6 +259,7 @@
     <div class="mgroup" id="gSetup">Настройка</div>
     <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
+    <div class="prow" id="mDocs" style="display:none"><span>📄 Оферта и обработка данных</span><span>›</span></div>
     <div class="prow" id="mStaff" style="display:none"><span>🔑 Доступ продавцов</span><span>›</span></div>
     <div class="prow" id="mLog" style="display:none"><span>🧾 Журнал действий</span><span>›</span></div>
   </div>
@@ -339,7 +340,24 @@
       <label style="margin-top:22px">Ваш ID</label>
       <button class="creq" id="myIdCopy" style="margin:0"><span class="cl"><b id="myIdVal">—</b></span><span class="ci">⧉</span></button>
       <div class="dnote" style="margin:6px 0 0">Назовите его продавцу, если нужно найти вас или ваш заказ.</div>
+
+      <div style="border-top:1px solid var(--line);margin:24px 0 0"></div>
+      <button class="creq" id="myDocs" style="margin:18px 0 0">
+        <span class="cl">📄 Оферта и обработка данных</span><span class="ci">›</span></button>
     </div>
+  </div>
+
+  <!-- Раздел: документы магазина.
+       Оферта и политика обработки данных открыты всем и без входа: документы,
+       которые видно только вошедшему покупателю, своей задачи не выполняют. -->
+  <div class="view" id="docsView">
+    <div class="viewhead"><h2>📄 Документы</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="docsClose">‹ Назад</button></div>
+    <div class="doctabs" id="docsTabs">
+      <button class="doctab on" data-doc="offer">Оферта</button>
+      <button class="doctab" data-doc="privacy">Обработка данных</button>
+    </div>
+    <div class="card-block"><div class="doctext" id="docsText">Загрузка…</div></div>
   </div>
 
   <!-- Раздел: промокоды -->
@@ -481,6 +499,28 @@
     <div class="viewhead"><h2>📊 Статистика</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="statsClose">‹ Назад</button></div>
     <div id="statsBody"></div>
+  </div>
+
+  <!-- Раздел: документы магазина (правит владелец).
+       Тексты хранятся в базе, а не в коде: настоящие документы пишет юрист, и
+       ждать выкатки ради запятой нельзя. -->
+  <div class="view" id="docsAdminView">
+    <div class="viewhead"><h2>📄 Документы</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="docsAdminClose">‹ Назад</button></div>
+    <div class="card-block form">
+      <p class="dnote" style="margin:0 0 12px">Их видит покупатель при оформлении заказа. Пока вы их не переписали, показывается ЧЕРНОВИК с местами под реквизиты — его нужно заменить своим текстом.</p>
+      <div class="dnote" id="docsAdminState" style="margin:0 0 14px"></div>
+
+      <label>Публичная оферта</label>
+      <textarea id="setOffer" rows="14" placeholder="Текст оферты"></textarea>
+
+      <label style="margin-top:16px">Политика обработки персональных данных</label>
+      <textarea id="setPrivacy" rows="14" placeholder="Текст политики"></textarea>
+
+      <div class="dnote" style="margin:10px 0 0">Разметка простая: <b>&lt;b&gt;заголовок&lt;/b&gt;</b> — жирным, переносы строк сохраняются.</div>
+      <button class="bigbtn" id="docsAdminSave" style="margin-top:16px">Сохранить</button>
+      <div class="dnote" style="margin:8px 0 0">Сохранение поднимает номер редакции. Он записывается в каждый следующий заказ — чтобы потом было видно, с чем именно человек соглашался.</div>
+    </div>
   </div>
 
   <!-- Раздел: Настройки магазина -->
