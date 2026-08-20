@@ -307,6 +307,21 @@ def get_pickup_points(city):
     return rows
 
 
+def all_pickup_points():
+    """Все точки самовывоза всех городов — ОДНИМ запросом.
+
+    Раньше их собирали циклом по городам, по запросу на каждый: три города —
+    четыре похода в базу вместо одного. Локально не видно, а база магазина
+    живёт по сети, и платит за это экран «Способ получения».
+    """
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM pickup_points ORDER BY city, sort, id")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
 def add_pickup_point(city, address, note="", sort=0):
     conn = db.connect()
     cur = conn.cursor()

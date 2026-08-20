@@ -13,6 +13,7 @@ SQL спрятаны в маленькие помощники ниже (_q, ID_C
 import os
 import json
 import datetime
+import threading
 
 from partut import config
 
@@ -61,10 +62,57 @@ def _get_pool():
     return _POOL
 
 
-class _PooledConn:
-    """Обёртка: .close() возвращает соединение в пул, а не закрывает его."""
-    def __init__(self, raw):
-        self._raw = raw
+_выданные = threading.local()
+
+
+def _набор():
+    """Соединения, выданные ЭТОМУ потоку и ещё не закрытые."""
+    s = getattr(_выданные, "s", None)
+    if s is None:
+        s = _выданные.s = set()
+    return s
+
+
+def вернуть_забытые():
+    """Подобрать всё, что осталось открытым к концу единицы работы.
+
+    Двести функций базы написаны как «взял, поработал, закрыл», и close() у них
+    стоит на счастливом пути. Стоит запросу упасть — а Neon рвёт соединения
+    регулярно, — и соединение не вернётся в пул НИКОГДА.
+
+    Двадцать таких падений (столько в пуле), и магазин мёртв: на всё подряд
+    пятисотки, а /health при этом бодро говорит «ok», потому что базы не
+    касается. Значит хостинг даже не перезапустит сервис — лечится только
+    руками, и никто не понимает почему.
+
+    Поэтому здесь сеть под канатоходцем: в конце запроса и в конце фоновой
+    задачи всё забытое возвращается в пул само. Правильное место для close()
+    это не отменяет — но потерять соединение больше нельзя.
+    """
+    забыты = list(_набор())
+    for c in забыты:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        try:
+            c.close()
+        except Exception:
+            pass
+    return len(забыты)
+
+
+class _Conn:
+    """Соединение с учётом: и взятое из пула Postgres, и файловое SQLite.
+
+    Наружу торчат ровно те четыре метода, которыми пользуется код базы
+    (cursor/commit/rollback/close), поэтому обёртка невидима для вызывающих —
+    двести функций не пришлось трогать.
+    """
+
+    def __init__(self, raw, из_пула):
+        self._raw, self._из_пула, self._закрыт = raw, из_пула, False
+        _набор().add(self)
 
     def cursor(self, *a, **k):
         return self._raw.cursor(*a, **k)
@@ -76,6 +124,17 @@ class _PooledConn:
         return self._raw.rollback()
 
     def close(self):
+        """У SQLite — закрыть по-настоящему, у Postgres — вернуть в пул."""
+        if self._закрыт:
+            return                       # повторный close() не должен вредить
+        self._закрыт = True
+        _набор().discard(self)
+        if not self._из_пула:
+            try:
+                self._raw.close()
+            except Exception:
+                pass
+            return
         try:
             self._raw.rollback()          # сброс любой незавершённой транзакции
         except Exception:
@@ -87,6 +146,14 @@ class _PooledConn:
                 self._raw.close()
             except Exception:
                 pass
+
+    # Чтобы новый код можно было писать сразу правильно: with db.connect() as conn.
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_беда):
+        self.close()
+        return False
 
 
 def connect():
@@ -100,10 +167,10 @@ def connect():
             except Exception:
                 pass
             raw = pool.getconn()
-        return _PooledConn(raw)
+        return _Conn(raw, из_пула=True)
     conn = sqlite3.connect(SQLITE_FILE)
     conn.row_factory = sqlite3.Row        # доступ к колонкам по имени: row["name"]
-    return conn
+    return _Conn(conn, из_пула=False)
 
 
 def _q(sql):
@@ -2252,8 +2319,8 @@ from partut.db.shop import (                                            # noqa: 
     set_order_delivery, delivery_prefill,                                   # noqa: F401
     seed_locations, get_locations, location_names, get_location,            # noqa: F401
     add_location, delete_location, count_products_in_location,              # noqa: F401
-    get_pickup_points, add_pickup_point, update_pickup_point,               # noqa: F401
-    delete_pickup_point,                                                    # noqa: F401
+    get_pickup_points, all_pickup_points, add_pickup_point,                 # noqa: F401
+    update_pickup_point, delete_pickup_point,                               # noqa: F401
     _category_code, seed_categories, seed_category_specs,                   # noqa: F401
     list_category_specs, add_category_spec, update_category_spec,           # noqa: F401
     delete_category_spec, list_categories, category_codes, add_category,    # noqa: F401

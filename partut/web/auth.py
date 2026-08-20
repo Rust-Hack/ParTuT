@@ -195,7 +195,15 @@ def deny_product(admin, pid):
 # заявку, владелец подтверждает одним нажатием.
 
 def _notify_supers_request(rid, admin, summary):
-    """Шлёт супер-админам запрос на подтверждение с кнопками Разрешить/Отклонить."""
+    """Шлёт супер-админам запрос на подтверждение с кнопками Разрешить/Отклонить.
+
+    Идёт в фоне (см. _gate): владельцев может быть сколько угодно, и цикл по ним
+    держал бы поток запроса на каждой отправке подряд. Потоков у waitress
+    восемь, а ручек, ведущих сюда, шесть — то есть несколько продавцов,
+    оформивших компенсацию в неудачную минуту, занимали бы половину сервера
+    ожиданием чужой сети. Заявка к этому моменту уже в базе, и продавцу
+    ответили: рассылка — дело, которое может доехать секундой позже.
+    """
     text = (f"🔐 Запрос #{rid} на подтверждение\n"
             f"От админа: {_admin_display(admin)} (id {admin['id']})\n\n{summary}")
     kb = telebot.types.InlineKeyboardMarkup()
@@ -214,7 +222,7 @@ def _gate(admin, action, payload, summary):
         return jsonify({"ok": True, "pending": False,
                         "result": notifications.run_admin_request(tgsend.tg, action, payload)})
     rid = db.create_admin_request(int(admin["id"]), _admin_display(admin), action, payload, summary)
-    _notify_supers_request(rid, admin, summary)
+    tgsend.bg(_notify_supers_request, rid, admin, summary)
     return jsonify({"ok": True, "pending": True, "request_id": rid})
 
 

@@ -19,7 +19,17 @@ import tempfile
 _PG = os.environ.get("TEST_DATABASE_URL", "").strip()
 os.environ["DATABASE_URL"] = _PG     # пусто — локальный SQLite
 os.environ["DEV_MODE"] = "0"
+# Кто в этом прогоне разработчик и владелец. Раньше номер был вшит в config, и
+# тесты молча опирались на него — то есть проверяли не правила доступа, а
+# конкретного человека. Теперь он назван здесь, и видно, что это стенд.
+os.environ["DEV_IDS"] = "716030279"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from partut import limits  # noqa: E402
+# Проверки шлют запросы очередями, живой человек так не умеет. Антиспам этого
+# не различает и справедливо отказывает — а проверяем мы магазин, не терпение.
+# Сами паузы проверяются отдельно, в tests/test_limits.py.
+limits.выключить()
 
 from partut import db  # noqa: E402
 if _PG:
@@ -38,7 +48,46 @@ from partut.integrations import tgsend  # noqa: E402
 from partut import notifications  # noqa: E402
 
 # Заглушки Telegram: копим отправленное, ничего не шлём наружу.
-SENT = []   # список (chat_id, text, parse_mode)
+class _Отправленное(list):
+    """Список отправленного, который ДОЖИДАЕТСЯ фоновых дел при чтении.
+
+    Уведомления магазин шлёт в фоне, и это правильно: ответ покупателю не
+    должен ждать Telegram. Но проверка, читающая этот список сразу после
+    запроса, полагалась бы на то, что фоновый поток успел раньше следующей
+    строчки, — то есть проходила бы или нет в зависимости от загрузки машины.
+    Так и было: тесты держались на расторопности планировщика.
+
+    Ждём именно при ЧТЕНИИ, а не после запроса: иначе сломалась бы проверка,
+    которая как раз и меряет, что ответ приходит быстро, не дожидаясь Telegram.
+
+    Забыть про ожидание нельзя: оно не в тестах, а здесь.
+    """
+
+    def _дождаться(self):
+        tgsend.дождаться_фона()
+
+    def __iter__(self):
+        self._дождаться()
+        return list.__iter__(self)
+
+    def __len__(self):
+        self._дождаться()
+        return list.__len__(self)
+
+    def __getitem__(self, i):
+        self._дождаться()
+        return list.__getitem__(self, i)
+
+    def __contains__(self, x):
+        self._дождаться()
+        return list.__contains__(self, x)
+
+    def __repr__(self):
+        self._дождаться()
+        return list.__repr__(self)
+
+
+SENT = _Отправленное()   # список (chat_id, text, parse_mode)
 
 
 def _send_message(cid, text, **kw):

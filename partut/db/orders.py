@@ -249,11 +249,23 @@ def get_order(order_id):
     return row
 
 
-def get_orders(limit=200):
-    """Все заказы, новые сверху — для админ-панели."""
+def get_orders(limit=200, city=None):
+    """Заказы, новые сверху — для админ-панели. Город — В ЗАПРОСЕ, а не фильтром
+    после.
+
+    Раньше маршрут брал двести последних заказов по ВСЕМУ магазину и только
+    потом отсеивал чужие города. Пока точка одна, разницы нет. Но стоит Минску
+    сделать двести заказов за день, и продавец Турова открывает пустой список
+    — заказы есть, а он их не видит и не обработает. Лимит обязан считаться
+    внутри того города, для которого он и нужен.
+    """
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("SELECT * FROM orders ORDER BY id DESC LIMIT %s"), (limit,))
+    if city:
+        cur.execute(db._q("SELECT * FROM orders WHERE city = %s "
+                          "ORDER BY id DESC LIMIT %s"), (city, limit))
+    else:
+        cur.execute(db._q("SELECT * FROM orders ORDER BY id DESC LIMIT %s"), (limit,))
     rows = cur.fetchall()
     conn.close()
     return rows

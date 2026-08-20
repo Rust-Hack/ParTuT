@@ -18,6 +18,7 @@ server.py — веб-сервер Mini App (вся витрина внутри �
 
 import os
 import gzip
+from collections import OrderedDict
 import hashlib
 import html
 import json
@@ -26,6 +27,7 @@ import time
 
 import requests
 from flask import Flask, g, jsonify, request, Response
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from partut.web import auth
 from partut import cache
@@ -34,6 +36,7 @@ from partut import db
 from partut.web import shopinfo
 from partut.web import photos
 from partut import inputs
+from partut import limits
 from partut.integrations import tgsend
 from partut import errors
 from partut import notifications
@@ -52,6 +55,45 @@ app = Flask(__name__, static_folder=str(paths.WEBAPP), static_url_path="")
 # есть. Так auth не знает про сервер, и граф импортов остаётся деревом.
 app.before_request(auth.guard_owner_only)
 
+# Потолок на размер тела запроса.
+#
+# Проверить права ДО чтения тела нельзя в принципе: initData лежит в самом
+# теле, и общий страж обязан его прочитать. Значит любой желающий, ничего не
+# зная о магазине, шлёт на /api/admin/... шестьдесят мегабайт — сервер
+# прилежно читает их в память и только потом отвечает «403 forbidden».
+# Восемь таких запросов разом (ровно столько потоков у waitress) — и процесс
+# убит нехваткой памяти. Проверено: 60 МБ проходили насквозь.
+#
+# Единственная защита — не дать телу вырасти. 12 МБ с запасом покрывают фото
+# чека: сам Телеграм больше 10 МБ картинкой не примет.
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_BODY_MB", "12")) * 1024 * 1024
+# Отдельно — поля формы. Файл размером в лимит законен (тот же чек), а вот
+# текстовое поле на десять мегабайт законным не бывает никогда.
+app.config["MAX_FORM_MEMORY_SIZE"] = 1024 * 1024
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def _тело_велико(_):
+    """Человеческий отказ вместо страницы Werkzeug: это чаще всего не атака,
+    а покупатель, снявший чек камерой на 108 мегапикселей."""
+    предел = app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)
+    return jsonify({"ok": False, "error": "too_large",
+                    "message": f"Файл слишком большой — до {предел} МБ. "
+                               f"Снимите чек ещё раз или уменьшите качество."}), 413
+
+
+@app.teardown_request
+def _вернуть_соединения(_беда=None):
+    """Сеть под канатоходцем: см. db.вернуть_забытые.
+
+    Стоит здесь, а не в каждом маршруте, по той же причине, что и журнал
+    действий: вписывать вызов в сто ручек значит однажды забыть про новую.
+    """
+    забыто = db.вернуть_забытые()
+    if забыто:
+        print(f"[база] {request.method} {request.path}: "
+              f"подобрано брошенных соединений: {забыто}", flush=True)
+
 # DEV_MODE=1 — разрешить пользоваться из обычного браузера (без Telegram) для локальной проверки.
 #
 # Он подставляет ВЛАДЕЛЬЦА любому, кто открыл страницу без подписи Telegram.
@@ -59,11 +101,30 @@ app.before_request(auth.guard_owner_only)
 # один раз скопировать переменные с локальной машины на сервер. Поэтому боевая
 # база (DATABASE_URL) выключает DEV_MODE намертво, что бы ни стояло в env.
 
-_file_path_cache = {}      # кэш путей к файлам Telegram (чтобы не звать get_file каждый раз)
-_photo_cache = {}          # кэш самих картинок в памяти: file_id -> (bytes, content_type)
+_file_path_cache = OrderedDict()   # file_id -> путь у Telegram (чтобы не звать get_file каждый раз)
+FILE_PATH_CACHE_MAX = 2000         # потолок: ключи приходят снаружи, расти без края нельзя
+_photo_cache = OrderedDict()       # сами картинки: file_id -> (bytes, content_type)
 _photo_cache_lock = threading.Lock()
 _photo_cache_bytes = 0     # сколько памяти занято картинками
 PHOTO_CACHE_MAX_BYTES = int(os.environ.get("PHOTO_CACHE_MB", "48")) * 1024 * 1024
+
+# Сколько раз в минуту всему магазину позволено сходить в Telegram за картинкой.
+#
+# /api/photo — единственная ручка, открытая вообще всем: без initData, без
+# прав, по обычной ссылке. И на каждый промах кэша она делает ДВА обращения к
+# Telegram. Токен у бота один, и через него же уходят заказы продавцу — то
+# есть чужой скрипт, ничего не зная о магазине, останавливает торговлю:
+# витрина работает, база цела, а заказы не доезжают.
+#
+# Настоящая картинка платит за этот бюджет ровно один раз в жизни: дальше она
+# лежит в базе и в памяти. Шестидесяти в минуту хватает на любой завоз, а
+# перебору — нет.
+TELEGRAM_PHOTO_BUDGET = limits.Ведро(int(os.environ.get("PHOTO_FETCH_PER_MIN", "60")), 60)
+
+# Промахи запоминаем отдельно: чужой file_id не станет своим от повторов, а
+# каждая попытка стоит обращения к Telegram. Без этого один и тот же мусор в
+# адресе выжигал бы бюджет бесконечно.
+_photo_misses = limits.Пауза(300, максимум_ключей=2000)
 
 # ============================================================
 #  ПРОВЕРКА ПОДЛИННОСТИ (initData от Telegram)
@@ -240,6 +301,9 @@ def api_notify_me():
     pid = inputs.целое(data.get("product_id"))
     if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
+    рано = перебор(_пауза_подписка, int(user["id"]))
+    if рано:
+        return рано
     p = db.get_product(pid)
     if not p:
         return jsonify({"ok": False, "error": "not_found"}), 404
@@ -271,6 +335,34 @@ def _log_slow(resp):
         if ms >= 700:
             print(f"[медленно] {request.method} {request.path} — {ms} мс")
     return resp
+
+
+@app.after_request
+def _защитные_заголовки(resp):
+    """То, что браузер должен знать про эту страницу.
+
+    Приложение самодостаточно: ни одного внешнего адреса — стили и код
+    вклеены в саму страницу, картинки свои. Поэтому строгий запрет включается
+    без единой правки фронта, и любая попытка подтянуть чужой скрипт (через
+    отзыв, имя товара, что угодно) браузером просто не выполнится.
+    """
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    if (resp.content_type or "").startswith("text/html"):
+        resp.headers.setdefault("Content-Security-Policy", CSP)
+    return resp
+
+
+# Единственный внешний адрес — telegram.org: приложение открывается внутри
+# Телеграма и подключает его собственный скрипт для Mini App.
+CSP = ("default-src 'self'; "
+       "script-src 'self' 'unsafe-inline' https://telegram.org; "
+       "style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data:; "
+       "connect-src 'self'; "
+       "base-uri 'none'; "
+       "form-action 'none'; "
+       "frame-ancestors https://web.telegram.org https://telegram.org")
 
 
 _GZIP_TYPES = ("text/html", "text/css", "application/javascript",
@@ -390,9 +482,39 @@ def index():
     return resp
 
 
+# Сколько раз подряд база должна не ответить, чтобы признать магазин больным.
+#
+# Не с первого раза: у Neon бывают секундные заминки, и перезапуск из-за каждой
+# — это перезапуск на ровном месте. Не «никогда» — потому что именно так мы и
+# жили: /health не касался базы вовсе и бодро отвечал «ok» процессу, у которого
+# кончился пул соединений. Хостинг видел живой сервис, магазин отвечал
+# пятисотками на всё, и поднять его можно было только руками.
+HEALTH_FAILS_TO_SICK = 3
+_health_подряд_упало = 0
+_health_замок = threading.Lock()
+
+
 @app.route("/health")
 def health():
-    """Лёгкий адрес для пинга — держит сервис «разбуженным» (без обращения к базе)."""
+    """Жив ли магазин на самом деле — вместе с базой, без которой он бесполезен."""
+    global _health_подряд_упало
+    try:
+        conn = db.connect()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
+        conn.close()
+    except Exception as e:
+        with _health_замок:
+            _health_подряд_упало += 1
+            подряд = _health_подряд_упало
+        print(f"[health] база не ответила ({подряд}-й раз подряд): {e}", flush=True)
+        if подряд >= HEALTH_FAILS_TO_SICK:
+            # 503 — сигнал хостингу, что сервис пора поднять заново.
+            return Response(f"база недоступна {подряд} раз подряд", status=503)
+        return "ok"                      # заминка, а не поломка
+    with _health_замок:
+        _health_подряд_упало = 0
     return "ok"
 
 
@@ -484,9 +606,7 @@ def api_my_settings():
             if pid is None:
                 return jsonify({"ok": False, "error": "bad_id"}), 400
             # Точка должна существовать: иначе в профиле осядет ссылка в никуда.
-            exists = any(p["id"] == pid for loc in db.get_locations()
-                         for p in db.get_pickup_points(loc["name"]))
-            if not exists:
+            if not any(p["id"] == pid for p in db.all_pickup_points()):
                 return jsonify({"ok": False, "error": "bad_point"}), 400
             db.set_user_point(uid, pid)
 
@@ -509,10 +629,8 @@ def api_my_settings():
 @app.route("/api/my-points")
 def api_my_points():
     """Точки самовывоза всех городов — чтобы покупатель выбрал свою в настройках."""
-    out = []
-    for loc in db.get_locations():
-        for p in db.get_pickup_points(loc["name"]):
-            out.append({"id": p["id"], "city": loc["name"], "address": p["address"], "note": p["note"] or ""})
+    out = [{"id": p["id"], "city": p["city"], "address": p["address"], "note": p["note"] or ""}
+           for p in db.all_pickup_points()]
     return jsonify({"ok": True, "points": out})
 
 
@@ -603,6 +721,9 @@ def api_review():
         return jsonify({"ok": False, "error": "bad_input"}), 400
     if rating < 1 or rating > 5:
         return jsonify({"ok": False, "error": "bad_rating"}), 400
+    рано = перебор(_пауза_отзыв, uid, "Отзывы пишутся не так быстро")
+    if рано:
+        return рано
     if not any(p["id"] == pid for p in db.reviewable_products(uid)):
         # Либо не покупал, либо уже оценивал — из ответа этого не видно специально.
         return jsonify({"ok": False, "error": "not_allowed"}), 403
@@ -640,7 +761,11 @@ def api_admin_reviews():
     status = (data.get("status") or "pending").strip()
     if status not in ("pending", "approved", "hidden", "all"):
         status = "pending"
-    rows = [r for r in db.admin_reviews(status) if _review_in_scope(admin, r)]
+    # Охват считаем ОДИН раз, а не на каждый отзыв: внутри него полный список
+    # товаров магазина, и раньше он читался заново для каждой строки — пятьдесят
+    # отзывов означали пятьдесят полных чтений таблицы за один запрос.
+    охват = _охват_продавца(admin)
+    rows = [r for r in db.admin_reviews(status) if _в_охвате(охват, r)]
     return jsonify({"ok": True, "status": status, "pending": db.count_pending_reviews(), "reviews": [{
         "id": r["id"], "product_id": r["product_id"], "product": r["product_name"] or "товар удалён",
         "rating": r["rating"], "text": r["text"] or "", "who": _review_author(r),
@@ -661,16 +786,31 @@ def _sold_here(city):
     return pids, mids
 
 
-def _review_in_scope(admin, review):
+def _охват_продавца(admin):
+    """Что продавцу вообще положено видеть. None — видит всё (владелец).
+
+    Отдельной функцией, потому что считать это внутри проверки одной строки
+    нельзя: там оно окажется в цикле, а внутри — чтение всех товаров магазина.
+    """
+    scope = (admin or {}).get("city")
+    return _sold_here(scope) if scope else None
+
+
+def _в_охвате(охват, review):
     """Продавец отвечает за то, чем торгует. Отзыв о модели, которой на его
     точке нет, — не его разговор, и в очереди он только мешает."""
-    scope = (admin or {}).get("city")
-    if not scope:
+    if охват is None:
         return True
-    pids, mids = _sold_here(scope)
+    pids, mids = охват
     # Отзыв приходит и строкой из базы, и готовым словарём — .keys() понимают оба.
     mid = review["model_id"] if "model_id" in review.keys() else None
     return review["product_id"] in pids or (mid is not None and mid in mids)
+
+
+def _review_in_scope(admin, review):
+    """Одиночная проверка — для маршрутов, где отзыв ровно один (ответ на него).
+    Списку она не годится: там охват надо считать один раз, см. _охват_продавца."""
+    return _в_охвате(_охват_продавца(admin), review)
 
 
 @app.route("/api/admin/review/delete", methods=["POST"])
@@ -785,7 +925,7 @@ def api_photo():
         return _photo_not_modified(file_id)
 
     # 1. Уже в памяти этого процесса — отдаём мгновенно.
-    cached = _photo_cache.get(file_id)
+    cached = _photo_cache_get(file_id)
     if cached:
         return _photo_response(cached[0], cached[1], file_id)
 
@@ -801,11 +941,27 @@ def api_photo():
 
     # 3. Первый раз: тянем из Telegram (два запроса) и сохраняем, чтобы это был
     #    последний раз — и для этого процесса, и для всех будущих.
+    #
+    # Но сначала — по карману ли. Промахнувшийся недавно file_id не пробуем
+    # вовсе, и общий бюджет магазина на обращения к Telegram тоже конечен:
+    # см. TELEGRAM_PHOTO_BUDGET.
+    if _photo_misses.сколько_ждать(file_id) > 0:
+        return Response("not found", status=404)
+    if not TELEGRAM_PHOTO_BUDGET.взять():
+        print(f"[фото] бюджет обращений к Telegram исчерпан, {file_id} не забрали")
+        # 503, а не 404: картинка, скорее всего, есть — просто не сейчас.
+        # Браузер по 404 запомнил бы «её нет» и перестал спрашивать.
+        return Response("photo busy", status=503)
     try:
         path = _file_path_cache.get(file_id)
         if not path:
             path = tgsend.tg.get_file(file_id).file_path
+            # Ключи здесь приходят из адреса запроса, то есть снаружи. Словарь
+            # без потолка на таких ключах — это утечка памяти с чужой рукой на
+            # кране, пусть и медленная.
             _file_path_cache[file_id] = path
+            while len(_file_path_cache) > FILE_PATH_CACHE_MAX:
+                _file_path_cache.popitem(last=False)
         url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}"
         r = requests.get(url, timeout=15)
         r.raise_for_status()
@@ -830,17 +986,42 @@ def _store_photo_blob(file_id, ctype, content):
         print(f"Не удалось сохранить фото {file_id} в базу: {e}")
 
 
+def _photo_cache_get(file_id):
+    """Достаёт картинку и отмечает её как свежеиспользованную.
+
+    Отметка — половина дела: без неё вытеснять было бы нечем, кроме порядка
+    попадания, а он к спросу отношения не имеет."""
+    with _photo_cache_lock:
+        cached = _photo_cache.get(file_id)
+        if cached is not None:
+            _photo_cache.move_to_end(file_id)
+        return cached
+
+
 def _photo_cache_put(file_id, content, ctype):
-    """Кладёт картинку в память под общий лимит по весу.
+    """Кладёт картинку в память под общий лимит по весу, вытесняя самую давнюю.
 
     Считаем именно байты, а не штуки: раньше лимит был «200 картинок», и при
-    полноразмерных фото это могло съесть сотни мегабайт — на Render их нет."""
+    полноразмерных фото это могло съесть сотни мегабайт — на Render их нет.
+
+    А вот при переполнении кэш РАНЬШЕ просто отказывался принимать новое — и
+    навсегда застывал на тех картинках, что попали в него первыми. То есть
+    после деплоя в памяти оседали случайные сорок восемь мегабайт, а весь
+    свежий и ходовой товар до конца жизни процесса ходил в базу каждый раз.
+    Кэш, который нельзя обновить, — это не кэш, а балласт.
+    """
+    global _photo_cache_bytes
+    if len(content) > PHOTO_CACHE_MAX_BYTES:
+        return                       # одна картинка больше всего кэша — не наш случай
     with _photo_cache_lock:
         if file_id in _photo_cache:
+            _photo_cache.move_to_end(file_id)
             return
-        global _photo_cache_bytes
+        while _photo_cache and _photo_cache_bytes + len(content) > PHOTO_CACHE_MAX_BYTES:
+            _, (старое, _) = _photo_cache.popitem(last=False)    # самая давняя
+            _photo_cache_bytes -= len(старое)
         if _photo_cache_bytes + len(content) > PHOTO_CACHE_MAX_BYTES:
-            return
+            return               # вытеснять больше нечего, а место так и не нашлось
         _photo_cache[file_id] = (content, ctype)
         _photo_cache_bytes += len(content)
 
@@ -866,8 +1047,36 @@ def _photo_not_modified(file_id):
 #  ЗАКАЗ
 # ============================================================
 
+# --- Пауза между действиями покупателя ---
+#
+# До сих пор она стояла только на поддержке. А заваливать можно и остальное:
+# отзыв улетает всем админам в личку, подписка «сообщите о поступлении» пишет
+# в базу, а заказ двигает склад и монеты. Никакого взлома для этого не нужно —
+# достаточно цикла в три строки, и это ровно та поломка, которую никто не
+# заметит, пока владелец не откроет Телеграм с тысячей сообщений.
+#
+# Числа выбраны по человеку, а не по машине: живой покупатель не пишет два
+# отзыва за десять секунд и не оформляет два заказа за три.
+_пауза_отзыв = limits.Пауза(10)
+_пауза_подписка = limits.Пауза(2)
+
+
+def перебор(пауза, ключ, что="Слишком часто"):
+    """Готовый отказ 429, если ещё рано, иначе None — чтобы в маршруте была
+    одна строчка, а не пять одинаковых на каждую ручку."""
+    ждать = пауза.сколько_ждать(ключ)
+    if not ждать:
+        return None
+    сек = int(ждать) + 1
+    return jsonify({"ok": False, "error": "cooldown", "retry_after": сек,
+                    "message": f"{что} — попробуйте через {сек} с."}), 429
+
+
 SUPPORT_COOLDOWN = 20          # антиспам: не чаще 1 сообщения в поддержку за столько секунд
-_support_last = {}             # uid -> время последнего сообщения (в памяти процесса)
+# Раньше здесь стоял голый словарь uid → время. Работал он верно, но рос ровно
+# столько, сколько живёт процесс: каждый новый покупатель добавлял строку,
+# которую никто никогда не убирал. limits.Пауза — тот же счёт, но с потолком.
+_support_пауза = limits.Пауза(SUPPORT_COOLDOWN)
 
 
 @app.route("/api/support", methods=["POST"])
@@ -883,11 +1092,9 @@ def api_support():
     uid = int(user["id"])
 
     # Антиспам: не даём заваливать менеджера — один вопрос раз в SUPPORT_COOLDOWN сек.
-    now = time.time()
-    wait = SUPPORT_COOLDOWN - (now - _support_last.get(uid, 0))
+    wait = _support_пауза.сколько_ждать(uid)
     if wait > 0:
         return jsonify({"ok": False, "error": "cooldown", "retry_after": int(wait) + 1}), 429
-    _support_last[uid] = now
     uname = user.get("username")
     name = user.get("first_name") or (f"@{uname}" if uname else "клиент")
     who = tgsend.contact_link(uname, uid, name)   # кликабельно: открыть чат с клиентом
@@ -905,14 +1112,38 @@ def api_support():
     msg = (f"💬 Вопрос от {who} (id <code>{uid}</code>){order_tag}:\n"
            f"{html.escape(text)}\n\n"
            f"Открыть чат: {tgsend.contact_link(uname, uid, 'написать клиенту')}  ·  или /reply {uid} ваш текст")
-    delivered = 0
-    for sid in SUPPORT_IDS:
+    # Ждём ОДНУ удачную отправку, остальным пишем в фоне.
+    #
+    # Ждать всех нельзя: менеджеров может быть несколько, и цикл держал поток
+    # запроса на каждом по очереди — а потоков у waitress восемь. Но и убрать
+    # в фон целиком нельзя: приложение по ответу «доставлено» закрывает окно и
+    # говорит человеку, что его прочитали. Это обещание, и оно должно
+    # опираться хотя бы на одну настоящую отправку, а не на надежду.
+    #
+    # Порядок постоянный (sorted), а не случайный, как у множества: иначе
+    # «кому ушло первым» менялось бы от запуска к запуску, и разбирать жалобу
+    # «вопрос не дошёл» было бы не по чему.
+    получатели = sorted(SUPPORT_IDS)
+    delivered, остальные = 0, []
+    for n, sid in enumerate(получатели):
         try:
             tgsend.tg.send_message(sid, msg, parse_mode="HTML")
-            delivered += 1
+            delivered = 1
+            остальные = получатели[n + 1:]
+            break
         except Exception as e:
             print(f"Не смог доставить вопрос в поддержку {sid}: {e}")
+    for sid in остальные:
+        tgsend.bg(_вопрос_в_поддержку, sid, msg)
     return jsonify({"ok": True, "delivered": delivered})
+
+
+def _вопрос_в_поддержку(sid, msg):
+    """Тот же вопрос — остальным менеджерам, уже не задерживая покупателя."""
+    try:
+        tgsend.tg.send_message(sid, msg, parse_mode="HTML")
+    except Exception as e:
+        print(f"Не смог доставить вопрос в поддержку {sid}: {e}")
 
 
 @app.route("/api/admin/message", methods=["POST"])
