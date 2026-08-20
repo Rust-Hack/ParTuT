@@ -11,6 +11,13 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python run.py
     envVars:
+      # Что делает процесс: all (бот и сайт вместе), web или bot.
+      # Сейчас all — бесплатный тариф даёт один процесс, и падение одного
+      # роняет оба, а выкатка означает простой всего магазина. Разнести их
+      # правильно: завести второй сервис типа worker с ROLE=bot, а этому
+      # поставить ROLE=web. Второй процесс на Render платный — отсюда и «пока».
+      - key: ROLE
+        value: all
       - key: BOT_TOKEN
         sync: false
       - key: DATABASE_URL
