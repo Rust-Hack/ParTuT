@@ -2319,8 +2319,8 @@ from partut.db.shop import (                                            # noqa: 
     set_order_delivery, delivery_prefill,                                   # noqa: F401
     seed_locations, get_locations, location_names, get_location,            # noqa: F401
     add_location, delete_location, count_products_in_location,              # noqa: F401
-    get_pickup_points, add_pickup_point, update_pickup_point,               # noqa: F401
-    delete_pickup_point,                                                    # noqa: F401
+    get_pickup_points, all_pickup_points, add_pickup_point,                 # noqa: F401
+    update_pickup_point, delete_pickup_point,                               # noqa: F401
     _category_code, seed_categories, seed_category_specs,                   # noqa: F401
     list_category_specs, add_category_spec, update_category_spec,           # noqa: F401
     delete_category_spec, list_categories, category_codes, add_category,    # noqa: F401

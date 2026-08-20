@@ -554,9 +554,7 @@ def api_my_settings():
             if pid is None:
                 return jsonify({"ok": False, "error": "bad_id"}), 400
             # Точка должна существовать: иначе в профиле осядет ссылка в никуда.
-            exists = any(p["id"] == pid for loc in db.get_locations()
-                         for p in db.get_pickup_points(loc["name"]))
-            if not exists:
+            if not any(p["id"] == pid for p in db.all_pickup_points()):
                 return jsonify({"ok": False, "error": "bad_point"}), 400
             db.set_user_point(uid, pid)
 
@@ -579,10 +577,8 @@ def api_my_settings():
 @app.route("/api/my-points")
 def api_my_points():
     """Точки самовывоза всех городов — чтобы покупатель выбрал свою в настройках."""
-    out = []
-    for loc in db.get_locations():
-        for p in db.get_pickup_points(loc["name"]):
-            out.append({"id": p["id"], "city": loc["name"], "address": p["address"], "note": p["note"] or ""})
+    out = [{"id": p["id"], "city": p["city"], "address": p["address"], "note": p["note"] or ""}
+           for p in db.all_pickup_points()]
     return jsonify({"ok": True, "points": out})
 
 
@@ -710,7 +706,11 @@ def api_admin_reviews():
     status = (data.get("status") or "pending").strip()
     if status not in ("pending", "approved", "hidden", "all"):
         status = "pending"
-    rows = [r for r in db.admin_reviews(status) if _review_in_scope(admin, r)]
+    # Охват считаем ОДИН раз, а не на каждый отзыв: внутри него полный список
+    # товаров магазина, и раньше он читался заново для каждой строки — пятьдесят
+    # отзывов означали пятьдесят полных чтений таблицы за один запрос.
+    охват = _охват_продавца(admin)
+    rows = [r for r in db.admin_reviews(status) if _в_охвате(охват, r)]
     return jsonify({"ok": True, "status": status, "pending": db.count_pending_reviews(), "reviews": [{
         "id": r["id"], "product_id": r["product_id"], "product": r["product_name"] or "товар удалён",
         "rating": r["rating"], "text": r["text"] or "", "who": _review_author(r),
@@ -731,16 +731,31 @@ def _sold_here(city):
     return pids, mids
 
 
-def _review_in_scope(admin, review):
+def _охват_продавца(admin):
+    """Что продавцу вообще положено видеть. None — видит всё (владелец).
+
+    Отдельной функцией, потому что считать это внутри проверки одной строки
+    нельзя: там оно окажется в цикле, а внутри — чтение всех товаров магазина.
+    """
+    scope = (admin or {}).get("city")
+    return _sold_here(scope) if scope else None
+
+
+def _в_охвате(охват, review):
     """Продавец отвечает за то, чем торгует. Отзыв о модели, которой на его
     точке нет, — не его разговор, и в очереди он только мешает."""
-    scope = (admin or {}).get("city")
-    if not scope:
+    if охват is None:
         return True
-    pids, mids = _sold_here(scope)
+    pids, mids = охват
     # Отзыв приходит и строкой из базы, и готовым словарём — .keys() понимают оба.
     mid = review["model_id"] if "model_id" in review.keys() else None
     return review["product_id"] in pids or (mid is not None and mid in mids)
+
+
+def _review_in_scope(admin, review):
+    """Одиночная проверка — для маршрутов, где отзыв ровно один (ответ на него).
+    Списку она не годится: там охват надо считать один раз, см. _охват_продавца."""
+    return _в_охвате(_охват_продавца(admin), review)
 
 
 @app.route("/api/admin/review/delete", methods=["POST"])
