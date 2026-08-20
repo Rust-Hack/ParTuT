@@ -8,7 +8,7 @@ notifications.py — отправка заказа продавцам город
 Функция принимает `bot` (экземпляр telebot) — тот, через который слать.
 """
 
-import random
+import secrets
 import json
 from telebot import types
 
@@ -138,7 +138,9 @@ def draw_raffle(bot, raffle):
     # Один человек — одно место. Ключ в базе не даст ему второй билет, но в
     # розыгрышах, начатых до него, дубли могли остаться.
     uids = list(dict.fromkeys(db.get_raffle_user_ids(raffle["id"])))
-    random.shuffle(uids)
+    # Тем же криптостойким жребием, что и колесо (см. games.py): здесь
+    # разыгрывают настоящие вещи, и «случайно» обязано значить случайно.
+    secrets.SystemRandom().shuffle(uids)
     places = [(1, raffle["prize1"] or "Приз за 1 место", 0),
              (2, raffle["prize2"] or "Приз за 2 место", 0),
              (3, f"{raffle['prize3_coins']} монет", raffle["prize3_coins"])]
