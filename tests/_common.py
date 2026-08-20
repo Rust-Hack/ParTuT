@@ -25,6 +25,12 @@ os.environ["DEV_MODE"] = "0"
 os.environ["DEV_IDS"] = "716030279"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from partut import limits  # noqa: E402
+# Проверки шлют запросы очередями, живой человек так не умеет. Антиспам этого
+# не различает и справедливо отказывает — а проверяем мы магазин, не терпение.
+# Сами паузы проверяются отдельно, в tests/test_limits.py.
+limits.выключить()
+
 from partut import db  # noqa: E402
 if _PG:
     # Чистим схему целиком: тесты рассчитывают на пустую базу, а прошлый прогон

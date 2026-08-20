@@ -1,12 +1,14 @@
 """Связь клиент↔магазин: привязка к заказу, кликабельные контакты, экранирование, антиспам."""
 from _common import db, client, server, SENT, reset_sent, Checker, as_user, as_admin
 
+from partut import limits
+
 CLIENT = 555
 
 
 def support(payload, clear_cooldown=True):
     if clear_cooldown:
-        server._support_last.clear()
+        server._support_пауза.забыть()
     reset_sent()
     r = client.post("/api/support", json={"initData": "x", **payload})
     return r, (r.get_json() or {})
@@ -64,16 +66,22 @@ def run():
        "&lt;b&gt;hack&lt;/b&gt; &amp; &lt;script&gt;" in SENT[0][1])
 
     c6 = Checker("F. Антиспам поддержки (кулдаун)")
-    r, d = support({"text": "первое"}, clear_cooldown=True)
-    c6("первое сообщение → ok", d.get("ok"))
-    r2 = client.post("/api/support", json={"initData": "x", "text": "второе подряд"})
-    d2 = r2.get_json() or {}
-    c6("второе сразу → 429 cooldown", r2.status_code == 429 and d2.get("error") == "cooldown")
-    c6("есть retry_after", isinstance(d2.get("retry_after"), int) and d2["retry_after"] > 0)
-    # прошло время → снова можно
-    server._support_last[CLIENT] = 0
-    r3 = client.post("/api/support", json={"initData": "x", "text": "спустя время"})
-    c6("после паузы → снова ok", (r3.get_json() or {}).get("ok"))
+    # Стенд паузы выключает (см. _common), иначе каждая проверка упиралась бы
+    # в антиспам. Здесь проверяем сам антиспам — значит включаем обратно.
+    limits.включить()
+    try:
+        r, d = support({"text": "первое"}, clear_cooldown=True)
+        c6("первое сообщение → ok", d.get("ok"))
+        r2 = client.post("/api/support", json={"initData": "x", "text": "второе подряд"})
+        d2 = r2.get_json() or {}
+        c6("второе сразу → 429 cooldown", r2.status_code == 429 and d2.get("error") == "cooldown")
+        c6("есть retry_after", isinstance(d2.get("retry_after"), int) and d2["retry_after"] > 0)
+        # прошло время → снова можно
+        server._support_пауза.забыть(CLIENT)
+        r3 = client.post("/api/support", json={"initData": "x", "text": "спустя время"})
+        c6("после паузы → снова ok", (r3.get_json() or {}).get("ok"))
+    finally:
+        limits.выключить()
 
     c7 = Checker("G. Пустой текст отклоняется")
     r, d = support({"text": "   "})

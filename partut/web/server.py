@@ -36,6 +36,7 @@ from partut import db
 from partut.web import shopinfo
 from partut.web import photos
 from partut import inputs
+from partut import limits
 from partut.integrations import tgsend
 from partut import errors
 from partut import notifications
@@ -106,6 +107,24 @@ _photo_cache = OrderedDict()       # сами картинки: file_id -> (byte
 _photo_cache_lock = threading.Lock()
 _photo_cache_bytes = 0     # сколько памяти занято картинками
 PHOTO_CACHE_MAX_BYTES = int(os.environ.get("PHOTO_CACHE_MB", "48")) * 1024 * 1024
+
+# Сколько раз в минуту всему магазину позволено сходить в Telegram за картинкой.
+#
+# /api/photo — единственная ручка, открытая вообще всем: без initData, без
+# прав, по обычной ссылке. И на каждый промах кэша она делает ДВА обращения к
+# Telegram. Токен у бота один, и через него же уходят заказы продавцу — то
+# есть чужой скрипт, ничего не зная о магазине, останавливает торговлю:
+# витрина работает, база цела, а заказы не доезжают.
+#
+# Настоящая картинка платит за этот бюджет ровно один раз в жизни: дальше она
+# лежит в базе и в памяти. Шестидесяти в минуту хватает на любой завоз, а
+# перебору — нет.
+TELEGRAM_PHOTO_BUDGET = limits.Ведро(int(os.environ.get("PHOTO_FETCH_PER_MIN", "60")), 60)
+
+# Промахи запоминаем отдельно: чужой file_id не станет своим от повторов, а
+# каждая попытка стоит обращения к Telegram. Без этого один и тот же мусор в
+# адресе выжигал бы бюджет бесконечно.
+_photo_misses = limits.Пауза(300, максимум_ключей=2000)
 
 # ============================================================
 #  ПРОВЕРКА ПОДЛИННОСТИ (initData от Telegram)
@@ -282,6 +301,9 @@ def api_notify_me():
     pid = inputs.целое(data.get("product_id"))
     if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
+    рано = перебор(_пауза_подписка, int(user["id"]))
+    if рано:
+        return рано
     p = db.get_product(pid)
     if not p:
         return jsonify({"ok": False, "error": "not_found"}), 404
@@ -671,6 +693,9 @@ def api_review():
         return jsonify({"ok": False, "error": "bad_input"}), 400
     if rating < 1 or rating > 5:
         return jsonify({"ok": False, "error": "bad_rating"}), 400
+    рано = перебор(_пауза_отзыв, uid, "Отзывы пишутся не так быстро")
+    if рано:
+        return рано
     if not any(p["id"] == pid for p in db.reviewable_products(uid)):
         # Либо не покупал, либо уже оценивал — из ответа этого не видно специально.
         return jsonify({"ok": False, "error": "not_allowed"}), 403
@@ -888,6 +913,17 @@ def api_photo():
 
     # 3. Первый раз: тянем из Telegram (два запроса) и сохраняем, чтобы это был
     #    последний раз — и для этого процесса, и для всех будущих.
+    #
+    # Но сначала — по карману ли. Промахнувшийся недавно file_id не пробуем
+    # вовсе, и общий бюджет магазина на обращения к Telegram тоже конечен:
+    # см. TELEGRAM_PHOTO_BUDGET.
+    if _photo_misses.сколько_ждать(file_id) > 0:
+        return Response("not found", status=404)
+    if not TELEGRAM_PHOTO_BUDGET.взять():
+        print(f"[фото] бюджет обращений к Telegram исчерпан, {file_id} не забрали")
+        # 503, а не 404: картинка, скорее всего, есть — просто не сейчас.
+        # Браузер по 404 запомнил бы «её нет» и перестал спрашивать.
+        return Response("photo busy", status=503)
     try:
         path = _file_path_cache.get(file_id)
         if not path:
@@ -983,8 +1019,36 @@ def _photo_not_modified(file_id):
 #  ЗАКАЗ
 # ============================================================
 
+# --- Пауза между действиями покупателя ---
+#
+# До сих пор она стояла только на поддержке. А заваливать можно и остальное:
+# отзыв улетает всем админам в личку, подписка «сообщите о поступлении» пишет
+# в базу, а заказ двигает склад и монеты. Никакого взлома для этого не нужно —
+# достаточно цикла в три строки, и это ровно та поломка, которую никто не
+# заметит, пока владелец не откроет Телеграм с тысячей сообщений.
+#
+# Числа выбраны по человеку, а не по машине: живой покупатель не пишет два
+# отзыва за десять секунд и не оформляет два заказа за три.
+_пауза_отзыв = limits.Пауза(10)
+_пауза_подписка = limits.Пауза(2)
+
+
+def перебор(пауза, ключ, что="Слишком часто"):
+    """Готовый отказ 429, если ещё рано, иначе None — чтобы в маршруте была
+    одна строчка, а не пять одинаковых на каждую ручку."""
+    ждать = пауза.сколько_ждать(ключ)
+    if not ждать:
+        return None
+    сек = int(ждать) + 1
+    return jsonify({"ok": False, "error": "cooldown", "retry_after": сек,
+                    "message": f"{что} — попробуйте через {сек} с."}), 429
+
+
 SUPPORT_COOLDOWN = 20          # антиспам: не чаще 1 сообщения в поддержку за столько секунд
-_support_last = {}             # uid -> время последнего сообщения (в памяти процесса)
+# Раньше здесь стоял голый словарь uid → время. Работал он верно, но рос ровно
+# столько, сколько живёт процесс: каждый новый покупатель добавлял строку,
+# которую никто никогда не убирал. limits.Пауза — тот же счёт, но с потолком.
+_support_пауза = limits.Пауза(SUPPORT_COOLDOWN)
 
 
 @app.route("/api/support", methods=["POST"])
@@ -1000,11 +1064,9 @@ def api_support():
     uid = int(user["id"])
 
     # Антиспам: не даём заваливать менеджера — один вопрос раз в SUPPORT_COOLDOWN сек.
-    now = time.time()
-    wait = SUPPORT_COOLDOWN - (now - _support_last.get(uid, 0))
+    wait = _support_пауза.сколько_ждать(uid)
     if wait > 0:
         return jsonify({"ok": False, "error": "cooldown", "retry_after": int(wait) + 1}), 429
-    _support_last[uid] = now
     uname = user.get("username")
     name = user.get("first_name") or (f"@{uname}" if uname else "клиент")
     who = tgsend.contact_link(uname, uid, name)   # кликабельно: открыть чат с клиентом
