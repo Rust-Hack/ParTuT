@@ -31,6 +31,7 @@ from partut.web import auth
 from partut import cache
 from partut import paths
 from partut import db
+from partut.web import shopinfo
 from partut.web import photos
 from partut import inputs
 from partut.integrations import tgsend
@@ -440,6 +441,14 @@ def api_me():
                     # вкладку: показывать «Розыгрыши» там, где ничего не
                     # разыгрывают, — обещание, которого магазин не давал.
                     "raffle_on": me["raffle_on"],
+                    # Готовы ли документы. Пока владелец не заменил черновик
+                    # своим текстом, покупателю не показываем ни ссылок, ни
+                    # строки согласия: болванка с [УНП] вместо оферты хуже, чем
+                    # ничего — она выглядит как настоящий документ.
+                    #
+                    # Флаг привязан к готовности, а не к переключателю: забыть
+                    # включить показ после вставки текста нельзя, он появится сам.
+                    "docs_ready": shopinfo.документы_готовы(),
                     "my_point": me["my_point"]})
 
 

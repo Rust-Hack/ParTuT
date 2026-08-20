@@ -8,7 +8,7 @@
 указания, С ЧЕМ согласились, не доказывает ничего: тексты правятся, и через
 год не восстановить, что человек видел при оформлении.
 """
-from _common import db, client, Checker, as_admin, deny_admin
+from _common import db, client, Checker, as_admin, as_user, deny_admin
 
 from partut.db import shop as db_shop
 
@@ -108,4 +108,45 @@ def run_order_remembers_version():
         cur.execute(f"DELETE FROM {t}")
     conn.commit(); conn.close()
     _чисто()
+    return c.fails
+
+
+def run_hidden_until_ready():
+    """Пока стоит черновик — покупатель документов не видит вовсе.
+
+    Болванка с местами вида [УНП] выглядит как настоящий документ и вводит в
+    заблуждение сильнее, чем честное отсутствие: человек решит, что условия
+    есть и он их принял.
+
+    Флаг привязан к ГОТОВНОСТИ, а не к отдельному переключателю. Переключатель
+    пришлось бы не забыть щёлкнуть после вставки текста — и однажды его бы не
+    щёлкнули, а документы так и остались бы спрятанными.
+    """
+    from partut.web import shopinfo
+
+    c = Checker("Документы скрыты, пока не готовы")
+    _чисто()
+    as_admin()
+    # /api/me смотрит покупателя, а не админа: подменять надо обоих.
+    as_user(100, "owner")
+
+    c("на черновике — не готово", shopinfo.документы_готовы() is False)
+    ответ = client.post("/api/me", json={"initData": "x"}).get_json()
+    c("и приложению так и сказано", ответ.get("docs_ready") is False)
+
+    # Один документ свой, второй черновой — это ещё не готово.
+    client.post("/api/admin/docs", json={"initData": "x", "offer": "Моя оферта, целиком."})
+    c("одного документа мало", shopinfo.документы_готовы() is False)
+
+    client.post("/api/admin/docs", json={"initData": "x", "privacy": "Моя политика, целиком."})
+    c("оба свои — готово", shopinfo.документы_готовы() is True)
+    ответ = client.post("/api/me", json={"initData": "x"}).get_json()
+    c("приложение узнаёт об этом само", ответ.get("docs_ready") is True)
+
+    # Читать документы можно и до готовности: ручка открыта, просто на неё
+    # никто не ведёт. Прятать сам текст незачем — прячем приглашение читать.
+    c("сама ручка доступна всегда", client.get("/api/docs").status_code == 200)
+
+    _чисто()
+    c("после сброса снова не готово", shopinfo.документы_готовы() is False)
     return c.fails

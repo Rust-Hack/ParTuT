@@ -768,8 +768,8 @@ function renderCart() {
   $("tab-cart").innerHTML = `<div class="clist">${rows}</div>${freeHtml}${upsHtml}
     <div class="checkoutbar">${coinsHtml}${totalLine}
       <button class="bigbtn" id="checkout">Оформить · ${payable.toFixed(2)} ${CUR}</button>
-      <div class="termsnote">Оформляя заказ, вы соглашаетесь с
-        <a id="termsOffer">офертой</a> и <a id="termsPrivacy">обработкой данных</a>.</div></div>`;
+      ${docsReady() ? `<div class="termsnote">Оформляя заказ, вы соглашаетесь с
+        <a id="termsOffer">офертой</a> и <a id="termsPrivacy">обработкой данных</a>.</div>` : ""}</div>`;
   bindCardButtons($("tab-cart"));
   if ($("useCoinsChk")) $("useCoinsChk").onchange = () => { useCoins = $("useCoinsChk").checked; renderCart(); };
   $("checkout").onclick = openDelivery;
@@ -893,8 +893,21 @@ document.querySelectorAll("#docsTabs .doctab").forEach(b =>
   b.onclick = () => showDocTab(b.dataset.doc));
 $("myDocs").onclick = () => openDocs("offer");
 
+// Документы показываем покупателю ТОЛЬКО когда владелец заменил черновик своим
+// текстом. Болванка с местами вида [УНП] выглядит как настоящий документ и
+// вводит в заблуждение сильнее, чем честное отсутствие.
+//
+// Условие — готовность, а не переключатель: включить показ после вставки текста
+// нельзя забыть, он появится сам.
+function docsReady() { return !!(me && me.docs_ready); }
+
+function applyDocsVisibility() {
+  if ($("myDocs")) $("myDocs").style.display = docsReady() ? "" : "none";
+}
+
 async function openMySettings() {
   $("myView").classList.add("show");
+  applyDocsVisibility();
   myPointId = (me && me.my_point) || null;
   $("myPhone").value = (me && me.prefill && me.prefill.phone) || "";
   $("myRemind").classList.toggle("on", remindersOn);
