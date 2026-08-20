@@ -35,6 +35,14 @@ else:
 
 # Диалектные различия, которые встречаются в наших запросах:
 ID_COL = "SERIAL PRIMARY KEY" if USE_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
+# Деньги. Писать REAL нельзя: в Postgres это ОДИНАРНАЯ точность, четыре байта,
+# около семи значащих цифр. Отдельная цена такое переживает, а вот суммы — нет:
+# SUM(real) в Postgres возвращает тоже real, и выручка копится в четырёх байтах.
+# Замерено на 3000 заказов: расхождение 8 копеек, и растёт с оборотом. То есть
+# врали не чеки, а отчёты — там, где ошибку труднее всего заметить.
+# В SQLite REAL и так восемь байт, DOUBLE PRECISION он принимает и понимает
+# так же — поэтому тип один на обе базы, без развилки.
+MONEY = "DOUBLE PRECISION"
 GREATEST = "GREATEST" if USE_PG else "max"   # ограничение остатка снизу нулём
 BLOB_COL = "BYTEA" if USE_PG else "BLOB"     # колонка для двоичных данных (картинок)
 
@@ -132,7 +140,11 @@ SCHEMA_MIGRATIONS = [
     ("0002-прогресс-колеса-в-рублях", "wheel_progress_in_money"),
     ("0003-история-по-времени-магазина", "history_shifted_to_shop_time"),
     ("0004-админы-из-окружения-в-базу", "staff_seeded"),
+    ("0005-деньги-в-двойную-точность", None),
 ]
+
+
+_НЕ_ЗАВЕДЁН = object()      # «переноса нет в списке» — не то же, что «нет старой отметки»
 
 
 def _migration_table():
@@ -156,8 +168,12 @@ def _migrate(имя, шаг):
     Если шаг упал, заявку снимаем: иначе перенос считался бы сделанным, а
     данные остались бы наполовину старыми — и это никогда бы не всплыло.
     """
-    старая_метка = dict(SCHEMA_MIGRATIONS).get(имя)
-    if старая_метка is None:
+    # Отличаем «переноса нет в списке» от «у переноса нет старой отметки».
+    # Раньше и то и другое было None, и первый же перенос, заведённый уже при
+    # летописи (а не до неё), ронял магазин при старте: список его знал, а
+    # проверка считала незарегистрированным.
+    старая_метка = dict(SCHEMA_MIGRATIONS).get(имя, _НЕ_ЗАВЕДЁН)
+    if старая_метка is _НЕ_ЗАВЕДЁН:
         raise RuntimeError(f"перенос {имя} не записан в SCHEMA_MIGRATIONS")
 
     _migration_table()
@@ -169,8 +185,9 @@ def _migrate(имя, шаг):
         return False
 
     # База, поднятая до летописи, носит старую отметку в настройках. Прогнать
-    # шаг второй раз местами означало бы удвоить накопленное людям.
-    уже = bool(get_setting(старая_метка))
+    # шаг второй раз местами означало бы удвоить накопленное людям. У переносов,
+    # заведённых уже при летописи, старой отметки нет — и искать её незачем.
+    уже = bool(старая_метка) and bool(get_setting(старая_метка))
 
     try:
         cur.execute(_q("INSERT INTO schema_migrations (name, applied_at) VALUES (%s, %s)"),
@@ -252,7 +269,7 @@ def init_db():
             city        TEXT    NOT NULL,
             category    TEXT    NOT NULL,
             name        TEXT    NOT NULL,
-            price       REAL    NOT NULL,
+            price       {MONEY}    NOT NULL,
             stock       INTEGER NOT NULL DEFAULT 0,
             is_hit      INTEGER NOT NULL DEFAULT 0,
             photo       TEXT,
@@ -293,7 +310,7 @@ def init_db():
             username        TEXT,
             city            TEXT    NOT NULL,
             items           TEXT    NOT NULL,
-            total           REAL    NOT NULL,
+            total           {MONEY}    NOT NULL,
             pickup_time     TEXT,
             status          TEXT    NOT NULL DEFAULT 'new',
             receipt_file_id TEXT,
@@ -346,7 +363,7 @@ def init_db():
             prize1       TEXT,
             prize2       TEXT,
             prize3_coins INTEGER NOT NULL DEFAULT 500,
-            threshold    REAL    NOT NULL DEFAULT 25,
+            threshold    {MONEY}    NOT NULL DEFAULT 25,
             starts_at    TEXT    NOT NULL,
             ends_at      TEXT    NOT NULL,
             status       TEXT    NOT NULL DEFAULT 'active',
@@ -379,7 +396,7 @@ def init_db():
             needs_address  INTEGER NOT NULL DEFAULT 0,
             address_label  TEXT,
             pickup_address TEXT,
-            fee            REAL    NOT NULL DEFAULT 0,
+            fee            {MONEY}    NOT NULL DEFAULT 0,
             needs_payment  INTEGER NOT NULL DEFAULT 1,
             sort           INTEGER NOT NULL DEFAULT 0
         )
@@ -396,7 +413,7 @@ def init_db():
             flavor     TEXT,
             delta      INTEGER NOT NULL,
             reason     TEXT    NOT NULL,
-            cost       REAL    NOT NULL DEFAULT 0,
+            cost       {MONEY}    NOT NULL DEFAULT 0,
             note       TEXT,
             admin_id   BIGINT,
             created_at TEXT
@@ -410,8 +427,8 @@ def init_db():
             id         {ID_COL},
             code       TEXT    NOT NULL,
             kind       TEXT    NOT NULL DEFAULT 'percent',   -- percent | fixed
-            value      REAL    NOT NULL DEFAULT 0,
-            min_total  REAL    NOT NULL DEFAULT 0,
+            value      {MONEY}    NOT NULL DEFAULT 0,
+            min_total  {MONEY}    NOT NULL DEFAULT 0,
             uses_left  INTEGER,                              -- NULL = без ограничения
             once_per_user INTEGER NOT NULL DEFAULT 1,
             active     INTEGER NOT NULL DEFAULT 1,
@@ -583,6 +600,7 @@ def init_db():
     _ensure_photo_columns()     # галерея у модели, а не у товара
     seed_category_specs()       # характеристики категорий, если их ещё нет
     _migrate("0001-модели-собраны-из-товаров", models_seeded_from_products)
+    _migrate("0005-деньги-в-двойную-точность", _widen_money_columns)
     _ensure_review_columns()    # отзыв принадлежит модели — ПОСЛЕ того, как модели собраны
     _ensure_raffle_columns()    # finished_at: когда розыгрыш реально подвели
     _ensure_raffle_uniques()    # один билет на человека, один активный розыгрыш
@@ -635,7 +653,7 @@ def _ensure_product_columns():
     # Закупочная цена. Без неё статистика показывает выручку, но никогда —
     # прибыль, и решения о закупке принимаются вслепую.
     if "cost" not in cols:
-        cur.execute("ALTER TABLE products ADD COLUMN cost REAL DEFAULT 0")
+        cur.execute(f"ALTER TABLE products ADD COLUMN cost {MONEY} DEFAULT 0")
     # Снят с витрины. Удалить было единственным способом убрать товар из
     # продажи — а удаление уносит и остаток, и историю. Теперь «больше не
     # продаём» и «этого не было» — разные действия.
@@ -744,7 +762,7 @@ def _ensure_order_columns():
     if "delivery_address" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN delivery_address TEXT")
     if "delivery_fee" not in cols:
-        cur.execute("ALTER TABLE orders ADD COLUMN delivery_fee REAL DEFAULT 0")
+        cur.execute(f"ALTER TABLE orders ADD COLUMN delivery_fee {MONEY} DEFAULT 0")
     if "payment_method" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN payment_method TEXT")
     if "comment" not in cols:
@@ -760,7 +778,7 @@ def _ensure_order_columns():
     # на небрежность (пришло не столько, пришло не за тот заказ) и единственная
     # ниточка от заказа к строке выписки.
     if "paid_amount" not in cols:
-        cur.execute("ALTER TABLE orders ADD COLUMN paid_amount REAL")
+        cur.execute(f"ALTER TABLE orders ADD COLUMN paid_amount {MONEY}")
     # payer_last4 осталась от первого захода, где эти данные спрашивали у
     # покупателя. От затеи отказались — лишнее поле на экране оплаты стоит
     # брошенных заказов, — а колонку не сносим: правило схемы «только
@@ -772,7 +790,7 @@ def _ensure_order_columns():
     if "promo_code" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN promo_code TEXT")    # каким кодом воспользовались
     if "promo_discount" not in cols:
-        cur.execute("ALTER TABLE orders ADD COLUMN promo_discount REAL DEFAULT 0")
+        cur.execute(f"ALTER TABLE orders ADD COLUMN promo_discount {MONEY} DEFAULT 0")
     if "client_token" not in cols:
         # Ключ попытки оформления — против повторного заказа при потерянном ответе.
         cur.execute("ALTER TABLE orders ADD COLUMN client_token TEXT")
@@ -3952,6 +3970,65 @@ def add_product_from_model(model_id, city, price, cost=0, stock=0, is_hit=0):
     conn.commit()
     conn.close()
     return pid
+
+
+# Колонки с деньгами: таблица и поле. Список руками и намеренно — расширять
+# тип «всему, что похоже на число» нельзя: id, остатки и количества деньгами
+# не являются, и трогать их незачем.
+ДЕНЕЖНЫЕ_КОЛОНКИ = [
+    ("products", "price"), ("products", "cost"),
+    ("orders", "total"), ("orders", "delivery_fee"),
+    ("orders", "paid_amount"), ("orders", "promo_discount"),
+    ("delivery_methods", "fee"),
+    ("promos", "value"), ("promos", "min_total"),
+    ("raffles", "threshold"),
+    ("stock_moves", "cost"),
+]
+
+
+def _widen_money_columns():
+    """Расширяет денежные колонки до двойной точности. Только Postgres.
+
+    Зачем. REAL в Postgres — это ЧЕТЫРЕ байта, около семи значащих цифр.
+    Отдельная цена такое переживает, а суммы нет: SUM(real) возвращает тоже
+    real, и выручка копится в одинарной точности. На 3000 заказов замерено
+    расхождение в 8 копеек, и оно растёт с оборотом. Врали не чеки, а отчёты.
+
+    Расширение float4 → float8 не теряет ни бита: любое число, представимое в
+    четырёх байтах, точно представимо в восьми. Обратный ход был бы потерей —
+    поэтому только в эту сторону.
+
+    В SQLite REAL и так восемь байт, менять нечего.
+    """
+    if not USE_PG:
+        return 0
+    conn = connect()
+    cur = conn.cursor()
+    сделано = 0
+    for таблица, колонка in ДЕНЕЖНЫЕ_КОЛОНКИ:
+        cur.execute("""SELECT data_type FROM information_schema.columns
+                       WHERE table_schema = current_schema()
+                         AND table_name = %s AND column_name = %s""",
+                    (таблица, колонка))
+        строка = cur.fetchone()
+        if not строка or строка["data_type"] != "real":
+            continue          # колонки нет или она уже двойной точности
+        # ALTER COLUMN ... TYPE DOUBLE PRECISION — единственное расширение,
+        # которое сторож схемы пропускает; см. tests/test_schema.py.
+        cur.execute(f"ALTER TABLE {таблица} ALTER COLUMN {колонка} TYPE DOUBLE PRECISION")
+        # Расширение не лечит того, что уже потеряно при записи: цена 44.27,
+        # пролежавшая в четырёх байтах, возвращается как 44.27000045776367.
+        # Показывали мы её всегда как 44.27 — это и есть настоящее значение,
+        # поэтому дочищаем. Иначе следы одинарной точности остались бы в базе
+        # навсегда и продолжали копиться в суммах.
+        cur.execute(f"UPDATE {таблица} SET {колонка} = ROUND({колонка}::numeric, 2) "
+                    f"WHERE {колонка} IS NOT NULL")
+        сделано += 1
+    conn.commit()
+    conn.close()
+    if сделано:
+        print(f"Деньги переведены в двойную точность: колонок {сделано}")
+    return сделано
 
 
 def models_seeded_from_products():

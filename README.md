@@ -9,7 +9,8 @@
 ## Запуск
 
 ```bash
-python3.11 -m venv venv
+brew install python@3.11                              # если его ещё нет
+/opt/homebrew/opt/python@3.11/bin/python3.11 -m venv venv
 venv/bin/pip install -r requirements-dev.txt
 cp .env.example .env          # вписать свой BOT_TOKEN
 
