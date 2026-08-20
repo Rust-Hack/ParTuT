@@ -19,6 +19,10 @@ import tempfile
 _PG = os.environ.get("TEST_DATABASE_URL", "").strip()
 os.environ["DATABASE_URL"] = _PG     # пусто — локальный SQLite
 os.environ["DEV_MODE"] = "0"
+# Кто в этом прогоне разработчик и владелец. Раньше номер был вшит в config, и
+# тесты молча опирались на него — то есть проверяли не правила доступа, а
+# конкретного человека. Теперь он назван здесь, и видно, что это стенд.
+os.environ["DEV_IDS"] = "716030279"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from partut import db  # noqa: E402
