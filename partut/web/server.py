@@ -337,6 +337,34 @@ def _log_slow(resp):
     return resp
 
 
+@app.after_request
+def _защитные_заголовки(resp):
+    """То, что браузер должен знать про эту страницу.
+
+    Приложение самодостаточно: ни одного внешнего адреса — стили и код
+    вклеены в саму страницу, картинки свои. Поэтому строгий запрет включается
+    без единой правки фронта, и любая попытка подтянуть чужой скрипт (через
+    отзыв, имя товара, что угодно) браузером просто не выполнится.
+    """
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    if (resp.content_type or "").startswith("text/html"):
+        resp.headers.setdefault("Content-Security-Policy", CSP)
+    return resp
+
+
+# Единственный внешний адрес — telegram.org: приложение открывается внутри
+# Телеграма и подключает его собственный скрипт для Mini App.
+CSP = ("default-src 'self'; "
+       "script-src 'self' 'unsafe-inline' https://telegram.org; "
+       "style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data:; "
+       "connect-src 'self'; "
+       "base-uri 'none'; "
+       "form-action 'none'; "
+       "frame-ancestors https://web.telegram.org https://telegram.org")
+
+
 _GZIP_TYPES = ("text/html", "text/css", "application/javascript",
                "text/javascript", "application/json", "image/svg+xml")
 
