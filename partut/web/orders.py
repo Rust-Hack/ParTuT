@@ -515,7 +515,9 @@ def api_admin_orders():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    orders = [o for o in db.get_orders() if auth.may_city(admin, o["city"])]
+    # Город отдаём БАЗЕ, а не фильтруем после: иначе лимит в двести заказов
+    # съедает соседний город, и продавец не видит собственных заказов.
+    orders = db.get_orders(city=admin.get("city") or None)
     return jsonify({"ok": True, "orders": [_order_json(o, data.get("initData", "")) for o in orders]})
 
 
