@@ -11,11 +11,16 @@ db.py вырос до 4787 строк, и его режут по кускам. �
 """
 from _common import db, Checker
 
+from partut.db import catalog as db_catalog
+from partut.db import customers as db_customers
 from partut.db import games as db_games
+from partut.db import orders as db_orders
 from partut.db import photos as db_photos
 from partut.db import promos as db_promos
 from partut.db import raffles as db_raffles
+from partut.db import reports as db_reports
 from partut.db import reviews as db_reviews
+from partut.db import shop as db_shop
 from partut.db import stock as db_stock
 
 # Модули, вынесенные из db.py, и что именно из них переехало.
@@ -32,6 +37,15 @@ from partut.db import stock as db_stock
                  "set_promo_active", "consume_promo"]),
     (db_stock, ["move_stock", "get_stock_moves", "stock_losses", "add_stock_alert",
                 "clear_stock_alerts", "stock_alert_counts"]),
+    (db_orders, ["create_order", "place_order", "get_order", "cancel_order",
+                 "update_order_items", "set_order_status", "get_checkout_data"]),
+    (db_catalog, ["get_products", "add_product", "get_brands", "list_models",
+                  "add_variant", "recalc_product_stock"]),
+    (db_customers, ["ensure_user", "add_coins", "spend_coins", "customer_card",
+                    "list_users", "reward_referrer_for_order"]),
+    (db_reports, ["get_business_stats", "coin_flow", "also_bought", "inc_stat"]),
+    (db_shop, ["get_delivery_methods", "get_locations", "list_categories",
+               "list_staff", "log_admin_action", "get_pickup_points"]),
 ]
 
 # Примитивы, которые вынесенные модули обязаны брать через db.
@@ -64,11 +78,16 @@ def run():
 
     db.connect = счётчик
     try:
-        db.get_active_raffle()          # живёт в db_raffles
-        db.get_game_stats()             # живёт в db_games
-        db.photo_blob_stats()           # живёт в db_photos
-        db.list_promos()                # живёт в db_promos
-        db.stock_alert_counts()         # живёт в db_stock
+        db.get_active_raffle()          # живёт в partut/db/raffles.py
+        db.get_game_stats()             # живёт в partut/db/games.py
+        db.photo_blob_stats()           # живёт в partut/db/photos.py
+        db.list_promos()                # живёт в partut/db/promos.py
+        db.stock_alert_counts()         # живёт в partut/db/stock.py
+        db.get_all_products()           # живёт в partut/db/catalog.py
+        db.get_locations()              # живёт в partut/db/shop.py
+        db.list_users(limit=1)          # живёт в partut/db/customers.py
+        db.coin_flow()                  # живёт в partut/db/reports.py
+        db.get_orders()                 # живёт в partut/db/orders.py
     finally:
         db.connect = настоящий
     c3("вынесенный модуль сходил через подменённый db.connect", считано["n"] > 0)
