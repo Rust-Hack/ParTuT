@@ -855,6 +855,47 @@ function renderProfile() {
 let myPointId = null, myPoints = [];
 $("myClose").onclick = () => $("myView").classList.remove("show");
 
+// ----- Количество: поле с кнопками –/+ -----
+// Один приём на весь магазин. Разметку собирает qtyHtml, поведение вешает
+// bindQty — иначе в каждом экране завёлся бы свой обработчик, и они бы
+// разошлись: где-то минус уходил бы ниже нуля, где-то не срабатывал бы oninput.
+//
+// Поле оставляем редактируемым намеренно: набрать 24 быстрее, чем нажать плюс
+// двадцать три раза.
+
+function qtyHtml(значение, атрибуты = "", мин = 0) {
+  return `<span class="qty" data-min="${мин}">
+    <button type="button" class="qtybtn" data-qty="-1">−</button>
+    <input inputmode="numeric" value="${значение}" ${атрибуты}>
+    <button type="button" class="qtybtn" data-qty="1">+</button></span>`;
+}
+
+// Вешает кнопки внутри контейнера. Зовётся ПОСЛЕ вставки разметки, и её можно
+// звать повторно: обработчики присваиваются, а не накапливаются.
+function bindQty(корень, приПравке) {
+  (корень || document).querySelectorAll(".qty").forEach(узел => {
+    const поле = узел.querySelector("input");
+    const мин = +(узел.dataset.min || 0);
+    узел.querySelectorAll(".qtybtn").forEach(кнопка => {
+      кнопка.onclick = () => {
+        const было = parseInt(поле.value, 10);
+        const стало = Math.max(мин, (isNaN(было) ? мин : было) + (+кнопка.dataset.qty));
+        поле.value = стало;
+        // Событие шлём настоящее: экраны уже слушают oninput, и отдельный путь
+        // «а если нажали кнопку» им знать незачем.
+        поле.dispatchEvent(new Event("input", { bubbles: true }));
+        if (приПравке) приПравке(поле);
+      };
+    });
+    const обновить = () => {
+      const n = parseInt(поле.value, 10);
+      узел.querySelector('[data-qty="-1"]').disabled = !isNaN(n) && n <= мин;
+    };
+    поле.addEventListener("input", обновить);
+    обновить();
+  });
+}
+
 // ----- Документы магазина -----
 // Оферта и политика обработки данных. Тексты приходят с сервера, а не зашиты
 // в приложение: правит их владелец из админки, и ждать выкатки ради запятой

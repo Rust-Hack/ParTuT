@@ -554,7 +554,7 @@ function renderEdit(p) {
             <datalist id="edFlavorOpts">${(md ? md.flavors : []).map(f => `<option value="${esc(f)}">`).join("")}</datalist>
             <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
           </div>`
-          : `<label>Остаток (шт.)</label><input id="edStock" inputmode="numeric" value="${p.stock}">`}
+          : `<label>Остаток (шт.)</label>${qtyHtml(p.stock, 'id="edStock"')}`}
         ${editHitBlock(p)}
         <div class="dnote" style="margin-top:12px">Название, характеристики, вкусы и фото — в «Ассортименте»: там они правятся сразу для всех точек.</div>
         <button class="closebtn" id="edToModel" style="margin-top:6px">📚 Открыть модель</button>
@@ -585,7 +585,7 @@ function renderEdit(p) {
         <div class="rowf">
           <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
           <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
-          <div><label>Остаток (шт.)</label><input id="edStock" inputmode="numeric" value="${p.stock}"></div>
+          <div><label>Остаток (шт.)</label>${qtyHtml(p.stock, 'id="edStock"')}</div>
         </div>
         <label>Бренд</label>${pickerHtml("edBrand", p.brand || "", brandNames(p.category), "+ Новый бренд…")}
         <label>Вкус (если есть)</label>${pickerHtml("edFlavor", p.flavor || "", knownFlavors, "+ Новый вкус…")}
@@ -596,6 +596,9 @@ function renderEdit(p) {
         <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
       </div>`;
     bindEditPhoto(); renderEditGallery();
+    // Кнопки –/+ оживляем после отрисовки: разметку собрал qtyHtml,
+    // обработчики вешаются здесь. Вкусы биндятся отдельно — они перерисовываются.
+    bindQty($("editView"));
     bindPicker("edBrand"); bindPicker("edFlavor");
     $("edSave").onclick = () => saveEdit(p);
     return;
@@ -628,6 +631,9 @@ function renderEdit(p) {
     </div>`;
   renderEditVariants();
   bindEditPhoto(); renderEditGallery();
+  // Кнопки –/+ оживляем после отрисовки: разметку собрал qtyHtml,
+  // обработчики вешаются здесь. Вкусы биндятся отдельно — они перерисовываются.
+  bindQty($("editView"));
   $("edAddFlavor").onclick = () => {
     const v = $("edNewFlavor").value.trim(); if (!v) return;
     if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
@@ -639,10 +645,11 @@ function renderEdit(p) {
 function renderEditVariants() {
   $("edVarList").innerHTML = editVariants.length
     ? editVariants.map((v, i) => `<div class="admrow"><div class="an">${esc(v.flavor)}</div>
-        <input class="edvst" data-i="${i}" inputmode="numeric" value="${v.stock}" style="width:64px;text-align:center">
+        ${qtyHtml(v.stock, `class="edvst" data-i="${i}"`)}
         <button class="iconbtn danger" data-vdel="${i}">✕</button></div>`).join("")
     : `<p style="color:var(--hint)">Нет вкусов — добавьте ниже.</p>`;
   $("edVarList").querySelectorAll(".edvst").forEach(inp => inp.oninput = () => { editVariants[+inp.dataset.i].stock = inp.value; });
+  bindQty($("edVarList"));
   $("edVarList").querySelectorAll("[data-vdel]").forEach(b => b.onclick = () => { editVariants.splice(+b.dataset.vdel, 1); renderEditVariants(); });
 }
 

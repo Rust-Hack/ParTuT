@@ -292,7 +292,10 @@
       </div>
 
       <label>Сколько штук</label>
-      <input id="stockQty" inputmode="numeric" placeholder="1">
+      <span class="qty" data-min="1">
+        <button type="button" class="qtybtn" data-qty="-1">−</button>
+        <input id="stockQty" inputmode="numeric" placeholder="1">
+        <button type="button" class="qtybtn" data-qty="1">+</button></span>
 
       <div id="stockCostWrap">
         <label>Закупочная цена за штуку (Br)</label>
