@@ -141,14 +141,83 @@ async function loadDelivery() {
     } catch (e) { deliveryByCity[l.name] = []; pointsByCity[l.name] = []; }
   }));
 }
+// Способ получения — это ОДНО решение: везём мы или человек забирает сам.
+// Всё остальное — следствие, поэтому лишние поля не показываем: на самовывозе
+// не спрашивают «как подписать поле адреса», а на доставке не указывают адрес
+// нашей точки. Форма одна на добавление и на правку, чтобы они не разъезжались.
+function deliveryFormHtml(m, точек) {
+  const везём = m ? !!m.needs_address : true;
+  const зн = x => esc(x == null ? "" : String(x));
+  return `
+    <label>Название</label>
+    <input class="dm-name" value="${зн(m ? m.name : "")}" placeholder="Доставка / Самовывоз">
+    <div class="dlabel">Как клиент получает заказ</div>
+    <div class="modepick">
+      <button type="button" class="opt dm-mode${везём ? " active" : ""}" data-mode="courier">🚚 Везём клиенту<small class="ppnote">Спросим адрес и телефон, можно взять доплату</small></button>
+      <button type="button" class="opt dm-mode${везём ? "" : " active"}" data-mode="pickup">🏬 Клиент забирает сам<small class="ppnote">${точек ? `Выберет одну из ${точек} ${plural(точек, "точки", "точек", "точек")} самовывоза — список ниже` : "Покажем адрес, куда приехать"}</small></button>
+    </div>
+    <div class="dm-courier"${везём ? "" : ` style="display:none"`}>
+      <label>Как подписать поле адреса</label>
+      <input class="dm-alabel" value="${зн(m ? m.address_label : "")}" placeholder="Адрес">
+      <div class="dnote">Так поле называется у клиента: «Адрес», «Станция метро». Телефон на доставке спрашиваем всегда.</div>
+      <label>Доплата за доставку (Br)</label>
+      <input class="dm-fee" inputmode="decimal" value="${зн(m ? (m.fee || 0) : "")}" placeholder="0">
+    </div>
+    <div class="dm-pickup-box"${везём ? ` style="display:none"` : ""}>
+      ${точек
+        ? `<input type="hidden" class="dm-pickup" value="${зн(m ? m.pickup_address : "")}">`
+        : `<label>Адрес, куда приезжать</label>
+           <input class="dm-pickup" value="${зн(m ? m.pickup_address : "")}" placeholder="ул. Немига 5, вход со двора">
+           <div class="dnote">Адрес один. Если их несколько — заведите точки самовывоза ниже, тогда клиент выберет сам.</div>`}
+    </div>
+    <div class="chk"><input type="checkbox" class="dm-pay"${(m ? m.needs_payment : true) ? " checked" : ""}><label style="margin:0">Спросить способ оплаты</label></div>
+    <div class="dnote">Снимите, если платят на месте — тогда клиент не выбирает «картой/наличными».</div>`;
+}
+
+// Переключение режима прячет чужие поля, но НЕ стирает их: значения остаются в
+// разметке, и передумавший админ не теряет то, что уже вписал.
+function bindDeliveryForm(body) {
+  body.querySelectorAll(".dm-mode").forEach(b => b.onclick = () => {
+    body.querySelectorAll(".dm-mode").forEach(x => x.classList.toggle("active", x === b));
+    const везём = b.dataset.mode === "courier";
+    body.querySelector(".dm-courier").style.display = везём ? "" : "none";
+    body.querySelector(".dm-pickup-box").style.display = везём ? "none" : "";
+  });
+}
+
+// Собрать способ из формы. null — значит уже сказали человеку, чего не хватает.
+function собратьСпособ(body) {
+  const точек = +(body.dataset.points || 0);
+  const name = body.querySelector(".dm-name").value.trim();
+  if (!name) { alertMsg("Введите название способа."); return null; }
+  const везём = body.querySelector(`.dm-mode[data-mode="courier"]`).classList.contains("active");
+  const адрес = body.querySelector(".dm-pickup").value.trim();
+  if (!везём && !точек && !адрес) {
+    alertMsg("Укажите адрес самовывоза или заведите точку ниже — иначе клиент не узнает, куда приезжать.");
+    return null;
+  }
+  return {
+    name,
+    needs_address: везём,
+    address_label: body.querySelector(".dm-alabel").value.trim() || (везём ? "Адрес" : ""),
+    pickup_address: адрес,
+    // На самовывозе доплаты за доставку нет. Поле спрятано, и оставить в базе
+    // старое число значило бы брать с покупателя деньги, которых в настройках
+    // не видно.
+    fee: везём ? (body.querySelector(".dm-fee").value || 0) : 0,
+    needs_payment: body.querySelector(".dm-pay").checked,
+  };
+}
+
 function renderLocList() {
   if (!locations.length) { $("locList").innerHTML = `<p style="color:var(--hint)">Локаций пока нет.</p>`; return; }
   $("locList").innerHTML = locations.map(l => {
     const methods = deliveryByCity[l.name] || [];
+    const точек = (pointsByCity[l.name] || []).length;
     const mrows = methods.map(m => {
-      const info = m.needs_address ? `вводит «${esc(m.address_label)}»`
-                 : (pointsByCity[l.name] || []).length ? `выбирает из ${(pointsByCity[l.name] || []).length} точек`
-                 : (m.pickup_address ? esc(m.pickup_address) : "самовывоз");
+      const info = m.needs_address ? `везём клиенту · поле «${esc(m.address_label)}»`
+                 : точек ? `забирает сам · выбор из ${точек} ${plural(точек, "точки", "точек", "точек")}`
+                 : (m.pickup_address ? `забирает сам · ${esc(m.pickup_address)}` : "забирает сам · АДРЕС НЕ УКАЗАН");
       const tail = `${m.fee ? " · +" + m.fee.toFixed(2) + " Br" : ""} · ${m.needs_payment ? "оплата" : "без оплаты"}`;
       return `<div class="admrow" style="background:var(--surface-2);box-shadow:none">
           <div class="an">${esc(m.name)}<small>${info}${tail}</small></div>
@@ -157,13 +226,8 @@ function renderLocList() {
             <button class="iconbtn danger" data-dmdel="${m.id}">🗑</button></div></div>
         <details class="sect" data-dmbox="${m.id}" style="margin:0 0 8px;background:var(--surface-2);box-shadow:none">
           <summary class="secthead" style="font-size:13px">✏️ Изменить «${esc(m.name)}»</summary>
-          <div class="sectbody form">
-            <label>Название</label><input class="dme-name" value="${esc(m.name)}">
-            <div class="chk"><input type="checkbox" class="dme-addr" ${m.needs_address ? "checked" : ""}><label style="margin:0">Спрашивать адрес у клиента</label></div>
-            <label>Метка поля адреса</label><input class="dme-alabel" value="${esc(m.address_label || "")}">
-            <label>Адрес самовывоза (один, показать клиенту)</label><input class="dme-pickup" value="${esc(m.pickup_address || "")}">
-            <label>Доплата за доставку (Br)</label><input class="dme-fee" inputmode="decimal" value="${m.fee || 0}">
-            <div class="chk"><input type="checkbox" class="dme-pay" ${m.needs_payment ? "checked" : ""}><label style="margin:0">Нужна оплата (карта/наличные)</label></div>
+          <div class="sectbody form" data-points="${точек}">
+            ${deliveryFormHtml(m, точек)}
             <button class="bigbtn dm-save" data-mid="${m.id}" style="margin-top:12px">Сохранить</button>
           </div>
         </details>`;
@@ -191,13 +255,8 @@ function renderLocList() {
 
       <details class="sect" style="margin:8px 0 0;background:var(--surface-2);box-shadow:none">
         <summary class="secthead" style="font-size:14px">➕ Добавить способ</summary>
-        <div class="sectbody form" data-city="${esc(l.name)}">
-          <label>Название</label><input class="dm-name" placeholder="Самовывоз / Доставка">
-          <div class="chk"><input type="checkbox" class="dm-addr"><label style="margin:0">Спрашивать адрес у клиента</label></div>
-          <label>Метка поля адреса</label><input class="dm-alabel" placeholder="Адрес / Станция метро">
-          <label>Адрес самовывоза (один, показать клиенту)</label><input class="dm-pickup" placeholder="ул. …, где отдаёте товар">
-          <label>Доплата за доставку (Br)</label><input class="dm-fee" inputmode="decimal" placeholder="0">
-          <div class="chk"><input type="checkbox" class="dm-pay" checked><label style="margin:0">Нужна оплата (карта/наличные)</label></div>
+        <div class="sectbody form" data-city="${esc(l.name)}" data-points="${точек}">
+          ${deliveryFormHtml(null, точек)}
           <button class="bigbtn dm-add" style="margin-top:12px">Добавить способ</button>
         </div>
       </details>
@@ -206,6 +265,7 @@ function renderLocList() {
   $("locList").querySelectorAll("[data-locdel]").forEach(b => b.onclick = () => delLocation(+b.dataset.locdel));
   $("locList").querySelectorAll("[data-dmdel]").forEach(b => b.onclick = () => delDeliveryMethod(+b.dataset.dmdel));
   $("locList").querySelectorAll(".dm-add").forEach(b => b.onclick = () => addDeliveryMethod(b));
+  $("locList").querySelectorAll(".sectbody.form").forEach(body => { if (body.querySelector(".dm-mode")) bindDeliveryForm(body); });
   $("locList").querySelectorAll("[data-dmedit]").forEach(b => b.onclick = () => {
     const box = $("locList").querySelector(`[data-dmbox="${b.dataset.dmedit}"]`);
     if (box) { box.open = !box.open; if (box.open) box.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
@@ -239,14 +299,9 @@ async function doDelPickupPoint(id) {
 }
 async function saveDeliveryMethod(btn) {
   const body = btn.closest(".sectbody");
-  const name = body.querySelector(".dme-name").value.trim();
-  if (!name) { alertMsg("Введите название способа."); return; }
-  const payload = { initData, id: +btn.dataset.mid, name,
-    needs_address: body.querySelector(".dme-addr").checked,
-    address_label: body.querySelector(".dme-alabel").value.trim(),
-    pickup_address: body.querySelector(".dme-pickup").value.trim(),
-    fee: body.querySelector(".dme-fee").value || 0,
-    needs_payment: body.querySelector(".dme-pay").checked };
+  const форма = собратьСпособ(body);
+  if (!форма) return;
+  const payload = Object.assign({ initData, id: +btn.dataset.mid }, форма);
   try {
     const r = await fetch("/api/admin/delivery/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const d = await r.json();
@@ -256,14 +311,9 @@ async function saveDeliveryMethod(btn) {
 }
 async function addDeliveryMethod(btn) {
   const body = btn.closest(".sectbody");
-  const name = body.querySelector(".dm-name").value.trim();
-  if (!name) { alertMsg("Введите название способа."); return; }
-  const payload = { initData, city: body.dataset.city, name,
-    needs_address: body.querySelector(".dm-addr").checked,
-    address_label: body.querySelector(".dm-alabel").value.trim(),
-    pickup_address: body.querySelector(".dm-pickup").value.trim(),
-    fee: body.querySelector(".dm-fee").value || 0,
-    needs_payment: body.querySelector(".dm-pay").checked };
+  const форма = собратьСпособ(body);
+  if (!форма) return;
+  const payload = Object.assign({ initData, city: body.dataset.city }, форма);
   try {
     const r = await fetch("/api/admin/delivery", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const d = await r.json();

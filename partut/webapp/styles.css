@@ -248,6 +248,12 @@ html[data-theme="dark"] .ucard { border: 1px solid rgba(95,242,242,.20); box-sha
 .opt { position: relative; width: 100%; text-align: left; background: var(--surface-2); color: var(--text); border: 2px solid transparent; padding: 13px 34px 13px 15px; border-radius: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }
 .dlabel { font-weight: 700; color: var(--hint); font-size: 13px; margin: 14px 0 8px; }
 .paypick { display: flex; gap: 8px; }
+/* Выбор способа получения в админке стоит НА серой подложке карточки, поэтому
+   кнопки берут белую: иначе выбор сливается с фоном и не читается как кнопки.
+   Строками, а не рядом: под каждым вариантом есть пояснение, что произойдёт, а
+   в двух узких колонках оно не помещается. */
+.modepick .opt { background: var(--surface); }
+.modepick .opt:last-child { margin-bottom: 0; }
 .paypick .opt { flex: 1; text-align: center; margin-bottom: 0; }
 .dpickup { background: var(--surface-2); border-radius: 13px; padding: 14px; font-size: 14px; font-weight: 600; }
 .dnote { color: var(--hint); font-size: 13.5px; padding: 4px 2px; }
