@@ -119,8 +119,19 @@ function renderDelivery() {
   let extra = "";
   if (selMethod !== null) {
     const m = deliveryMethods[selMethod];
+    // Точка одна и способ самовывозный — выбирать нечего, подставляем её.
+    // Проверка «выбрана ли точка» на сервере остаётся: она защищает от
+    // подделанного запроса, а не от нерешительного покупателя.
+    if (!m.needs_address && pickupPoints.length === 1) selPoint = pickupPoints[0].id;
     if (m.needs_address) {
       extra += `<div class="dlabel">${esc(m.address_label)}</div><input id="delAddr" class="admsearch" placeholder="${esc(m.address_label)}" value="${esc(selAddress)}">`;
+    } else if (pickupPoints.length === 1) {
+      // Один адрес — это не выбор. Кнопка «выберите из одного варианта»
+      // требует действия там, где решать нечего; показываем просто адрес,
+      // а точку подставляем сами (см. ниже, перед отрисовкой).
+      const т = pickupPoints[0];
+      extra += `<div class="dlabel">Куда приехать</div>`;
+      extra += `<div class="dpickup">📍 ${esc(т.address)}${т.note ? `<small class="ppnote">${esc(т.note)}</small>` : ""}</div>`;
     } else if (pickupPoints.length) {
       // Точки заведены — значит их и выбирают. Никакого скрытого
       // переключателя: функция, которую нужно найти в настройках способа,
@@ -129,6 +140,8 @@ function renderDelivery() {
       extra += pickupPoints.map(p => `<button class="opt ${selPoint === p.id ? 'active' : ''}" data-pp="${p.id}">
              ${esc(p.address)}${p.note ? `<small class="ppnote">${esc(p.note)}</small>` : ""}</button>`).join("");
     } else if (m.pickup_address) {
+      // Осталось от старых настроек, где адрес хранился в самом способе.
+      // Новый адрес так уже не завести, но показать старый обязаны.
       extra += `<div class="dpickup">📍 ${esc(m.pickup_address)}</div>`;
     }
     if (m.needs_payment) {

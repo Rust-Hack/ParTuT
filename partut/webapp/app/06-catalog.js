@@ -154,7 +154,9 @@ function deliveryFormHtml(m, точек) {
     <div class="dlabel">Как клиент получает заказ</div>
     <div class="modepick">
       <button type="button" class="opt dm-mode${везём ? " active" : ""}" data-mode="courier">🚚 Везём клиенту<small class="ppnote">Спросим адрес и телефон, можно взять доплату</small></button>
-      <button type="button" class="opt dm-mode${везём ? "" : " active"}" data-mode="pickup">🏬 Клиент забирает сам<small class="ppnote">${точек ? `Выберет одну из ${точек} ${plural(точек, "точки", "точек", "точек")} самовывоза — список ниже` : "Покажем адрес, куда приехать"}</small></button>
+      <button type="button" class="opt dm-mode${везём ? "" : " active"}" data-mode="pickup">🏬 Клиент забирает сам<small class="ppnote">${точек === 1 ? "Покажем адрес точки самовывоза"
+        : точек ? `Выберет одну из ${точек} ${plural(точек, "точки", "точек", "точек")} самовывоза`
+        : "Точек самовывоза нет — сначала заведите"}</small></button>
     </div>
     <div class="dm-courier"${везём ? "" : ` style="display:none"`}>
       <label>Как подписать поле адреса</label>
@@ -164,11 +166,7 @@ function deliveryFormHtml(m, точек) {
       <input class="dm-fee" inputmode="decimal" value="${зн(m ? (m.fee || 0) : "")}" placeholder="0">
     </div>
     <div class="dm-pickup-box"${везём ? ` style="display:none"` : ""}>
-      ${точек
-        ? `<input type="hidden" class="dm-pickup" value="${зн(m ? m.pickup_address : "")}">`
-        : `<label>Адрес, куда приезжать</label>
-           <input class="dm-pickup" value="${зн(m ? m.pickup_address : "")}" placeholder="ул. Немига 5, вход со двора">
-           <div class="dnote">Адрес один. Если их несколько — заведите точки самовывоза ниже, тогда клиент выберет сам.</div>`}
+      ${точек ? "" : `<div class="dwarn">Сначала заведите точку самовывоза выше — иначе клиенту некуда приехать, и способ работать не будет.</div>`}
     </div>
     <div class="chk"><input type="checkbox" class="dm-pay"${(m ? m.needs_payment : true) ? " checked" : ""}><label style="margin:0">Спросить способ оплаты</label></div>
     <div class="dnote">Снимите, если платят на месте — тогда клиент не выбирает «картой/наличными».</div>`;
@@ -191,16 +189,18 @@ function собратьСпособ(body) {
   const name = body.querySelector(".dm-name").value.trim();
   if (!name) { alertMsg("Введите название способа."); return null; }
   const везём = body.querySelector(`.dm-mode[data-mode="courier"]`).classList.contains("active");
-  const адрес = body.querySelector(".dm-pickup").value.trim();
-  if (!везём && !точек && !адрес) {
-    alertMsg("Укажите адрес самовывоза или заведите точку ниже — иначе клиент не узнает, куда приезжать.");
+  if (!везём && !точек) {
+    alertMsg("Сначала заведите точку самовывоза — иначе клиенту некуда приехать.");
     return null;
   }
   return {
     name,
     needs_address: везём,
     address_label: body.querySelector(".dm-alabel").value.trim() || (везём ? "Адрес" : ""),
-    pickup_address: адрес,
+    // Адрес самовывоза теперь ОДИН на город — список точек. Старую строку в
+    // способе чистим: два места для одного адреса и были причиной путаницы,
+    // а пропавший адрес уже перенесён в точки (перенос 0006).
+    pickup_address: "",
     // На самовывозе доплаты за доставку нет. Поле спрятано, и оставить в базе
     // старое число значило бы брать с покупателя деньги, которых в настройках
     // не видно.
@@ -216,16 +216,18 @@ function renderLocList() {
     const точек = (pointsByCity[l.name] || []).length;
     const mrows = methods.map(m => {
       const info = m.needs_address ? `везём клиенту · поле «${esc(m.address_label)}»`
+                 : точек === 1 ? `забирает сам · ${esc((pointsByCity[l.name] || [])[0].address)}`
                  : точек ? `забирает сам · выбор из ${точек} ${plural(точек, "точки", "точек", "точек")}`
-                 : (m.pickup_address ? `забирает сам · ${esc(m.pickup_address)}` : "забирает сам · АДРЕС НЕ УКАЗАН");
+                 : "забирает сам · ⚠️ ТОЧЕК НЕТ";
       const tail = `${m.fee ? " · +" + m.fee.toFixed(2) + " Br" : ""} · ${m.needs_payment ? "оплата" : "без оплаты"}`;
-      return `<div class="admrow" style="background:var(--surface-2);box-shadow:none">
-          <div class="an">${esc(m.name)}<small>${info}${tail}</small></div>
-          <div style="display:flex;gap:6px">
-            <button class="iconbtn" data-dmedit="${m.id}">✏️</button>
-            <button class="iconbtn danger" data-dmdel="${m.id}">🗑</button></div></div>
-        <details class="sect" data-dmbox="${m.id}" style="margin:0 0 8px;background:var(--surface-2);box-shadow:none">
-          <summary class="secthead" style="font-size:13px">✏️ Изменить «${esc(m.name)}»</summary>
+      // Строка способа И ЕСТЬ кнопка правки: раньше рядом жили карандаш и
+      // отдельная полоска «Изменить «X»» — два органа управления на одно
+      // действие и две строки на способ.
+      return `<details class="sect" data-dmbox="${m.id}" style="margin:0 0 8px;background:var(--surface-2);box-shadow:none">
+          <summary class="secthead dmhead">
+            <span class="an">${esc(m.name)}<small>${info}${tail}</small></span>
+            <button class="iconbtn danger" data-dmdel="${m.id}">🗑</button>
+          </summary>
           <div class="sectbody form" data-points="${точек}">
             ${deliveryFormHtml(m, точек)}
             <button class="bigbtn dm-save" data-mid="${m.id}" style="margin-top:12px">Сохранить</button>
@@ -236,23 +238,23 @@ function renderLocList() {
       <div class="admrow" style="padding:0;background:none;box-shadow:none">
         <div class="an" style="font-weight:800;font-size:15px">${esc(l.name)}</div>
         <button class="iconbtn danger" data-locdel="${l.id}">🗑</button></div>
-      <div class="dlabel" style="margin:10px 0 6px">Способы получения</div>
-      ${mrows}
-      <div class="dlabel" style="margin:14px 0 6px">Точки самовывоза</div>
+      <div class="dlabel" style="margin:10px 0 6px">📍 Куда клиент может приехать</div>
       ${(pointsByCity[l.name] || []).map(p => `
         <div class="admrow" style="background:var(--surface-2);box-shadow:none">
           <div class="an">${esc(p.address)}${p.note ? `<small>${esc(p.note)}</small>` : ""}</div>
           <button class="iconbtn danger" data-ppdel="${p.id}">🗑</button></div>`).join("")
-        || `<p style="color:var(--hint);font-size:13px;margin:4px 0">Точек ещё нет. Пока их нет, способ «выбирает из списка» работать не будет.</p>`}
+        || `<p style="color:var(--hint);font-size:13px;margin:4px 0">Адресов ещё нет. Пока нет ни одного, самовывоз работать не будет: клиенту некуда приехать.</p>`}
       <details class="sect" style="margin:8px 0 0;background:var(--surface-2);box-shadow:none">
-        <summary class="secthead" style="font-size:14px">➕ Добавить точку самовывоза</summary>
+        <summary class="secthead" style="font-size:14px">➕ Добавить адрес</summary>
         <div class="sectbody form" data-ptcity="${esc(l.name)}">
           <label>Адрес</label><input class="pp-addr" placeholder="ул. Немига 5, вход со двора">
           <label>Примечание (когда работает, ориентир)</label><input class="pp-note" placeholder="10:00–21:00">
-          <button class="bigbtn pp-add" style="margin-top:12px">Добавить точку</button>
+          <button class="bigbtn pp-add" style="margin-top:12px">Добавить адрес</button>
         </div>
       </details>
 
+      <div class="dlabel" style="margin:16px 0 6px">🚚 Способы получения</div>
+      ${mrows}
       <details class="sect" style="margin:8px 0 0;background:var(--surface-2);box-shadow:none">
         <summary class="secthead" style="font-size:14px">➕ Добавить способ</summary>
         <div class="sectbody form" data-city="${esc(l.name)}" data-points="${точек}">
@@ -263,13 +265,14 @@ function renderLocList() {
     </div>`;
   }).join("");
   $("locList").querySelectorAll("[data-locdel]").forEach(b => b.onclick = () => delLocation(+b.dataset.locdel));
-  $("locList").querySelectorAll("[data-dmdel]").forEach(b => b.onclick = () => delDeliveryMethod(+b.dataset.dmdel));
+  $("locList").querySelectorAll("[data-dmdel]").forEach(b => b.onclick = e => {
+    // Кнопка живёт внутри summary: без этого нажатие заодно раскрывало бы
+    // форму правки под вопросом «удалить?».
+    e.preventDefault(); e.stopPropagation();
+    delDeliveryMethod(+b.dataset.dmdel);
+  });
   $("locList").querySelectorAll(".dm-add").forEach(b => b.onclick = () => addDeliveryMethod(b));
   $("locList").querySelectorAll(".sectbody.form").forEach(body => { if (body.querySelector(".dm-mode")) bindDeliveryForm(body); });
-  $("locList").querySelectorAll("[data-dmedit]").forEach(b => b.onclick = () => {
-    const box = $("locList").querySelector(`[data-dmbox="${b.dataset.dmedit}"]`);
-    if (box) { box.open = !box.open; if (box.open) box.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
-  });
   $("locList").querySelectorAll(".dm-save").forEach(b => b.onclick = () => saveDeliveryMethod(b));
   $("locList").querySelectorAll(".pp-add").forEach(b => b.onclick = () => addPickupPoint(b));
   $("locList").querySelectorAll("[data-ppdel]").forEach(b => b.onclick = () => delPickupPoint(+b.dataset.ppdel));
