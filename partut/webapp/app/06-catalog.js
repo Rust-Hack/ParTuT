@@ -556,11 +556,14 @@ function renderEdit(p) {
           </div>`
           : `<label>Остаток (шт.)</label>${qtyHtml(p.stock, 'id="edStock"')}`}
         ${editHitBlock(p)}
+        <label style="margin-top:18px">Точки продаж</label>
+        <div id="edPoints"></div>
         <div class="dnote" style="margin-top:12px">Название, характеристики, вкусы и фото — в «Ассортименте»: там они правятся сразу для всех точек.</div>
         <button class="closebtn" id="edToModel" style="margin-top:6px">📚 Открыть модель</button>
         <button class="bigbtn" id="edSave" style="margin-top:10px">Сохранить</button>
       </div>`;
     if (isVar) renderEditVariants();
+    renderEditPoints(p, md);
     if ($("edAddFlavor")) $("edAddFlavor").onclick = () => {
       const v = $("edNewFlavor").value.trim(); if (!v) return;
       if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
@@ -642,6 +645,94 @@ function renderEdit(p) {
   $("edSave").onclick = () => saveEdit(p);
 }
 
+// ----- Точки продаж прямо в карточке товара -----
+// Один товар живёт на нескольких точках: в базе это «модель», а на каждой точке
+// своя запись со своей ценой и своим остатком. Механизм был, но добраться до
+// него можно было только через «Ассортимент» — и казалось, что для второго
+// города надо заводить товар заново.
+//
+// Здесь видно, где товар уже стоит, и можно завезти его ещё куда-то, не уходя
+// с экрана. Цена и остаток у каждой точки свои: одна цифра на всех была бы
+// удобнее в вводе и неверной по сути.
+let editNewPoints = {};        // город -> { price, cost, variants: {вкус: шт} }
+
+function renderEditPoints(p, md) {
+  const узел = $("edPoints");
+  if (!узел) return;
+  editNewPoints = {};
+
+  const мой = myScope();
+  const вкусы = (md && md.flavors && md.flavors.length) ? md.flavors : [];
+  // Где эта модель уже есть. Свою же запись показываем как «эта карточка».
+  const где = {};
+  shelf().filter(x => x.model_id === p.model_id).forEach(x => { где[x.city] = x; });
+
+  const города = locations
+    .map(l => l.name)
+    // Продавец точки заводит товар только к себе: чужую точку сервер всё равно
+    // отклонит, и показывать её значило бы обещать невыполнимое.
+    .filter(имя => !мой || имя === мой);
+
+  узел.innerHTML = города.map(имя => {
+    const уже = где[имя];
+    if (уже) {
+      const свой = уже.id === p.id;
+      return `<div class="admrow"><div class="an">${esc(имя)}
+        <small>${свой ? "эта карточка" : `${(+уже.price).toFixed(2)} Br · ${уже.stock} шт`}</small></div>
+        ${свой ? "" : `<button class="closebtn" style="width:auto;padding:6px 12px"
+             data-gopoint="${уже.id}">Открыть</button>`}</div>`;
+    }
+    return `<div class="pointadd" data-city="${esc(имя)}">
+      <label class="an" style="display:flex;gap:8px;align-items:center;font-weight:600">
+        <input type="checkbox" class="pchk" style="width:auto"> Завезти в «${esc(имя)}»</label>
+      <div class="pbody" style="display:none">
+        <div class="rowf">
+          <div><label>Цена (Br)</label><input class="pprice" inputmode="decimal" value="${p.price}"></div>
+          <div><label>Закупка (Br)</label><input class="pcost" inputmode="decimal" value="${p.cost || ""}"></div>
+        </div>
+        ${вкусы.length
+          ? `<label>Вкусы и остаток</label>` + вкусы.map(f =>
+              `<div class="admrow" data-flavor="${esc(f)}"><div class="an">${esc(f)}</div>
+               ${qtyHtml(0, 'class="pfst"')}</div>`).join("")
+          : `<label>Остаток (шт.)</label>${qtyHtml(0, 'class="pstock"')}`}
+      </div></div>`;
+  }).join("") || `<p style="color:var(--hint)">Точек продаж пока нет.</p>`;
+
+  // Раскрываем поля только у отмеченных: иначе экран сразу вырастает на три
+  // экрана вниз, и нужное поле приходится искать прокруткой.
+  узел.querySelectorAll(".pointadd").forEach(блок => {
+    const чек = блок.querySelector(".pchk");
+    чек.onchange = () => {
+      блок.querySelector(".pbody").style.display = чек.checked ? "" : "none";
+      if (чек.checked) bindQty(блок);
+    };
+  });
+  // openEdit ждёт id, а не сам товар: перепутать легко, а падает молча —
+  // экран просто не открывается.
+  узел.querySelectorAll("[data-gopoint]").forEach(b => b.onclick = () => openEdit(+b.dataset.gopoint));
+}
+
+// Собирает завоз с экрана. Возвращает список того, что надо создать.
+function собратьНовыеТочки() {
+  const узел = $("edPoints");
+  if (!узел) return [];
+  return [...узел.querySelectorAll(".pointadd")]
+    .filter(б => б.querySelector(".pchk").checked)
+    .map(б => {
+      const вкусы = [...б.querySelectorAll("[data-flavor]")].map(строка => ({
+        flavor: строка.dataset.flavor,
+        stock: строка.querySelector(".pfst").value || "0",
+      }));
+      return {
+        city: б.dataset.city,
+        price: б.querySelector(".pprice").value.trim(),
+        cost: б.querySelector(".pcost").value.trim(),
+        variants: вкусы.length ? вкусы : null,
+        stock: вкусы.length ? null : (б.querySelector(".pstock").value || "0"),
+      };
+    });
+}
+
 function renderEditVariants() {
   $("edVarList").innerHTML = editVariants.length
     ? editVariants.map((v, i) => `<div class="admrow"><div class="an">${esc(v.flavor)}</div>
@@ -651,6 +742,43 @@ function renderEditVariants() {
   $("edVarList").querySelectorAll(".edvst").forEach(inp => inp.oninput = () => { editVariants[+inp.dataset.i].stock = inp.value; });
   bindQty($("edVarList"));
   $("edVarList").querySelectorAll("[data-vdel]").forEach(b => b.onclick = () => { editVariants.splice(+b.dataset.vdel, 1); renderEditVariants(); });
+}
+
+// Заводит товар на отмеченных точках. Возвращает строку для человека или "".
+//
+// Ходим по точкам по одной той же ручкой, что и «Завезти на точку»: она уже
+// проверяет права, цену, закупку и повтор. Своя ручка «сразу на несколько»
+// означала бы второй экземпляр этих проверок, и они бы разошлись.
+//
+// Про каждую точку отвечаем отдельно: «завезено на две из трёх» — правда, а
+// молчаливое «сохранено» после половины сделанного — нет.
+async function завезтиНаТочки(p) {
+  const точки = собратьНовыеТочки();
+  if (!точки.length) return "";
+  const удачно = [], беды = [];
+  for (const т of точки) {
+    if (!т.price) { беды.push(`${т.city}: не указана цена`); continue; }
+    // Закупку требуем так же, как в «Завезти на точку»: незаполненная навсегда
+    // выбрасывает товар из подсчёта прибыли, и отчёт занижает заработок молча.
+    if (!т.cost) { беды.push(`${т.city}: не указана закупка (если её не было — поставьте 0)`); continue; }
+    const тело = { initData, model_id: p.model_id, city: т.city,
+                   price: т.price, cost: т.cost, is_hit: 0 };
+    if (т.variants) тело.variants = т.variants; else тело.stock = т.stock;
+    try {
+      const r = await fetch("/api/admin/product/from-model", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(тело) });
+      const d = await r.json();
+      if (d.ok) удачно.push(т.city);
+      else беды.push(`${т.city}: ` + (d.error === "already_here" ? "товар уже там"
+                   : d.error === "bad_price" ? "цена должна быть больше нуля"
+                   : d.message || "не удалось завезти"));
+    } catch (e) { беды.push(`${т.city}: сеть недоступна`); }
+  }
+  const строки = [];
+  if (удачно.length) строки.push("Завезено: " + удачно.join(", "));
+  if (беды.length) строки.push("Не получилось — " + беды.join("; "));
+  return строки.join("\n");
 }
 
 async function saveEdit(p) {
@@ -671,9 +799,12 @@ async function saveEdit(p) {
       }
       await upd("city", $("edCity").value);
       await upd("is_hit", $("edHit").checked ? 1 : 0);
+      // Отмеченные точки — уже после того, как своя карточка сохранена: если
+      // завоз упадёт, правки цены и остатка всё равно на месте.
+      const итог = await завезтиНаТочки(p);
       await refreshProducts();
       $("editView").classList.remove("show");
-      alertMsg("Сохранено ✅");
+      alertMsg(итог ? "Сохранено ✅\n\n" + итог : "Сохранено ✅");
       return;
     }
     const specs = collectSpecs("edSpecs");

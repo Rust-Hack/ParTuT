@@ -881,3 +881,9 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 }
 .qtybtn:active { background: var(--accent-soft) }
 .qtybtn:disabled { opacity: .35; cursor: default }
+
+/* Завоз товара на другую точку прямо из карточки.
+   Поля раскрываются только у отмеченного города: иначе экран сразу вырастает
+   на три экрана вниз, и нужное поле приходится искать прокруткой. */
+.pointadd { border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin: 0 0 10px }
+.pointadd .pbody { margin-top: 12px }
