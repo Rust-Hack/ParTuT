@@ -651,86 +651,132 @@ function renderEdit(p) {
 // него можно было только через «Ассортимент» — и казалось, что для второго
 // города надо заводить товар заново.
 //
-// Здесь видно, где товар уже стоит, и можно завезти его ещё куда-то, не уходя
-// с экрана. Цена и остаток у каждой точки свои: одна цифра на всех была бы
-// удобнее в вводе и неверной по сути.
-let editNewPoints = {};        // город -> { price, cost, variants: {вкус: шт} }
+// Галочка отвечает на вопрос «есть ли этот товар на точке». Снять её — значит
+// убрать товар с точки, и это делается по-настоящему, с подтверждением: иначе
+// галочка врала бы, а вранью в интерфейсе цена — доверие ко всему остальному.
+let editPointFlavors = {};     // город -> [вкусы], выбранные для этой точки
+
+function editPointList(p, md) {
+  // Что вообще можно предложить: вкусы модели плюс те, что уже стоят на этой
+  // точке. Второе важно: вкус, заведённый в карточке до того, как ручки стали
+  // подтягивать его в модель, иначе пропал бы из выбора.
+  const из_модели = (md && md.flavors) || [];
+  const свои = (p.variants || []).map(v => v.flavor);
+  const все = [];
+  const видели = new Set();
+  [...из_модели, ...свои].forEach(f => {
+    const ключ = String(f || "").trim().toLowerCase();
+    if (ключ && !видели.has(ключ)) { видели.add(ключ); все.push(String(f).trim()); }
+  });
+  return все;
+}
 
 function renderEditPoints(p, md) {
   const узел = $("edPoints");
   if (!узел) return;
-  editNewPoints = {};
-
   const мой = myScope();
-  const вкусы = (md && md.flavors && md.flavors.length) ? md.flavors : [];
-  // Где эта модель уже есть. Свою же запись показываем как «эта карточка».
+  const вкусы = editPointList(p, md);
+  editPointFlavors = {};
+
   const где = {};
   shelf().filter(x => x.model_id === p.model_id).forEach(x => { где[x.city] = x; });
-
-  const города = locations
-    .map(l => l.name)
-    // Продавец точки заводит товар только к себе: чужую точку сервер всё равно
-    // отклонит, и показывать её значило бы обещать невыполнимое.
-    .filter(имя => !мой || имя === мой);
+  const города = locations.map(l => l.name).filter(имя => !мой || имя === мой);
 
   узел.innerHTML = города.map(имя => {
     const уже = где[имя];
+    const свой = уже && уже.id === p.id;
     if (уже) {
-      const свой = уже.id === p.id;
-      return `<div class="admrow"><div class="an">${esc(имя)}
-        <small>${свой ? "эта карточка" : `${(+уже.price).toFixed(2)} Br · ${уже.stock} шт`}</small></div>
-        ${свой ? "" : `<button class="closebtn" style="width:auto;padding:6px 12px"
-             data-gopoint="${уже.id}">Открыть</button>`}</div>`;
+      return `<div class="pointrow" data-city="${esc(имя)}" data-have="${уже.id}">
+        <label class="an" style="display:flex;gap:8px;align-items:center;font-weight:600">
+          <input type="checkbox" class="pchk" style="width:auto" checked ${свой ? "disabled" : ""}>
+          Есть на точке «${esc(имя)}»</label>
+        <div class="dnote" style="margin:6px 0 0">${свой
+          ? "эта карточка"
+          : `${(+уже.price).toFixed(2)} Br · ${уже.stock} шт · <a data-gopoint="${уже.id}">открыть</a>`}</div>
+      </div>`;
     }
-    return `<div class="pointadd" data-city="${esc(имя)}">
+    return `<div class="pointrow pointadd" data-city="${esc(имя)}">
       <label class="an" style="display:flex;gap:8px;align-items:center;font-weight:600">
-        <input type="checkbox" class="pchk" style="width:auto"> Завезти в «${esc(имя)}»</label>
+        <input type="checkbox" class="pchk" style="width:auto"> Есть на точке «${esc(имя)}»</label>
       <div class="pbody" style="display:none">
         <div class="rowf">
           <div><label>Цена (Br)</label><input class="pprice" inputmode="decimal" value="${p.price}"></div>
           <div><label>Закупка (Br)</label><input class="pcost" inputmode="decimal" value="${p.cost || ""}"></div>
         </div>
         ${вкусы.length
-          ? `<label>Вкусы и остаток</label>` + вкусы.map(f =>
-              `<div class="admrow" data-flavor="${esc(f)}"><div class="an">${esc(f)}</div>
-               ${qtyHtml(0, 'class="pfst"')}</div>`).join("")
+          ? `<label>Какие вкусы есть на точке «${esc(имя)}»</label><div class="pflavors"></div>`
           : `<label>Остаток (шт.)</label>${qtyHtml(0, 'class="pstock"')}`}
+        ${вкусы.length ? `<div style="display:flex;gap:8px;margin-top:10px">
+            <input class="pnewflavor" placeholder="Добавить вкус" style="flex:1" list="edFlavorOpts">
+            <button class="iconbtn ok pnewadd" style="width:auto;padding:0 16px">＋</button></div>` : ""}
       </div></div>`;
   }).join("") || `<p style="color:var(--hint)">Точек продаж пока нет.</p>`;
 
-  // Раскрываем поля только у отмеченных: иначе экран сразу вырастает на три
-  // экрана вниз, и нужное поле приходится искать прокруткой.
+  города.forEach(имя => { if (!где[имя]) editPointFlavors[имя] = [...вкусы]; });
+
   узел.querySelectorAll(".pointadd").forEach(блок => {
+    const город = блок.dataset.city;
     const чек = блок.querySelector(".pchk");
     чек.onchange = () => {
       блок.querySelector(".pbody").style.display = чек.checked ? "" : "none";
-      if (чек.checked) bindQty(блок);
+      if (чек.checked) renderPointFlavors(блок, город);
+    };
+    const добавить = блок.querySelector(".pnewadd");
+    if (добавить) добавить.onclick = () => {
+      const поле = блок.querySelector(".pnewflavor");
+      const имя_вкуса = поле.value.trim();
+      if (!имя_вкуса) return;
+      const есть = editPointFlavors[город].some(f => f.toLowerCase() === имя_вкуса.toLowerCase());
+      if (!есть) editPointFlavors[город].push(имя_вкуса);
+      поле.value = "";
+      renderPointFlavors(блок, город);
     };
   });
-  // openEdit ждёт id, а не сам товар: перепутать легко, а падает молча —
-  // экран просто не открывается.
+
   узел.querySelectorAll("[data-gopoint]").forEach(b => b.onclick = () => openEdit(+b.dataset.gopoint));
 }
 
-// Собирает завоз с экрана. Возвращает список того, что надо создать.
-function собратьНовыеТочки() {
+// Вкусы одной точки: галочка «этот вкус тут есть» + количество.
+// Галочки, а не просто количества: на точку привозят не весь ассортимент, и
+// нули по всем вкусам, кроме одного, — это не выбор, а лишняя работа.
+function renderPointFlavors(блок, город) {
+  const где = блок.querySelector(".pflavors");
+  if (!где) return;
+  где.innerHTML = editPointFlavors[город].map(f =>
+    `<div class="admrow" data-flavor="${esc(f)}">
+       <label class="an" style="display:flex;gap:8px;align-items:center;font-weight:600">
+         <input type="checkbox" class="pfchk" style="width:auto" checked> ${esc(f)}</label>
+       ${qtyHtml(0, 'class="pfst"')}</div>`).join("");
+  bindQty(где);
+}
+
+// Собирает с экрана: что завести и что убрать.
+function собратьТочки() {
   const узел = $("edPoints");
-  if (!узел) return [];
-  return [...узел.querySelectorAll(".pointadd")]
+  if (!узел) return { завести: [], убрать: [] };
+
+  const завести = [...узел.querySelectorAll(".pointadd")]
     .filter(б => б.querySelector(".pchk").checked)
     .map(б => {
-      const вкусы = [...б.querySelectorAll("[data-flavor]")].map(строка => ({
-        flavor: строка.dataset.flavor,
-        stock: строка.querySelector(".pfst").value || "0",
-      }));
+      const вкусы = [...б.querySelectorAll("[data-flavor]")]
+        .filter(строка => строка.querySelector(".pfchk").checked)
+        .map(строка => ({ flavor: строка.dataset.flavor,
+                          stock: строка.querySelector(".pfst").value || "0" }));
+      const поле = б.querySelector(".pstock");
       return {
         city: б.dataset.city,
         price: б.querySelector(".pprice").value.trim(),
         cost: б.querySelector(".pcost").value.trim(),
-        variants: вкусы.length ? вкусы : null,
-        stock: вкусы.length ? null : (б.querySelector(".pstock").value || "0"),
+        variants: поле ? null : вкусы,
+        stock: поле ? (поле.value || "0") : null,
       };
     });
+
+  const убрать = [...узел.querySelectorAll(".pointrow[data-have]")]
+    .filter(б => !б.querySelector(".pchk").checked && !б.querySelector(".pchk").disabled)
+    .map(б => ({ city: б.dataset.city, id: +б.dataset.have }));
+
+  return { завести, убрать };
 }
 
 function renderEditVariants() {
@@ -744,23 +790,25 @@ function renderEditVariants() {
   $("edVarList").querySelectorAll("[data-vdel]").forEach(b => b.onclick = () => { editVariants.splice(+b.dataset.vdel, 1); renderEditVariants(); });
 }
 
-// Заводит товар на отмеченных точках. Возвращает строку для человека или "".
+// Приводит точки к тому, что отмечено на экране: заводит новые, убирает снятые.
+// Возвращает строку для человека или "".
 //
-// Ходим по точкам по одной той же ручкой, что и «Завезти на точку»: она уже
+// Ходим по точкам по одной той же ручкой, что и «Добавить на точку»: она уже
 // проверяет права, цену, закупку и повтор. Своя ручка «сразу на несколько»
-// означала бы второй экземпляр этих проверок, и они бы разошлись.
+// означала бы второй экземпляр этих проверок, и однажды они бы разошлись.
 //
-// Про каждую точку отвечаем отдельно: «завезено на две из трёх» — правда, а
-// молчаливое «сохранено» после половины сделанного — нет.
-async function завезтиНаТочки(p) {
-  const точки = собратьНовыеТочки();
-  if (!точки.length) return "";
-  const удачно = [], беды = [];
-  for (const т of точки) {
+// Про каждую точку отвечаем отдельно: «завели в Турове, в Лунинце не вышло» —
+// правда, а молчаливое «сохранено» после половины сделанного — нет.
+async function применитьТочки(p, убрать) {
+  const { завести } = собратьТочки();
+  const удачно = [], убраны = [], беды = [];
+
+  for (const т of завести) {
     if (!т.price) { беды.push(`${т.city}: не указана цена`); continue; }
-    // Закупку требуем так же, как в «Завезти на точку»: незаполненная навсегда
+    // Закупку требуем так же, как на отдельном экране: незаполненная навсегда
     // выбрасывает товар из подсчёта прибыли, и отчёт занижает заработок молча.
     if (!т.cost) { беды.push(`${т.city}: не указана закупка (если её не было — поставьте 0)`); continue; }
+    if (т.variants && !т.variants.length) { беды.push(`${т.city}: не отмечен ни один вкус`); continue; }
     const тело = { initData, model_id: p.model_id, city: т.city,
                    price: т.price, cost: т.cost, is_hit: 0 };
     if (т.variants) тело.variants = т.variants; else тело.stock = т.stock;
@@ -772,13 +820,34 @@ async function завезтиНаТочки(p) {
       if (d.ok) удачно.push(т.city);
       else беды.push(`${т.city}: ` + (d.error === "already_here" ? "товар уже там"
                    : d.error === "bad_price" ? "цена должна быть больше нуля"
-                   : d.message || "не удалось завезти"));
+                   : d.message || "не удалось добавить"));
     } catch (e) { беды.push(`${т.city}: сеть недоступна`); }
   }
+
+  for (const т of (убрать || [])) {
+    try {
+      const r = await fetch("/api/admin/product/delete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData, id: т.id }) });
+      const d = await r.json();
+      if (d.ok) убраны.push(т.city); else беды.push(`${т.city}: не удалось убрать`);
+    } catch (e) { беды.push(`${т.city}: сеть недоступна`); }
+  }
+
   const строки = [];
-  if (удачно.length) строки.push("Завезено: " + удачно.join(", "));
+  if (удачно.length) строки.push("Добавлено: " + удачно.join(", "));
+  if (убраны.length) строки.push("Убрано: " + убраны.join(", "));
   if (беды.length) строки.push("Не получилось — " + беды.join("; "));
   return строки.join("\n");
+}
+
+// Общий хвост сохранения: применить точки, обновить список, закрыть экран.
+// Вынесен, потому что зовётся из двух мест — сразу и после подтверждения.
+async function завершитьПравку(p, убрать) {
+  const итог = await применитьТочки(p, убрать);
+  await refreshProducts();
+  $("editView").classList.remove("show");
+  alertMsg(итог ? "Сохранено ✅\n\n" + итог : "Сохранено ✅");
 }
 
 async function saveEdit(p) {
@@ -799,12 +868,20 @@ async function saveEdit(p) {
       }
       await upd("city", $("edCity").value);
       await upd("is_hit", $("edHit").checked ? 1 : 0);
-      // Отмеченные точки — уже после того, как своя карточка сохранена: если
-      // завоз упадёт, правки цены и остатка всё равно на месте.
-      const итог = await завезтиНаТочки(p);
-      await refreshProducts();
-      $("editView").classList.remove("show");
-      alertMsg(итог ? "Сохранено ✅\n\n" + итог : "Сохранено ✅");
+      // Точки — уже после того, как своя карточка сохранена: если что-то из
+      // них упадёт, правки цены и остатка всё равно на месте.
+      //
+      // Снятая галочка убирает товар с точки НАСОВСЕМ, вместе с её остатком и
+      // историей склада. Спрашиваем до, а не после: отменить это нечем.
+      const { убрать } = собратьТочки();
+      if (убрать.length) {
+        const где = убрать.map(т => `«${т.city}»`).join(", ");
+        confirmMsg(`Убрать товар с точки ${где}? Остаток и движения склада этой точки удалятся. Отменить будет нечем.`,
+                   async () => { await завершитьПравку(p, убрать); });
+        $("edSave").disabled = false; $("edSave").textContent = "Сохранить";
+        return;
+      }
+      await завершитьПравку(p, []);
       return;
     }
     const specs = collectSpecs("edSpecs");

@@ -2420,6 +2420,7 @@ from partut.db.catalog import (                                         # noqa: 
     rename_brand_in_products, known_flavors, merge_duplicate_brands,        # noqa: F401
     add_brand, update_brand, delete_brand,                                  # noqa: F401
     _model_json, list_models, get_model, add_model, update_model,           # noqa: F401
+    merge_model_flavors,                                                    # noqa: F401
     propagate_model, orphan_flavors, count_products_of_model, delete_model, # noqa: F401
     add_product_from_model,                                                 # noqa: F401
     get_variants, get_all_variants, add_variant, delete_variants,           # noqa: F401

@@ -406,13 +406,22 @@ def api_admin_variants():
         return deny
 
     db.delete_variants(pid)
+    вкусы = []
     for v in (data.get("variants") or []):
         fl = str(v.get("flavor", "")).strip()
         st = inputs.целое(v.get("stock", 0), 0)
         if fl:
             db.add_variant(pid, fl, max(0, st))
+            вкусы.append(fl)
     db.recalc_product_stock(pid)
-    return jsonify({"ok": True})
+
+    # Вкус, заведённый на точке, обязан попасть в модель — иначе списки
+    # расходятся молча: в Горках вкус есть, а завезти его в Минск нельзя,
+    # потому что модель о нём не знает. Наступали ровно на это.
+    товар = db.get_product(pid)
+    модель = товар["model_id"] if товар and "model_id" in товар.keys() else None
+    добавлено = db.merge_model_flavors(модель, вкусы) if модель else []
+    return jsonify({"ok": True, "added_to_model": добавлено})
 
 
 @bp.route("/api/admin/product/delete", methods=["POST"])
@@ -662,6 +671,7 @@ def api_admin_product_from_model():
     pid = db.add_product_from_model(mid, city, max(0.0, price), cost,
                                     0 if variants else stock, 1 if data.get("is_hit") else 0)
     if variants:
+        заведены = []
         for v in variants:
             fl = str(v.get("flavor", "")).strip()
             try:
@@ -670,7 +680,9 @@ def api_admin_product_from_model():
                 st = 0
             if fl:
                 db.add_variant(pid, fl, st)
+                заведены.append(fl)
         db.recalc_product_stock(pid)
+        db.merge_model_flavors(mid, заведены)
     return jsonify({"ok": True, "id": pid})
 
 

@@ -308,7 +308,7 @@ function renderModelList() {
       return `<div class="admrow">
         <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
           <small>${where}${off}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small></div>
-        <button class="iconbtn ok" data-mdstock="${m.id}" title="Завезти на точку">📥</button>
+        <button class="iconbtn ok" data-mdstock="${m.id}" title="Добавить на точку">📥</button>
         ${own}</div>`;
     }).join("");
   }
@@ -378,7 +378,7 @@ $("stockInSave").onclick = async () => {
   } else {
     body.stock = $("stockInStock").value.trim() || "0";
   }
-  $("stockInSave").disabled = true; $("stockInSave").textContent = "Завожу…";
+  $("stockInSave").disabled = true; $("stockInSave").textContent = "Добавляю…";
   try {
     const r = await fetch("/api/admin/product/from-model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json();
@@ -390,9 +390,9 @@ $("stockInSave").onclick = async () => {
     }
     await refreshProducts(); await fetchModels(); renderModelList();
     $("stockInView").classList.remove("show");
-    alertMsg("Завезено ✅");
+    alertMsg("Добавлено ✅");
   } catch (e) { alertMsg("Сеть недоступна."); }
-  finally { $("stockInSave").disabled = false; $("stockInSave").textContent = "Завезти на точку"; }
+  finally { $("stockInSave").disabled = false; $("stockInSave").textContent = "Добавить на точку"; }
 };
 
 function editModel(id) {

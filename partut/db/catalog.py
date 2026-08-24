@@ -331,6 +331,41 @@ def add_model(category, name, brand="", description="", specs=None, flavors=None
     return mid
 
 
+def merge_model_flavors(model_id, вкусы):
+    """Добавляет вкусы в список модели, не трогая уже записанные.
+
+    Вкус, заведённый на точке, обязан попасть в модель — иначе списки
+    расходятся молча: в Горках вкус есть, а завезти его в Минск нельзя, потому
+    что модель о нём не знает. Ровно на это и наступили.
+
+    Только добавляем. Кончился вкус в одном городе — не повод считать, что его
+    больше не бывает: остальные точки его ещё продают, и предлагать его надо.
+
+    Сравниваем без учёта регистра: «Мята» и «мята» — один вкус, и разводить их
+    значит развалить фильтр по вкусу на витрине.
+    """
+    m = get_model(model_id)
+    if not m:
+        return []
+    было = list(m["flavors"] or [])
+    известно = {str(f).strip().lower() for f in было}
+    добавлено = []
+    for f in вкусы:
+        имя = str(f or "").strip()
+        if имя and имя.lower() not in известно:
+            известно.add(имя.lower())
+            было.append(имя)
+            добавлено.append(имя)
+    if добавлено:
+        conn = db.connect()
+        cur = conn.cursor()
+        cur.execute(db._q("UPDATE models SET flavors = %s WHERE id = %s"),
+                    (json.dumps(было, ensure_ascii=False), model_id))
+        conn.commit()
+        conn.close()
+    return добавлено
+
+
 def update_model(model_id, category=None, name=None, brand=None, description=None, specs=None, flavors=None):
     """Правит модель и переносит изменения на все её товары.
 
