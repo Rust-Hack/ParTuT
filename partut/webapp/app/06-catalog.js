@@ -828,7 +828,7 @@ function renderEditVariants() {
 // правда, а молчаливое «сохранено» после половины сделанного — нет.
 async function применитьТочки(p, убрать) {
   const { завести } = собратьТочки();
-  const удачно = [], убраны = [], беды = [];
+  const удачно = [], убраны = [], беды = [], заминки = [];
 
   for (const т of завести) {
     if (!т.price) { беды.push(`${т.city}: не указана цена`); continue; }
@@ -855,9 +855,13 @@ async function применитьТочки(p, убрать) {
     try {
       const r = await fetch("/api/admin/product/delete", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData, id: т.id }) });
+        body: JSON.stringify({ initData, id: т.id, force: !!т.force }) });
       const d = await r.json();
-      if (d.ok) убраны.push(т.city); else беды.push(`${т.city}: не удалось убрать`);
+      if (d.ok) убраны.push(т.city);
+      // Сервер придержал: по товару есть незакрытые заказы. Это не отказ, а
+      // вопрос — и задать его должен человек, а не мы за него решить.
+      else if (d.error === "open_orders") заминки.push({ город: т.city, id: т.id, что: d.message });
+      else беды.push(`${т.city}: ` + (d.message || "не удалось убрать"));
     } catch (e) { беды.push(`${т.city}: сеть недоступна`); }
   }
 
@@ -865,17 +869,31 @@ async function применитьТочки(p, убрать) {
   if (удачно.length) строки.push("Добавлено: " + удачно.join(", "));
   if (убраны.length) строки.push("Убрано: " + убраны.join(", "));
   if (беды.length) строки.push("Не получилось — " + беды.join("; "));
-  return строки.join("\n");
+  return { текст: строки.join("\n"), заминки };
 }
 
 // Общий хвост сохранения: применить точки, обновить список, закрыть экран.
 // Вынесен, потому что зовётся из двух мест — сразу и после подтверждения.
 async function завершитьПравку(p, убрать, отказы) {
-  const итог = await применитьТочки(p, убрать);
+  const { текст, заминки } = await применитьТочки(p, убрать);
+
+  // Сервер придержал удаление: по товару есть незакрытые заказы. Спрашиваем и,
+  // если человек настаивает, повторяем с force. Решает он, а не мы.
+  if (заминки.length) {
+    const вопрос = заминки.map(з => з.что).join("\n\n") + "\n\nВсё равно убрать?";
+    confirmMsg(вопрос, async () => {
+      const ещё = await применитьТочки(p, заминки.map(з => ({ city: з.город, id: з.id, force: true })));
+      await refreshProducts();
+      $("editView").classList.remove("show");
+      alertMsg([текст, ещё.текст].filter(Boolean).join("\n") || "Сохранено ✅");
+    });
+    return;
+  }
+
   await refreshProducts();
   $("editView").classList.remove("show");
   const беды = (отказы || []).length ? "Не сохранилось — " + (отказы || []).join("; ") : "";
-  const строки = [беды, итог].filter(Boolean).join("\n");
+  const строки = [беды, текст].filter(Boolean).join("\n");
   // «Сохранено» пишем только если всё и правда сохранилось. Половина работы,
   // объявленная успехом, — это ошибка, которую заметят через неделю по цифрам.
   alertMsg(строки ? (беды ? "⚠️ Сохранено не всё\n\n" : "Сохранено ✅\n\n") + строки
@@ -1014,9 +1032,18 @@ async function toggleHidden(id) {
     toast(p.hidden ? "Снова на витрине" : "Снят с витрины — остаток сохранён");
   } catch (e) { alertMsg("Сеть недоступна."); }
 }
-async function doDelAdminRow(id) {
+async function doDelAdminRow(id, force) {
   try {
-    await fetch("/api/admin/product/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
+    const r = await fetch("/api/admin/product/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, force: !!force }) });
+    const d = await r.json().catch(() => ({}));
+    // Сервер придерживает удаление, если по товару есть незакрытые заказы.
+    // Раньше ответ не читался вовсе: товар оставался, а экран молчал — и это
+    // выглядело бы как «кнопка не работает».
+    if (!d.ok && d.error === "open_orders") {
+      confirmMsg(d.message + "\n\nВсё равно удалить?", () => doDelAdminRow(id, true));
+      return;
+    }
+    if (!d.ok) { alertMsg(d.message || "Не удалось удалить товар."); return; }
     await refreshProducts();
   } catch (e) { alertMsg("Сеть недоступна."); }
 }

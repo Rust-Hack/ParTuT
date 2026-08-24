@@ -240,6 +240,38 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
     return order_id, coins_used, total, False
 
 
+# Статусы «заказ ещё живой»: до выдачи или отмены.
+ОТКРЫТЫЕ = ("new", "paid", "confirmed")
+
+
+def open_orders_with_product(pid):
+    """Сколько незакрытых заказов содержат этот товар.
+
+    Нужно перед удалением товара с точки. Заказ переживает удаление — состав
+    хранится в самом заказе, — но продавец остаётся с обязательством выдать
+    то, чего в магазине больше нет, и узнаёт об этом от покупателя.
+
+    Считаем по составу заказа, а не по ссылке: связи «заказ — товар» в базе
+    нет, состав лежит строкой JSON. Открытых заказов всегда немного, поэтому
+    перебор здесь дешевле отдельной таблицы связей.
+    """
+    conn = db.connect()
+    cur = conn.cursor()
+    места = ", ".join(["%s"] * len(ОТКРЫТЫЕ))
+    cur.execute(db._q(f"SELECT items FROM orders WHERE status IN ({места})"), ОТКРЫТЫЕ)
+    строки = cur.fetchall()
+    conn.close()
+    сколько = 0
+    for строка in строки:
+        try:
+            состав = json.loads(строка["items"] or "[]")
+        except (TypeError, ValueError):
+            continue
+        if any(int(и.get("id") or 0) == int(pid) for и in состав if isinstance(и, dict)):
+            сколько += 1
+    return сколько
+
+
 def get_order(order_id):
     conn = db.connect()
     cur = conn.cursor()

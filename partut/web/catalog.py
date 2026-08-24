@@ -391,6 +391,34 @@ def api_admin_update():
     return jsonify({"ok": True})
 
 
+def _свести_вкусы(сырые, эталон=None):
+    """Приводит присланные вкусы к одному написанию и склеивает повторы.
+
+    «Grape» и «grape» — один вкус. Модель это уже понимает и дублей не заводит,
+    а вот у товара они становились двумя записями: покупатель видел в списке
+    один и тот же вкус дважды, а фильтр по вкусу делил остаток пополам.
+
+    Остатки повторов складываем, а не берём последний: если продавец вписал
+    один вкус двумя строками, он привёз сумму, и потерять половину хуже.
+
+    Написание берём из модели, когда она этот вкус знает: пусть во всех городах
+    он выглядит одинаково.
+    """
+    правильное = {str(f).strip().lower(): str(f).strip() for f in (эталон or [])}
+    свод = {}
+    порядок = []
+    for v in сырые:
+        имя = str((v or {}).get("flavor", "")).strip()
+        if not имя:
+            continue
+        ключ = имя.lower()
+        if ключ not in свод:
+            свод[ключ] = {"flavor": правильное.get(ключ, имя), "stock": 0}
+            порядок.append(ключ)
+        свод[ключ]["stock"] += max(0, inputs.целое((v or {}).get("stock", 0), 0))
+    return [свод[к] for к in порядок]
+
+
 @bp.route("/api/admin/product/variants", methods=["POST"])
 def api_admin_variants():
     """Заменяет список вкусов товара целиком (добавить/убрать/изменить остаток)."""
@@ -405,22 +433,21 @@ def api_admin_variants():
     if deny:
         return deny
 
+    товар_ = db.get_product(pid)
+    модель_ = товар_["model_id"] if товар_ and "model_id" in товар_.keys() else None
+    известные = (db.get_model(модель_) or {}).get("flavors", []) if модель_ else []
+
     db.delete_variants(pid)
     вкусы = []
-    for v in (data.get("variants") or []):
-        fl = str(v.get("flavor", "")).strip()
-        st = inputs.целое(v.get("stock", 0), 0)
-        if fl:
-            db.add_variant(pid, fl, max(0, st))
-            вкусы.append(fl)
+    for v in _свести_вкусы(data.get("variants") or [], известные):
+        db.add_variant(pid, v["flavor"], v["stock"])
+        вкусы.append(v["flavor"])
     db.recalc_product_stock(pid)
 
     # Вкус, заведённый на точке, обязан попасть в модель — иначе списки
     # расходятся молча: в Горках вкус есть, а завезти его в Минск нельзя,
     # потому что модель о нём не знает. Наступали ровно на это.
-    товар = db.get_product(pid)
-    модель = товар["model_id"] if товар and "model_id" in товар.keys() else None
-    добавлено = db.merge_model_flavors(модель, вкусы) if модель else []
+    добавлено = db.merge_model_flavors(модель_, вкусы) if модель_ else []
     return jsonify({"ok": True, "added_to_model": добавлено})
 
 
@@ -437,6 +464,21 @@ def api_admin_delete():
     deny = auth.deny_product(admin, pid)
     if deny:
         return deny
+
+    # Незакрытые заказы по этому товару — повод остановиться и спросить.
+    # Заказ удаление переживёт (состав хранится в самом заказе), но продавец
+    # останется с обязательством выдать то, чего в магазине больше нет, и
+    # узнает об этом от покупателя. Не запрещаем — предупреждаем: бывает, что
+    # убрать надо именно сейчас.
+    if not data.get("force"):
+        живых = db.open_orders_with_product(pid)
+        if живых:
+            слово = "заказ" if живых == 1 else ("заказа" if живых < 5 else "заказов")
+            return jsonify({"ok": False, "error": "open_orders", "count": живых,
+                            "message": f"По этому товару есть {живых} незакрытых {слово}. "
+                                       f"Сначала выдайте или отклоните их — или удаляйте, "
+                                       f"понимая, что выдавать будет нечего."}), 409
+
     db.delete_variants(pid)
     db.delete_product(pid)
     return jsonify({"ok": True})
@@ -726,15 +768,9 @@ def api_admin_product_from_model():
                                     0 if variants else stock, 1 if data.get("is_hit") else 0)
     if variants:
         заведены = []
-        for v in variants:
-            fl = str(v.get("flavor", "")).strip()
-            try:
-                st = max(0, int(v.get("stock", 0)))
-            except (TypeError, ValueError):
-                st = 0
-            if fl:
-                db.add_variant(pid, fl, st)
-                заведены.append(fl)
+        for v in _свести_вкусы(variants, (m["flavors"] or [])):
+            db.add_variant(pid, v["flavor"], v["stock"])
+            заведены.append(v["flavor"])
         db.recalc_product_stock(pid)
         db.merge_model_flavors(mid, заведены)
     return jsonify({"ok": True, "id": pid})

@@ -2438,7 +2438,7 @@ from partut.db.orders import (                                          # noqa: 
     seller_today, restore_order_stock, cancel_order, update_order_items,    # noqa: F401
     stale_new_orders, touch_order_reminded, orders_needing_reminder,        # noqa: F401
     set_order_status, set_order_status_if, set_order_receipt,               # noqa: F401
-    set_order_paid_amount,                                                  # noqa: F401
+    set_order_paid_amount, open_orders_with_product,                        # noqa: F401
 )
 
 

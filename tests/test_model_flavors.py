@@ -128,3 +128,53 @@ def run_product_to_model():
 
     _чисто()
     return c.fails
+
+
+def run_case_duplicates():
+    """«Grape» и «grape» — один вкус, а не два.
+
+    Модель это понимала и дублей не заводила, а у товара они становились двумя
+    записями: покупатель видел в списке один и тот же вкус дважды, а остаток
+    делился между ними. Написание берём из модели, чтобы во всех городах вкус
+    выглядел одинаково.
+
+    Остатки повторов складываем, а не берём последний: если продавец вписал
+    один вкус двумя строками, он привёз сумму, и потерять половину хуже.
+    """
+    c = Checker("Один вкус в разном регистре")
+    _чисто(); as_admin()
+
+    mid = db.add_model("disposable", "PULSE", "PULSE", "", {}, ["Grape B - POP"])
+    pid = db.add_product_from_model(mid, "Минск", 30.0, cost=18.0)
+
+    client.post("/api/admin/product/variants", json={
+        "initData": "x", "id": pid,
+        "variants": [{"flavor": "Grape B - POP", "stock": 2},
+                     {"flavor": "grape b - pop", "stock": 3},
+                     {"flavor": "  GRAPE B - POP  ", "stock": 1}]})
+    вар = db.get_variants(pid)
+    c(f"вкус один: {[v['flavor'] for v in вар]}", len(вар) == 1)
+    c(f"остатки сложились: {вар[0]['stock']}", вар[0]["stock"] == 6)
+    c("написание взято из модели", вар[0]["flavor"] == "Grape B - POP")
+    c("и модель не раздвоилась", len(db.get_model(mid)["flavors"]) == 1)
+
+    # Пустое имя и отрицательный остаток отбрасываются.
+    client.post("/api/admin/product/variants", json={
+        "initData": "x", "id": pid,
+        "variants": [{"flavor": "  ", "stock": 5}, {"flavor": "Cherry", "stock": -4}]})
+    вар2 = db.get_variants(pid)
+    c(f"пустой вкус отброшен: {[v['flavor'] for v in вар2]}", len(вар2) == 1)
+    c("отрицательный остаток стал нулём", вар2[0]["stock"] == 0)
+
+    # То же при заведении на вторую точку.
+    ответ = client.post("/api/admin/product/from-model", json={
+        "initData": "x", "model_id": mid, "city": "Туров", "price": "32", "cost": "19",
+        "variants": [{"flavor": "GRAPE B - POP", "stock": 1},
+                     {"flavor": "Grape B - POP", "stock": 2}]})
+    новый = ответ.get_json()["id"]
+    вар3 = db.get_variants(новый)
+    c(f"на новой точке тоже один вкус: {[v['flavor'] for v in вар3]}", len(вар3) == 1)
+    c(f"с суммой остатков: {вар3[0]['stock']}", вар3[0]["stock"] == 3)
+
+    _чисто()
+    return c.fails
