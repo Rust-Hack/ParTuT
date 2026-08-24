@@ -260,8 +260,15 @@ def _write_admin_log(resp):
     if not admin:
         return                                   # действие не админа — не наш журнал
     try:
-        src = request.get_json(silent=True) or request.form or {}
-        parts = [f"{k}={str(src[k])[:40]}" for k in _LOG_FIELDS if k in src and src[k] not in ("", None)]
+        # Маршрут может сам сказать, что записать по-человечески: у правки
+        # состава заказа в запросе лежит {"0": 1} — это язык машины, а журнал
+        # читают глазами, когда ищут, кто что сделал.
+        готовое = getattr(g, "log_note", None)
+        if готовое:
+            parts = [str(готовое)[:200]]
+        else:
+            src = request.get_json(silent=True) or request.form or {}
+            parts = [f"{k}={str(src[k])[:40]}" for k in _LOG_FIELDS if k in src and src[k] not in ("", None)]
         db.log_admin_action(int(admin["id"]), auth._admin_display(admin),
                             request.path.replace("/api/admin/", ""), " · ".join(parts))
     except Exception as e:

@@ -21,7 +21,7 @@ partut/web/orders.py — заказ от корзины до выдачи.
 
 import json
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from partut import cache
 from partut.web import auth
@@ -664,6 +664,8 @@ def api_admin_order_items():
         code = 409 if err in ("closed",) else 400
         return jsonify({"ok": False, "error": err}), code
 
+    # Журналу отдаём тот же человеческий список, что уходит покупателю.
+    g.log_note = f"заказ #{oid} · " + "; ".join(res)
     lines = "\n".join(f"• {ch}" for ch in res)
     tgsend.bg(tgsend.notify_client, int(updated["user_id"]),
         f"Продавец изменил заказ #{oid}:\n{lines}\n\n💰 Итого: {updated['total']:.2f} Br")

@@ -1678,6 +1678,8 @@ const LOG_FIELDS = { price: "цена", cost: "закупка", stock: "оста
                      city: "точка", is_hit: "хит", description: "описание", category: "категория" };
 const LOG_REASONS = { in: "приход", broken: "брак", expired: "просрочка", lost: "недостача",
                       gift: "подарок", fix: "пересчёт" };
+// Что сделали с заказом. Раньше в журнале стояло английское confirm/issued.
+const LOG_ACTIONS = { confirm: "подтверждён", issued: "выдан", reject: "отклонён" };
 
 // «id=14 · field=price · value=15.5» — это язык запроса, а не человека.
 // Показываем товар по имени и говорим, что именно изменилось.
@@ -1694,7 +1696,7 @@ function logLine(x) {
   if (x.action === "stock/move")
     return [what, `${LOG_REASONS[kv.reason] || kv.reason || ""} ${kv.qty || ""} шт`].filter(Boolean).join(" — ");
   if (x.action === "order/status")
-    return `заказ #${kv.id || "?"} — ${kv.action || ""}`;
+    return `заказ #${kv.id || "?"} — ${LOG_ACTIONS[kv.action] || kv.action || ""}`;
   if (x.action.startsWith("product/") || x.action === "product") return what;
   return x.details || "";
 }
