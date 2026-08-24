@@ -19,7 +19,7 @@ import threading
 import time
 import traceback
 
-from partut.config import DEV_IDS
+from partut.config import DEV_IDS, SUPER_ADMIN_IDS
 
 # Как часто можно повторять сообщение об ОДНОЙ И ТОЙ ЖЕ ошибке.
 COOLDOWN = int(os.environ.get("ERROR_COOLDOWN", "600"))     # 10 минут
@@ -79,7 +79,11 @@ def report(tg, where, exc, extra=""):
         text = "\n".join(lines)
         # Сбои — разработчику. Владельцу магазина трассировка ничего не говорит,
         # а поток технических сообщений заглушает то, что ему правда важно.
-        for admin_id in DEV_IDS:
+        #
+        # Но если разработчика не назвали вовсе, отчёт обязан дойти хоть до
+        # кого-то: «некому сообщить» на практике значит «поломка живёт вечно».
+        # Раньше на это отвечал номер, вшитый в config, — теперь отвечаем здесь.
+        for admin_id in (DEV_IDS or SUPER_ADMIN_IDS):
             try:
                 tg.send_message(admin_id, text)
             except Exception as e:

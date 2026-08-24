@@ -857,3 +857,27 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 /* Строка согласия при оформлении: заметная, но не спорящая с кнопкой заказа. */
 .termsnote { font-size: 12px; line-height: 1.5; color: var(--hint); margin: 10px 0 0; text-align: center }
 .termsnote a { color: var(--text); text-decoration: underline; cursor: pointer }
+
+/* Количество с кнопками –/+.
+   Пальцем на телефоне цифровая клавиатура ради «было 1, стало 2» — четыре
+   действия: тап в поле, выделить, стереть, набрать. Кнопки делают это одним.
+   Поле при этом остаётся: набрать 24 быстрее, чем нажать плюс двадцать три раза. */
+.qty { display: inline-flex; align-items: stretch; gap: 6px }
+.qty input {
+  width: 56px; text-align: center; padding: 8px 4px;
+  /* Стрелочки браузера рядом с нашими кнопками — это два способа делать одно. */
+  -moz-appearance: textfield;
+}
+.qty input::-webkit-outer-spin-button,
+.qty input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0 }
+.qtybtn {
+  width: 38px; flex: 0 0 38px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+  font-size: 19px; line-height: 1; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  /* 38px — не меньше: по пальцу мимо кнопки промахиваются на всём, что уже. */
+  user-select: none; -webkit-user-select: none;
+  touch-action: manipulation;      /* без задержки 300 мс и без зума по двойному тапу */
+}
+.qtybtn:active { background: var(--accent-soft) }
+.qtybtn:disabled { opacity: .35; cursor: default }

@@ -340,7 +340,8 @@ function openStockIn(modelId) {
   $("stockInFlavors").innerHTML = m.flavors.map(f =>
     `<div class="admrow" data-flavor="${esc(f)}"><label class="an" style="display:flex;gap:8px;align-items:center;font-weight:600">
        <input type="checkbox" class="sifchk" style="width:auto" checked> ${esc(f)}</label>
-     <input class="sifst" inputmode="numeric" placeholder="шт." style="width:64px" value="0"></div>`).join("");
+     ${qtyHtml(0, 'class="sifst" placeholder="шт."')}</div>`).join("");
+  bindQty($("stockInFlavors"));
   // Где модель уже стоит — чтобы не завезти второй раз на ту же точку.
   const where = shelf().filter(p => p.model_id === m.id);
   $("stockInWhere").innerHTML = where.length
@@ -1331,6 +1332,9 @@ function openStockMove(id) {
   $("stockName").textContent = stockProduct.name;
   $("stockNow").textContent = `${stockProduct.city} · сейчас ${stockProduct.stock} шт`;
   $("stockQty").value = ""; $("stockCost").value = ""; $("stockNote").value = "";
+  // Кнопки –/+ у количества. Минимум 1: приход или списание нуля штук —
+  // это не операция, а промах, и сохранять его незачем.
+  bindQty($("stockView"));
 
   // У товара со вкусами склад ведётся по каждому вкусу отдельно.
   const вкусы = stockProduct.variants || [];

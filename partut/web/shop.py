@@ -285,8 +285,8 @@ def api_admin_location_delete():
         return jsonify({"ok": False, "error": "has_products"}), 400
     # Открытые заказы этой точки повиснут в городе, которого больше нет: покупатель
     # ждёт выдачи, а продавец даже не найдёт заказ в списке своей точки.
-    open_orders = [o for o in db.get_orders()
-                   if o["city"] == loc["name"] and o["status"] in ("new", "paid", "confirmed")]
+    open_orders = [o for o in db.get_orders(city=loc["name"])
+                   if o["status"] in ("new", "paid", "confirmed")]
     if open_orders:
         return jsonify({"ok": False, "error": "has_orders", "count": len(open_orders)}), 400
     db.delete_location(lid)

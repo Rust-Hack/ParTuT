@@ -1,12 +1,15 @@
 """Связь клиент↔магазин: привязка к заказу, кликабельные контакты, экранирование, антиспам."""
 from _common import db, client, server, SENT, reset_sent, Checker, as_user, as_admin
 
+from partut import limits
+from partut.integrations import tgsend
+
 CLIENT = 555
 
 
 def support(payload, clear_cooldown=True):
     if clear_cooldown:
-        server._support_last.clear()
+        server._support_пауза.забыть()
     reset_sent()
     r = client.post("/api/support", json={"initData": "x", **payload})
     return r, (r.get_json() or {})
@@ -64,23 +67,70 @@ def run():
        "&lt;b&gt;hack&lt;/b&gt; &amp; &lt;script&gt;" in SENT[0][1])
 
     c6 = Checker("F. Антиспам поддержки (кулдаун)")
-    r, d = support({"text": "первое"}, clear_cooldown=True)
-    c6("первое сообщение → ok", d.get("ok"))
-    r2 = client.post("/api/support", json={"initData": "x", "text": "второе подряд"})
-    d2 = r2.get_json() or {}
-    c6("второе сразу → 429 cooldown", r2.status_code == 429 and d2.get("error") == "cooldown")
-    c6("есть retry_after", isinstance(d2.get("retry_after"), int) and d2["retry_after"] > 0)
-    # прошло время → снова можно
-    server._support_last[CLIENT] = 0
-    r3 = client.post("/api/support", json={"initData": "x", "text": "спустя время"})
-    c6("после паузы → снова ok", (r3.get_json() or {}).get("ok"))
+    # Стенд паузы выключает (см. _common), иначе каждая проверка упиралась бы
+    # в антиспам. Здесь проверяем сам антиспам — значит включаем обратно.
+    limits.включить()
+    try:
+        r, d = support({"text": "первое"}, clear_cooldown=True)
+        c6("первое сообщение → ok", d.get("ok"))
+        r2 = client.post("/api/support", json={"initData": "x", "text": "второе подряд"})
+        d2 = r2.get_json() or {}
+        c6("второе сразу → 429 cooldown", r2.status_code == 429 and d2.get("error") == "cooldown")
+        c6("есть retry_after", isinstance(d2.get("retry_after"), int) and d2["retry_after"] > 0)
+        # прошло время → снова можно
+        server._support_пауза.забыть(CLIENT)
+        r3 = client.post("/api/support", json={"initData": "x", "text": "спустя время"})
+        c6("после паузы → снова ok", (r3.get_json() or {}).get("ok"))
+    finally:
+        limits.выключить()
 
     c7 = Checker("G. Пустой текст отклоняется")
     r, d = support({"text": "   "})
     c7("пустой → 400", r.status_code == 400)
 
+    # H. Несколько менеджеров.
+    #
+    # Ручка ждёт ОДНУ удачную отправку и уходит, дописывая остальным в фоне:
+    # цикл по всем держал поток запроса на каждом по очереди, а их восемь.
+    # Проверяем обе половины обещания — что доходит до всех и что ответ
+    # «доставлено» не выдаётся авансом.
+    c8 = Checker("H. Несколько менеджеров: ждём одного, остальным пишем в фоне")
+    tgsend.дождаться_фона()          # хвосты прошлых проверок — не наши
+    as_user(CLIENT, "vasya")
+    server.SUPPORT_IDS = {999000, 999001, 999002}
+    r, d = support({"text": "вопрос всем"})
+    c8("вопрос дошёл до всех троих", {x[0] for x in SENT} == {999000, 999001, 999002})
+    c8("покупателю сказано «доставлено»", d.get("delivered") == 1)
+
+    настоящая_отправка = tgsend.tg.send_message
+
+    def молчит_первый(cid, text, **kw):
+        if cid == 999000:
+            raise RuntimeError("бот заблокирован")
+        return настоящая_отправка(cid, text, **kw)
+
+    def молчат_все(cid, text, **kw):
+        raise RuntimeError("Telegram недоступен")
+
+    try:
+        # Первый в списке заблокировал бота. Врать покупателю нельзя: ответ
+        # «доставлено» обязан опираться на живую отправку, а не на попытку.
+        tgsend.tg.send_message = молчит_первый
+        r, d = support({"text": "первый недоступен"})
+        c8("вопрос подхватил следующий менеджер", {x[0] for x in SENT} == {999001, 999002})
+        c8("и это по-прежнему «доставлено»", d.get("delivered") == 1)
+
+        tgsend.tg.send_message = молчат_все
+        r, d = support({"text": "никого нет"})
+        c8("никто не принял — доставку не обещаем", d.get("delivered") == 0)
+        c8("и запрос всё равно не падает", r.status_code == 200)
+    finally:
+        tgsend.tg.send_message = настоящая_отправка
+        server.SUPPORT_IDS = {999000}
+
     db.get_order = orig_get_order
-    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails + c7.fails
+    return (c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails
+            + c7.fails + c8.fails)
 
 
 if __name__ == "__main__":

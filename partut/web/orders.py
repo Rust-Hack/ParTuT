@@ -30,6 +30,7 @@ from partut.web import photos
 from partut.web import shopinfo
 from partut.integrations import tgsend
 from partut import inputs
+from partut import limits
 from partut import notifications
 from partut.config import admins_for_city
 
@@ -37,6 +38,11 @@ from partut.config import admins_for_city
 # НЕ импортирует server, и граф зависимостей остаётся деревом.
 # Подключает его фабрика в server.py.
 bp = Blueprint("orders", __name__)
+
+# Пауза между оформлениями. Повторную отправку того же заказа она не задевает:
+# та ловится раньше по client_token и отдаёт уже созданный заказ. А вот цикл,
+# штампующий заказы, двигает склад и монеты по-настоящему.
+_пауза_заказ = limits.Пауза(3)
 
 # Одно «заказ отклонён» на все случаи читалось одинаково и когда товара не
 # оказалось, и когда не подошёл чек. Человек не понимает, что делать дальше,
@@ -115,6 +121,14 @@ def api_order():
         prev = db.find_order_by_token(user_id, client_token)
         if prev:
             return jsonify(_order_reply(prev))
+
+    # Пауза — ПОСЛЕ проверки повтора: человек, у которого не дошёл ответ и он
+    # нажал снова, обязан получить свой заказ, а не отказ «слишком часто».
+    ждать = _пауза_заказ.сколько_ждать(user_id)
+    if ждать:
+        сек = int(ждать) + 1
+        return jsonify({"ok": False, "error": "cooldown", "retry_after": сек,
+                        "message": f"Секунду — заказ оформляется. Попробуйте через {сек} с."}), 429
 
     # Разбираем корзину клиента (id + количество), чтобы одним запросом взять товары.
     raw_items = []
@@ -515,7 +529,9 @@ def api_admin_orders():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    orders = [o for o in db.get_orders() if auth.may_city(admin, o["city"])]
+    # Город отдаём БАЗЕ, а не фильтруем после: иначе лимит в двести заказов
+    # съедает соседний город, и продавец не видит собственных заказов.
+    orders = db.get_orders(city=admin.get("city") or None)
     return jsonify({"ok": True, "orders": [_order_json(o, data.get("initData", "")) for o in orders]})
 
 

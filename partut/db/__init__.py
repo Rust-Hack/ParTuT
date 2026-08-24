@@ -13,6 +13,7 @@ SQL спрятаны в маленькие помощники ниже (_q, ID_C
 import os
 import json
 import datetime
+import threading
 
 from partut import config
 
@@ -61,10 +62,57 @@ def _get_pool():
     return _POOL
 
 
-class _PooledConn:
-    """Обёртка: .close() возвращает соединение в пул, а не закрывает его."""
-    def __init__(self, raw):
-        self._raw = raw
+_выданные = threading.local()
+
+
+def _набор():
+    """Соединения, выданные ЭТОМУ потоку и ещё не закрытые."""
+    s = getattr(_выданные, "s", None)
+    if s is None:
+        s = _выданные.s = set()
+    return s
+
+
+def вернуть_забытые():
+    """Подобрать всё, что осталось открытым к концу единицы работы.
+
+    Двести функций базы написаны как «взял, поработал, закрыл», и close() у них
+    стоит на счастливом пути. Стоит запросу упасть — а Neon рвёт соединения
+    регулярно, — и соединение не вернётся в пул НИКОГДА.
+
+    Двадцать таких падений (столько в пуле), и магазин мёртв: на всё подряд
+    пятисотки, а /health при этом бодро говорит «ok», потому что базы не
+    касается. Значит хостинг даже не перезапустит сервис — лечится только
+    руками, и никто не понимает почему.
+
+    Поэтому здесь сеть под канатоходцем: в конце запроса и в конце фоновой
+    задачи всё забытое возвращается в пул само. Правильное место для close()
+    это не отменяет — но потерять соединение больше нельзя.
+    """
+    забыты = list(_набор())
+    for c in забыты:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        try:
+            c.close()
+        except Exception:
+            pass
+    return len(забыты)
+
+
+class _Conn:
+    """Соединение с учётом: и взятое из пула Postgres, и файловое SQLite.
+
+    Наружу торчат ровно те четыре метода, которыми пользуется код базы
+    (cursor/commit/rollback/close), поэтому обёртка невидима для вызывающих —
+    двести функций не пришлось трогать.
+    """
+
+    def __init__(self, raw, из_пула):
+        self._raw, self._из_пула, self._закрыт = raw, из_пула, False
+        _набор().add(self)
 
     def cursor(self, *a, **k):
         return self._raw.cursor(*a, **k)
@@ -76,6 +124,17 @@ class _PooledConn:
         return self._raw.rollback()
 
     def close(self):
+        """У SQLite — закрыть по-настоящему, у Postgres — вернуть в пул."""
+        if self._закрыт:
+            return                       # повторный close() не должен вредить
+        self._закрыт = True
+        _набор().discard(self)
+        if not self._из_пула:
+            try:
+                self._raw.close()
+            except Exception:
+                pass
+            return
         try:
             self._raw.rollback()          # сброс любой незавершённой транзакции
         except Exception:
@@ -87,6 +146,14 @@ class _PooledConn:
                 self._raw.close()
             except Exception:
                 pass
+
+    # Чтобы новый код можно было писать сразу правильно: with db.connect() as conn.
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_беда):
+        self.close()
+        return False
 
 
 def connect():
@@ -100,10 +167,10 @@ def connect():
             except Exception:
                 pass
             raw = pool.getconn()
-        return _PooledConn(raw)
+        return _Conn(raw, из_пула=True)
     conn = sqlite3.connect(SQLITE_FILE)
     conn.row_factory = sqlite3.Row        # доступ к колонкам по имени: row["name"]
-    return conn
+    return _Conn(conn, из_пула=False)
 
 
 def _q(sql):
@@ -619,10 +686,69 @@ def init_db():
     except Exception as e:
         print(f"Не удалось перенести админов из настроек сервера: {e}")
 
+    _ensure_indexes()           # скорость чтения; ставится последним — колонки уже все на месте
+
     состояние = schema_version()
     ждут = состояние["ждут"]
     print(f"Схема базы: {состояние['последняя'] or 'чистая'}"
           + (f" · НЕ ПРИМЕНЕНО: {', '.join(ждут)}" if ждут else ""), flush=True)
+
+
+# Индексы ради скорости — в отличие от пяти прежних, которые стоят ради
+# уникальности (один билет на человека, один промокод на код).
+#
+# Почему это вообще понадобилось. Пока заказов тысячи, разницы не видно: база
+# успевает перебрать всю таблицу за пару миллисекунд, и без индекса всё летает.
+# Но перебор растёт вместе с магазином, а индекс — нет. Замерено на 30 000
+# заказов: список заказов точки 3.03 мс → 0.32 мс, а ночная уборка (при жизненном
+# раскладе, где «новых» шестьдесят из тридцати тысяч) — 4.14 мс → 0.026 мс,
+# потому что перебор всей таблицы сменился попаданием по индексу.
+#
+# Числа сегодня незаметны человеку, и это правильный момент их поставить:
+# заказы не удаляются никогда, таблица только растёт, и разница «перебор против
+# индекса» из незаметной становится заметной сама, без единой правки кода.
+# Чинить это тогда пришлось бы на живом магазине и в спешке.
+#
+# Только добавление: индекс не меняет ни одной строки и не мешает откату кода
+# назад — старая версия просто им не пользуется.
+_ИНДЕКСЫ = (
+    # История заказов покупателя (профиль) и заказы точки (экран продавца).
+    # Вторая колонка — id: по нему же идёт сортировка «новые сверху», и с ней
+    # в индексе база не сортирует найденное отдельно.
+    ("ix_orders_user", "orders (user_id, id)"),
+    ("ix_orders_city", "orders (city, id)"),
+    # Ночная уборка ищет «новые, залежавшиеся». Двухколоночный: по одному
+    # статусу толку нет, если «новых» много, а вместе с датой — есть всегда.
+    ("ix_orders_status_created", "orders (status, created_at)"),
+    # Отзывы в карточке товара: берутся только опубликованные.
+    ("ix_reviews_product", "reviews (product_id, status)"),
+    # Вкусы, галерея и подписки — всё это читается по товару.
+    ("ix_variants_product", "product_variants (product_id)"),
+    ("ix_product_photos_product", "product_photos (product_id)"),
+    # У подписок уже есть уникальный (product_id, user_id), но он не помогает
+    # искать ПО ПОКУПАТЕЛЮ: по второй колонке индекс не ищет.
+    ("ix_stock_alerts_user", "stock_alerts (user_id)"),
+    # Летопись монет и движения склада: обе только растут, обе читаются
+    # выборочно — по человеку и по товару.
+    ("ix_coin_log_user", "coin_log (user_id)"),
+    ("ix_stock_moves_product", "stock_moves (product_id, id)"),
+)
+
+
+def _ensure_indexes():
+    """Ставит индексы скорости. IF NOT EXISTS — значит вызов дешёвый и повторный
+    запуск ничего не пересоздаёт."""
+    conn = connect()
+    cur = conn.cursor()
+    for имя, куда in _ИНДЕКСЫ:
+        try:
+            cur.execute(f"CREATE INDEX IF NOT EXISTS {имя} ON {куда}")
+        except Exception as e:
+            # Магазин обязан подняться и без индекса: это скорость, а не работа.
+            conn.rollback()
+            print(f"Индекс {имя} не поставлен: {e}", flush=True)
+    conn.commit()
+    conn.close()
 
 
 def _table_columns(cur, table):
@@ -2252,8 +2378,8 @@ from partut.db.shop import (                                            # noqa: 
     set_order_delivery, delivery_prefill,                                   # noqa: F401
     seed_locations, get_locations, location_names, get_location,            # noqa: F401
     add_location, delete_location, count_products_in_location,              # noqa: F401
-    get_pickup_points, add_pickup_point, update_pickup_point,               # noqa: F401
-    delete_pickup_point,                                                    # noqa: F401
+    get_pickup_points, all_pickup_points, add_pickup_point,                 # noqa: F401
+    update_pickup_point, delete_pickup_point,                               # noqa: F401
     _category_code, seed_categories, seed_category_specs,                   # noqa: F401
     list_category_specs, add_category_spec, update_category_spec,           # noqa: F401
     delete_category_spec, list_categories, category_codes, add_category,    # noqa: F401

@@ -13,7 +13,7 @@ partut/web/games.py — ручки развлечений: колесо, сло�
 """
 
 import json
-import random
+import secrets
 
 from flask import Blueprint, jsonify, request
 
@@ -28,6 +28,17 @@ from partut import notifications
 # НЕ импортирует server, и граф зависимостей остаётся деревом.
 # Подключает его фабрика в server.py.
 bp = Blueprint("games", __name__)
+
+
+# Жребий, который не предсказать.
+#
+# Обычный random — это вихрь Мерсенна: зная шестьсот двадцать четыре подряд
+# выданных числа, дальнейшие считают точно. Для перемешивания списка это
+# безразлично, а здесь на кону монеты, то есть скидка, то есть деньги
+# магазина. Тот, кто видит исходы (а колесо их и показывает), в принципе
+# способен подгадать момент прокрута. Цена вопроса — одна строка, поэтому
+# спорить тут не о чем.
+жребий = secrets.SystemRandom()
 
 
 # Колесо фортуны: секторы (монеты + вес вероятности). Малые призы — часто, крупные — редко.
@@ -69,7 +80,7 @@ def api_wheel_spin():
         return jsonify({"ok": False, "error": "auth"}), 401
     uid = int(user["id"])
     weights = [s["weight"] for s in WHEEL_SECTORS]
-    idx = random.choices(range(len(WHEEL_SECTORS)), weights=weights, k=1)[0]
+    idx = жребий.choices(range(len(WHEEL_SECTORS)), weights=weights, k=1)[0]
     prize = WHEEL_SECTORS[idx]
     res = db.do_wheel_spin(uid, prize["coins"])     # списание+начисление за 1 запрос
     if res is None:
@@ -130,7 +141,7 @@ def _slot_grid(win_emoji, line_idx):
     любые ДРУГИЕ случайно совпавшие линии. При проигрыше — гарантирует, что НИ ОДНА
     линия не совпала (чтобы не показать неоплаченный «выигрыш»)."""
     emojis = [s["emoji"] for s in SLOT_SYMBOLS]
-    grid = [[random.choice(emojis) for _ in range(3)] for _ in range(3)]
+    grid = [[жребий.choice(emojis) for _ in range(3)] for _ in range(3)]
     if win_emoji is not None:
         for r, c in SLOT_LINES[line_idx]:
             grid[r][c] = win_emoji
@@ -143,18 +154,18 @@ def _slot_grid(win_emoji, line_idx):
             free = [(r, c) for r, c in SLOT_LINES[bad[0]] if (r, c) not in target]
             if not free:
                 break
-            r, c = random.choice(free)
+            r, c = жребий.choice(free)
             cur = grid[r][c]
-            grid[r][c] = random.choice([e for e in emojis if e != cur] or emojis)
+            grid[r][c] = жребий.choice([e for e in emojis if e != cur] or emojis)
         return grid
     # проигрыш — ломаем любые случайно совпавшие линии
     for _ in range(50):
         bad = [i for i, ln in enumerate(SLOT_LINES) if len(set(_line_vals(grid, ln))) == 1]
         if not bad:
             break
-        r, c = SLOT_LINES[bad[0]][random.randint(0, 2)]
+        r, c = SLOT_LINES[bad[0]][жребий.randint(0, 2)]
         cur = grid[r][c]
-        grid[r][c] = random.choice([e for e in emojis if e != cur] or emojis)
+        grid[r][c] = жребий.choice([e for e in emojis if e != cur] or emojis)
     return grid
 
 
@@ -180,7 +191,7 @@ def api_slot_spin():
     bet = inputs.целое(data.get("bet", SLOT_MIN_BET), SLOT_MIN_BET)
     if bet not in SLOT_BETS:
         return jsonify({"ok": False, "error": "bad_bet"}), 400
-    roll = random.random() * 100.0
+    roll = жребий.random() * 100.0
     cum, win = 0.0, None
     for s in SLOT_SYMBOLS:
         cum += s["percent"]
@@ -195,7 +206,7 @@ def api_slot_spin():
 
     # Сетка 3×3. Выигрыш выкладывается по случайной линии (ряд или диагональ).
     if win:
-        line_idx = random.randint(0, len(SLOT_LINES) - 1)
+        line_idx = жребий.randint(0, len(SLOT_LINES) - 1)
         grid = _slot_grid(win["emoji"], line_idx)
         win_cells = SLOT_LINES[line_idx]
     else:

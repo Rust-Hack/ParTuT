@@ -17,6 +17,7 @@ from _common import (db, client, server, Checker, as_user, as_admin, deny_admin,
                      SENT, reset_sent)
 from partut.bot import handlers as botmod
 from partut import config
+from partut.web import auth
 
 ПОКУПАТЕЛЬ, ПРОДАВЕЦ, ВЛАДЕЛЕЦ = 9601, 9602, 9603
 
@@ -45,6 +46,12 @@ def run():
     старые_суперы = config.SUPER_ADMIN_IDS
     server.is_super_admin = lambda uid: int(uid) == ВЛАДЕЛЕЦ
     config.SUPER_ADMIN_IDS = старые_суперы | {ВЛАДЕЛЕЦ}
+    # Кому уходит заявка. auth забрал список к себе при импорте, и правка одного
+    # config его не касается: без этой строки заявка ушла бы не владельцу этой
+    # проверки, а тому, кто оказался в окружении, — и проверка «его позвали»
+    # молча превратилась бы в проверку ничего.
+    старые_суперы_auth = auth.SUPER_ADMIN_IDS
+    auth.SUPER_ADMIN_IDS = {ВЛАДЕЛЕЦ}
     try:
         c = Checker("Продавец просит, а не берёт")
         as_admin(uid=ПРОДАВЕЦ, username="продавец Турова", role="staff", city="Туров")
@@ -62,6 +69,15 @@ def run():
         c("в заявке видно сумму", "300" in текст)
         c("и номер заказа", f"#{свой}" in текст)
         c("и причина, а не голое число", "под потёк" in текст)
+
+        # Заявка, о которой владелец не узнал, — это просто строка в базе:
+        # продавец ждёт решения, а решать некому. Рассылка ушла в фон
+        # (см. auth._gate), и падение там было бы молчаливым — поэтому
+        # проверяем не «код вызван», а что владельцу и правда написали.
+        зовут = [x for x in SENT if x[0] == ВЛАДЕЛЕЦ and "Запрос" in str(x[1])]
+        c("владельца позвали решать", len(зовут) == 1)
+        c("и сказали, что решать", зовут and "под потёк" in str(зовут[0][1]))
+        c("и от кого", зовут and str(ПРОДАВЕЦ) in str(зовут[0][1]))
 
         c2 = Checker("Границы")
         r = client.post("/api/admin/order/compensate",
@@ -179,6 +195,7 @@ def run():
     finally:
         server.is_super_admin = настоящий_супер
         config.SUPER_ADMIN_IDS = старые_суперы
+        auth.SUPER_ADMIN_IDS = старые_суперы_auth
         db.set_setting("compensation_max", db.COMPENSATION_MAX_DEFAULT)
         as_admin()
         _clean()
