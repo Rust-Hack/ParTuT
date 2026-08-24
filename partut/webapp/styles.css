@@ -627,6 +627,9 @@ html[data-theme="dark"] .statcard, html[data-theme="dark"] .statlist { border: 1
 .oitems { margin: 10px 0; border-top: 1px solid var(--line); padding-top: 10px; }
 .oitem { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; padding: 3px 0; }
 .oitem span:last-child { color: var(--hint); white-space: nowrap; }
+/* Доставка, промокод, монеты — не позиции заказа, а поправки к сумме:
+   приглушены, чтобы список товаров читался отдельно от арифметики. */
+.oitem.odeduct span { color: var(--hint); font-size: 12.5px; }
 .ototal { display: flex; justify-content: space-between; font-weight: 800; margin-top: 6px; font-size: 15px; }
 .oreceipt { margin-top: 10px; }
 .oreceipt img { max-width: 140px; max-height: 180px; border-radius: 12px; border: 1px solid var(--line);

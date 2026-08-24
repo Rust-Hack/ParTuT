@@ -79,7 +79,6 @@ function renderMyOrders() {
     const details = [
       o.delivery_method ? ["Получение", o.delivery_method + (o.delivery_address ? " · " + esc(o.delivery_address) : "")] : null,
       pm ? ["Оплата", pm] : null,
-      o.delivery_fee ? ["Доставка", (+o.delivery_fee).toFixed(2) + " " + "Br"] : null,
       o.comment ? ["Комментарий", esc(o.comment)] : null,
     ].filter(Boolean).map(([k, v]) => `<div class="statrow"><span>${k}</span><b>${v}</b></div>`).join("");
     const needReceipt = o.status === "new" && o.payment_method === "card";
@@ -92,7 +91,7 @@ function renderMyOrders() {
         <span class="obadge ${st.cls}">${st.label}</span>
       </div>
       ${orderTracker(o.status)}
-      <div class="oitems" style="margin-top:8px">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} ${CUR}</span></div></div>
+      <div class="oitems" style="margin-top:8px">${items}${orderDeductions(o)}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} ${CUR}</span></div></div>
       ${details ? `<div class="odetails">${details}</div>` : ""}
       ${payBtn}
       <button class="bigbtn" data-repeat="${idx}" style="margin-top:10px;background:var(--surface-2);color:var(--text)">🔁 Повторить заказ</button>
@@ -223,6 +222,26 @@ function orderMatchesSearch(o) {
     || (o.phone || "").toLowerCase().includes(q);
 }
 
+// Строки между позициями и «Итого»: доставка, промокод, монеты. Без них
+// продавец, пересчитывающий наличные, видит разницу и не понимает откуда:
+// позиции складываются в одну сумму, а в заказе стоит другая.
+function orderDeductions(o) {
+  const строки = [];
+  const fee = +(o.delivery_fee || 0);
+  const promo = +(o.promo_discount || 0);
+  const товары = (o.items || []).reduce((s, it) => s + (+it.price) * (+it.qty), 0);
+  // Скидку монетами показываем ТУ, что учтена в «Итого», а не пересчитанную по
+  // нынешней цене монеты: считать заново — значит однажды показать строки,
+  // которые не складываются в сумму заказа, и заставить продавца искать
+  // недостачу там, где её нет.
+  const учтено = Math.round((товары + fee - promo - (+o.total)) * 100) / 100;
+  const coins = +(o.coins_discount || 0) > 0 ? (учтено > 0 ? учтено : +o.coins_discount) : 0;
+  if (fee) строки.push(["Доставка", `+${fee.toFixed(2)} Br`]);
+  if (promo) строки.push(["Промокод", `−${promo.toFixed(2)} Br`]);
+  if (coins) строки.push(["Монетами", `−${coins.toFixed(2)} Br`]);
+  return строки.map(([k, v]) => `<div class="oitem odeduct"><span>${k}</span><span>${v}</span></div>`).join("");
+}
+
 function renderOrders() {
   const list = adminOrders.filter(o => orderMatchesFilter(o) && orderMatchesSearch(o));
   if (!list.length) {
@@ -268,7 +287,7 @@ function renderOrders() {
         <span class="obadge ${st.cls}">${st.label}</span>
       </div>
       ${deliv}${contact}
-      <div class="oitems">${items}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} Br</span></div></div>
+      <div class="oitems">${items}${orderDeductions(o)}<div class="ototal"><span>Итого</span><span>${(+o.total).toFixed(2)} Br</span></div></div>
       ${trail}${receipt}
       <div class="oacts">${acts}<button class="omsg" data-omsg="${o.user_id}" data-owho="${esc(who)}">✍️ Написать</button>${edit}<button class="omsg" data-ocomp="${o.id}" data-owho="${esc(who)}">🎁 Компенсация</button></div>
     </div>`;
@@ -335,9 +354,20 @@ $("oeditSave").onclick = async () => {
       return;
     }
     $("oeditView").classList.remove("show");
+    // Заказ, уже оплаченный картой, после урезания стоит меньше, чем человек
+    // заплатил. Разницу надо вернуть, и сказать об этом надо ЗДЕСЬ — другого
+    // момента, когда продавец об этом думает, не будет.
+    const былоBr = +oeditOrder.total, сталоBr = +(d.order && d.order.total);
+    const картой = oeditOrder.payment_method === "card";
+    const оплачен = ["paid", "confirmed"].includes(oeditOrder.status);
     await loadAdminOrders();
     await refreshProducts();
-    toast("Состав изменён, покупателю отправлено");
+    if (картой && оплачен && сталоBr < былоBr) {
+      alertMsg(`Состав изменён, покупателю отправлено.\n\n💸 Заказ был оплачен картой на ${былоBr.toFixed(2)} Br, `
+             + `стал ${сталоBr.toFixed(2)} Br — вернуть покупателю ${(былоBr - сталоBr).toFixed(2)} Br.`);
+    } else {
+      toast("Состав изменён, покупателю отправлено");
+    }
   } catch (e) { alertMsg("Сеть недоступна."); }
   finally { $("oeditSave").disabled = false; }
 };
@@ -364,14 +394,13 @@ function renderRejectReasons() {
     b.onclick = () => { orejReason = b.dataset.rr; renderRejectReasons(); });
 }
 $("orejGo").onclick = async () => {
-  try {
-    await fetch("/api/admin/order/status", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData, id: orejId, action: "reject", reason: orejReason, note: $("orejNote").value }) });
-    $("orejView").classList.remove("show");
-    await loadAdminOrders();
-    await refreshProducts();
-    loadToday();               // отклонённый заказ ушёл из «ждут подтверждения»
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  const d = await админПост("/api/admin/order/status",
+    { id: orejId, action: "reject", reason: orejReason, note: $("orejNote").value }, "отклонить заказ");
+  if (!d) return;              // окно оставляем открытым: заказ НЕ отклонён
+  $("orejView").classList.remove("show");
+  await loadAdminOrders();
+  await refreshProducts();
+  loadToday();                 // отклонённый заказ ушёл из «ждут подтверждения»
 };
 
 async function orderAction(id, action, paidAmount) {
@@ -385,14 +414,16 @@ async function orderAction(id, action, paidAmount) {
   }
   const ask = action === "issued" ? "Отметить заказ выданным?" : "Подтвердить заказ?";
   const go = async () => {
-    try {
-      const body = { initData, id, action };
-      if (paidAmount !== undefined && paidAmount !== null) body.paid_amount = paidAmount;
-      await fetch("/api/admin/order/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      await loadAdminOrders();
-      await refreshProducts();   // остаток мог вернуться при отклонении
-      loadToday();               // плитки «ждут подтверждения» / «к выдаче» — сразу
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    const body = { id, action };
+    if (paidAmount !== undefined && paidAmount !== null) body.paid_amount = paidAmount;
+    // Отказ сервера здесь встречается в жизни: заказ уже закрыл второй
+    // продавец, или это заказ чужой точки. Раньше кнопка просто «не работала».
+    const d = await админПост("/api/admin/order/status", body,
+                              action === "issued" ? "отметить выданным" : "подтвердить заказ");
+    if (!d) { await loadAdminOrders(); return; }
+    await loadAdminOrders();
+    await refreshProducts();   // остаток мог вернуться при отклонении
+    loadToday();               // плитки «ждут подтверждения» / «к выдаче» — сразу
   };
   if (paidAmount !== undefined) { go(); return; }   // спрашивали уже — второй раз незачем
   confirmMsg(ask, go);

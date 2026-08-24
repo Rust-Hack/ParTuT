@@ -250,7 +250,9 @@ $("mdSave").onclick = async () => {
     if (modelPhotoFile) {
       const fd = new FormData();
       fd.append("initData", initData); fd.append("id", d.id); fd.append("file", modelPhotoFile);
-      await fetch("/api/admin/model/photo", { method: "POST", body: fd });
+      // Модель сохранится и без фото, поэтому не выходим: говорим про фото и
+      // идём дальше. Молчать нельзя — снимок бы просто пропал.
+      await админФайл("/api/admin/model/photo", fd, "загрузить фото модели");
     }
     const updated = d.updated, wasNew = !editingModelId;
     resetModelForm();
@@ -282,8 +284,8 @@ function renderModelList() {
     return;
   }
   let html = "";
-  for (const [code, cn] of CAT_OPTS) {
-    const group = list.filter(m => m.category === code);
+  for (const [code, cn] of группыКатегорий(list)) {
+    const group = list.filter(m => (m.category || "") === code);
     if (!group.length) continue;
     html += `<div class="brgroup">${cn} · ${group.length}</div>`;
     html += group.map(m => {
@@ -820,7 +822,7 @@ function gamesRows(g) {
 }
 
 // ----- Розыгрыш (админ) -----
-let raffleRunning = false;
+let raffleRunning = false, raffleУчастников = 0;
 $("mRaffle").onclick = openRaffleAdmin;
 $("raffleAdminClose").onclick = () => $("raffleAdminView").classList.remove("show");
 async function openRaffleAdmin() {
@@ -833,6 +835,7 @@ async function openRaffleAdmin() {
     // Розыгрыш идёт только тогда, когда его начали. Пока не начали —
     // показываем заготовку и одну кнопку, а не настройки того, чего нет.
     raffleRunning = !!ra;
+    raffleУчастников = ra ? (ra.participants || 0) : 0;
     $("raTitle").value = ra ? (ra.title || "") : "Розыгрыш месяца";
     $("raPrize1").value = ra ? (ra.prize1 || "") : "Одноразка";
     $("raPrize2").value = ra ? (ra.prize2 || "") : "Жидкость";
@@ -893,14 +896,14 @@ $("raStart").onclick = async () => {
 };
 $("raDraw").onclick = () => {
   const go = async () => {
-    try {
-      await fetch("/api/admin/raffle/draw", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
-      alertMsg("Итоги подведены, розыгрыш завершён ✅"); openRaffleAdmin();
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    if (!await админПост("/api/admin/raffle/draw", {}, "подвести итоги")) return;
+    alertMsg("Итоги подведены, розыгрыш завершён ✅"); openRaffleAdmin();
   };
-  // Следующий розыгрыш начнётся тогда, когда владелец сам его начнёт —
-  // говорим об этом прямо, чтобы кнопка не оказалась неожиданной.
-  confirmMsg("Подвести итоги сейчас и завершить розыгрыш? Новый начнётся только когда вы его начнёте.", go);
+  // Сколько участников — здесь же: подвести итоги при нуле значит закрыть
+  // розыгрыш без победителей, и узнать об этом потом будет неоткуда.
+  const сколько = raffleУчастников;
+  confirmMsg(`Подвести итоги сейчас и завершить розыгрыш? Участников: ${сколько}. `
+             + "Новый начнётся только когда вы его начнёте.", go);
 };
 
 // ----- Пользователи и рефералы (админ) -----
@@ -1025,7 +1028,7 @@ async function showUserCard(u) {
     <div class="cctile"><div class="v">${(c.spent || 0).toFixed(2)} Br</div><div class="k">Принёс за всё время</div></div>
     <div class="cctile"><div class="v">${(c.avg_check || 0).toFixed(2)} Br</div><div class="k">Средний чек</div></div>
     <div class="cctile"><div class="v">${c.issued || 0}</div><div class="k">Выдано заказов${c.canceled ? `<small>отклонено: ${c.canceled}</small>` : ""}${c.open ? `<small>в работе: ${c.open}</small>` : ""}</div></div>
-    <div class="cctile"><div class="v">${c.profit_known ? (c.profit || 0).toFixed(2) + " Br" : "—"}</div><div class="k">Заработали на нём${c.profit_known ? "" : `<small>нет закупочных цен</small>`}</div></div>
+    <div class="cctile"><div class="v">${c.profit_known ? (c.profit || 0).toFixed(2) + " Br" : "—"}</div><div class="k">Заработали на нём${c.profit_known ? "" : `<small>${c.issued ? "нет закупочных цен" : "покупок ещё не было"}</small>`}</div></div>
   </div>`;
 
   const fav = (c.favorites || []).length
@@ -1342,7 +1345,20 @@ function openStockMove(id) {
   $("stockFlavor").innerHTML = вкусы.map(v => `<option value="${esc(v.flavor)}">${esc(v.flavor)} · ${v.stock} шт</option>`).join("");
 
   renderStockReasons();
+  // Пересчёт считает разницу от выбранного вкуса — смена вкуса меняет и её.
+  $("stockFlavor").onchange = applyStockMode;
+  $("stockQty").oninput = () => { if (stockReason === "fix") stockПоказатьРазницу(); };
   loadStockLog(id);
+}
+
+// Сколько сейчас числится по той полке, о которой идёт речь: у товара со
+// вкусами — по выбранному вкусу, иначе по товару целиком.
+function stockСейчас() {
+  const вкусы = (stockProduct && stockProduct.variants) || [];
+  if (!вкусы.length) return +(stockProduct ? stockProduct.stock : 0);
+  const выбран = $("stockFlavor").value;
+  const v = вкусы.find(x => x.flavor === выбран);
+  return +(v ? v.stock : 0);
 }
 
 function renderStockReasons() {
@@ -1350,11 +1366,39 @@ function renderStockReasons() {
     `<button class="opt ${stockReason === k ? 'active' : ''}" data-sr="${k}">${n}</button>`).join("");
   $("stockReasons").querySelectorAll("[data-sr]").forEach(b => b.onclick = () => {
     stockReason = b.dataset.sr; renderStockReasons();
-    // Закупочная цена нужна только при приходе — в остальных случаях
-    // спрашивать её незачем.
-    $("stockCostWrap").style.display = stockReason === "in" ? "" : "none";
   });
+  // Закупочная цена нужна только при приходе — в остальных случаях
+  // спрашивать её незачем.
   $("stockCostWrap").style.display = stockReason === "in" ? "" : "none";
+  applyStockMode();
+}
+
+// Пересчёт спрашивает РЕЗУЛЬТАТ, остальные причины — количество. Считать
+// разницу в уме — работа для машины, и на ней же ошибаются: минус вместо
+// плюса виден только назавтра, по недостаче.
+function applyStockMode() {
+  const пересчёт = stockReason === "fix";
+  const было = stockСейчас();
+  $("stockQtyLabel").textContent = пересчёт ? "Сколько получилось при пересчёте" : "Сколько штук";
+  $("stockQtyNote").style.display = пересчёт ? "" : "none";
+  const поле = $("stockQty");
+  поле.closest(".qty").dataset.min = пересчёт ? "0" : "1";
+  if (пересчёт) {
+    if (!поле.value) поле.value = было;
+    stockПоказатьРазницу();
+  } else if (String(поле.value) === String(было)) {
+    поле.value = "";
+  }
+}
+
+function stockПоказатьРазницу() {
+  const было = stockСейчас();
+  const стало = parseInt($("stockQty").value, 10);
+  if (isNaN(стало)) { $("stockQtyNote").textContent = `Сейчас числится ${было} шт.`; return; }
+  const d = стало - было;
+  $("stockQtyNote").textContent = d === 0
+    ? `Числится ${было} шт — сходится, записывать нечего.`
+    : `Числится ${было} шт → станет ${стало} шт (${d > 0 ? "+" : ""}${d}).`;
 }
 
 async function loadStockLog(id) {
@@ -1377,7 +1421,10 @@ async function loadStockLog(id) {
 
 $("stockSave").onclick = async () => {
   const qty = parseInt($("stockQty").value, 10);
-  if (!qty || qty <= 0) { alertMsg("Укажите количество."); return; }
+  if (isNaN(qty) || qty < 0) { alertMsg("Укажите количество."); return; }
+  if (stockReason === "fix") {
+    if (qty === stockСейчас()) { alertMsg("Столько и числится — записывать нечего."); return; }
+  } else if (qty <= 0) { alertMsg("Укажите количество."); return; }
   const body = { initData, id: stockProduct.id, qty, reason: stockReason,
                  cost: stockReason === "in" ? $("stockCost").value : "",
                  note: $("stockNote").value,
@@ -1565,10 +1612,8 @@ $("pmAdd").onclick = async () => {
 };
 
 async function togglePromo(code, active) {
-  try {
-    await fetch("/api/admin/promo/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, code, active }) });
-    await loadPromos();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  if (!await админПост("/api/admin/promo/toggle", { code, active }, "переключить код")) return;
+  await loadPromos();
 }
 
 // Удаление уносит и статистику, поэтому предупреждаем: обычно нужен «выключить».
@@ -1577,10 +1622,8 @@ function delPromo(code) {
              () => doDelPromo(code));
 }
 async function doDelPromo(code) {
-  try {
-    await fetch("/api/admin/promo/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, code }) });
-    await loadPromos();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  if (!await админПост("/api/admin/promo/delete", { code }, "удалить код")) return;
+  await loadPromos();
 }
 
 // ----- Доступ продавцов (только супер-админ) -----
@@ -1616,6 +1659,19 @@ const LOG_NAMES = {
   "coins/adjust": "правка монет", "grant": "начислил", "message": "написал клиенту",
   "stats/reset": "сбросил статистику", "raffle/update": "правка розыгрыша",
   "raffle/draw": "разыграл призы", "user/delete": "удалил пользователя",
+  // Дальше — то, что раньше попадало в журнал английским путём запроса.
+  // Журнал читают, когда ищут, кто что сделал: «order/compensate» на этот
+  // вопрос не отвечает, а именно компенсации и правки заказов ищут чаще всего.
+  "order/compensate": "компенсация покупателю", "order/items": "правка состава заказа",
+  "request/decide": "решение по заявке", "raffle/start": "начал розыгрыш",
+  "raffle/photo": "фото розыгрыша", "model/hide": "скрыл/вернул модель",
+  "product/to-model": "перенёс товар в ассортимент", "photo": "фото товара",
+  "point": "добавил адрес самовывоза", "point/update": "изменил адрес самовывоза",
+  "point/delete": "удалил адрес самовывоза", "docs": "правка оферты",
+  "category/spec": "добавил характеристику", "category/spec/update": "изменил характеристику",
+  "category/spec/delete": "удалил характеристику",
+  "referral/unlink": "отвязал реферала", "referral/clear": "отвязал всех рефералов",
+  "wheel/grant": "начислил прокруты",
 };
 
 const LOG_FIELDS = { price: "цена", cost: "закупка", stock: "остаток", name: "название",

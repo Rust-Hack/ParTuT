@@ -21,6 +21,20 @@ from partut import inputs
 # НЕ импортирует server, и граф зависимостей остаётся деревом.
 # Подключает его фабрика в server.py.
 bp = Blueprint("stock", __name__)
+def _сколько_числится(товар, flavor):
+    """Остаток той полки, о которой идёт речь: у товара со вкусами — по вкусу.
+
+    Берём из базы, а не из присланного числа: между открытием окна и нажатием
+    «Записать» проходит время, и за него мог случиться заказ.
+    """
+    if not flavor:
+        return int(товар["stock"] or 0)
+    for v in db.get_variants(int(товар["id"])):
+        if v["flavor"] == flavor:
+            return int(v["stock"] or 0)
+    return 0
+
+
 @bp.route("/api/admin/stock/move", methods=["POST"])
 def api_admin_stock_move():
     """Приход или списание с причиной. Остаток меняется только так — тогда на
@@ -34,25 +48,42 @@ def api_admin_stock_move():
         qty = int(data.get("qty"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad_number"}), 400
-    if qty <= 0:
+    if qty < 0:
         return jsonify({"ok": False, "error": "bad_number"}), 400
     reason = data.get("reason")
     if reason not in db.STOCK_REASONS:
         return jsonify({"ok": False, "error": "bad_reason"}), 400
-    if not db.get_product(pid):
+    if reason != "fix" and qty <= 0:
+        return jsonify({"ok": False, "error": "bad_number"}), 400
+    товар = db.get_product(pid)
+    if not товар:
         return jsonify({"ok": False, "error": "not_found"}), 404
     deny = auth.deny_product(admin, pid)
     if deny:
         return deny
 
-    # Приход прибавляет, всё остальное списывает. Знак задаёт причина, а не
-    # клиент: иначе «списание» могло бы прийти с плюсом.
-    delta = qty if reason == "in" else -qty
+    flavor = inputs._text(data.get("flavor")) or None
+    # Приход прибавляет, списания вычитают. Знак задаёт причина, а не клиент:
+    # иначе «брак» мог бы прийти с плюсом.
+    #
+    # Пересчёт стоит особняком: продавец присылает РЕЗУЛЬТАТ пересчёта, а
+    # разницу считаем здесь. Считать её на клиенте — значит доверять чужой
+    # арифметике при записи на склад, а ошибка в знаке вскроется только
+    # следующей недостачей. Разница бывает и в плюс: пересчёт находит не
+    # только пропажу, но и лишнее — раньше поправить это было нечем, кроме
+    # «Прихода», а тот переписывает закупочную цену и врёт про завоз.
+    if reason == "fix":
+        было = _сколько_числится(товар, flavor)
+        delta = qty - было
+        if delta == 0:
+            return jsonify({"ok": False, "error": "no_change",
+                            "message": "Столько и числится — записывать нечего."}), 400
+    else:
+        delta = qty if reason == "in" else -qty
     try:
         cost = max(0.0, float(str(data.get("cost") or 0).replace(",", ".")))
     except (TypeError, ValueError):
         cost = 0.0
-    flavor = inputs._text(data.get("flavor")) or None
     stock = db.move_stock(pid, delta, reason, flavor=flavor, cost=cost,
                           note=data.get("note"), admin_id=int(admin["id"]))
     return jsonify({"ok": True, "stock": stock})

@@ -63,6 +63,17 @@ let categories = [
   { code: "podsystem", name: "Подсистемы", emoji: "🧩" },
 ];
 let CATS = {}, CAT_EMOJI = {}, CAT_OPTS = [];
+
+// Группы для списков моделей и брендов. Раньше списки шли строго по CAT_OPTS,
+// и запись с категорией, которой в справочнике нет, ПРОПАДАЛА молча: в базе
+// есть, на экране нет, и узнать неоткуда. Теперь для таких заводим последнюю
+// группу «Без категории» — видно, что запись есть, и её можно поправить.
+function группыКатегорий(записи, свои) {
+  свои = свои || CAT_OPTS;
+  const известны = new Set(свои.map(([c]) => c));
+  const чужие = [...new Set(записи.map(z => z.category || "").filter(c => !известны.has(c)))];
+  return [...свои, ...чужие.map(c => [c, c ? `Без категории (${c})` : "Без категории"])];
+}
 function applyCategories() {
   CATS = { "": "Все товары" };
   CAT_EMOJI = {};
@@ -350,9 +361,50 @@ async function openDeepLink() {
   await openAdmin();
   openOrders();
 }
+// Ответ сервера надо ЧИТАТЬ. «Готово ✅», сказанное не глядя на ответ, —
+// худший вид ошибки: человек уверен, что сделал, а на деле не сделано ничего,
+// и узнаёт он об этом через неделю по чужой жалобе. Через этот помощник идут
+// все админские действия: он возвращает разобранный ответ или null, назвав
+// причину человеческими словами.
+const ОТКАЗЫ = {
+  forbidden:   "Нет доступа.",
+  owner_only:  "Это меняет магазин целиком — только у владельца.",
+  other_city:  "Это другая точка — её ведёт другой продавец.",
+  closed:      "Заказ уже закрыт — обновите список.",
+  not_found:   "Не найдено: возможно, кто-то уже удалил.",
+  no_raffle:   "Розыгрыш не идёт — подводить нечего.",
+  already:     "Это уже сделано.",
+  bad_number:  "Проверьте число.",
+  bad_input:   "Поле заполнено неверно.",
+};
+
+async function админПост(адрес, тело, что) {
+  try {
+    const r = await fetch(адрес, { method: "POST", headers: { "Content-Type": "application/json" },
+                                   body: JSON.stringify({ initData, ...(тело || {}) }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok) return d;
+    alertMsg(d.message || ОТКАЗЫ[d.error] || (что ? `Не удалось: ${что}.` : "Не удалось."));
+    return null;
+  } catch (e) { alertMsg("Сеть недоступна."); return null; }
+}
+
+// То же для отправки файла: там тело — FormData, а разбор ответа тот же.
+async function админФайл(адрес, fd, что) {
+  try {
+    const r = await fetch(адрес, { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok) return d;
+    alertMsg(d.message || ОТКАЗЫ[d.error] || (что ? `Не удалось: ${что}.` : "Не удалось."));
+    return null;
+  } catch (e) { alertMsg("Сеть недоступна."); return null; }
+}
+
 function prefetchBonuses() { prefetchDelivery(); fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle(); }
 $("ageYes").onclick = async () => {
-  await fetch("/api/age", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+  // Не записалось — не закрываем окно: иначе человек ходит по магазину, а на
+  // «Оформить» получает отказ по возрасту и не понимает, при чём тут это.
+  if (!await админПост("/api/age", {}, "подтвердить возраст")) return;
   $("ageView").classList.remove("show"); loadCatalog().then(prefetchBonuses);
 };
 $("ageNo").onclick = () => { if (tg) tg.close(); };

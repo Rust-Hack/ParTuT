@@ -291,11 +291,12 @@
         <select id="stockFlavor"></select>
       </div>
 
-      <label>Сколько штук</label>
+      <label id="stockQtyLabel">Сколько штук</label>
       <span class="qty" data-min="1">
         <button type="button" class="qtybtn" data-qty="-1">−</button>
         <input id="stockQty" inputmode="numeric" placeholder="1">
         <button type="button" class="qtybtn" data-qty="1">+</button></span>
+      <div class="dnote" id="stockQtyNote" style="margin:6px 0 0;display:none"></div>
 
       <div id="stockCostWrap">
         <label>Закупочная цена за штуку (Br)</label>

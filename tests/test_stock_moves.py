@@ -107,6 +107,61 @@ def run():
     return c.fails + c2.fails
 
 
+def run_recount():
+    """Пересчёт: продавец присылает РЕЗУЛЬТАТ, разницу считает сервер.
+
+    Раньше пересчёт работал как списание — просил разницу и умел только вниз.
+    Насчитал больше, чем в базе, — поправить было нечем, кроме «Прихода», а тот
+    переписывает закупочную цену и врёт про завоз, которого не было.
+    """
+    c = Checker("Пересчёт склада")
+    _clean()
+    as_admin(uid=556)
+
+    pid = db.add_product("Минск", "pods", "ПересчётПод", 20.0, 10, cost=12.0)
+
+    # Насчитали меньше, чем числится.
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 8, "reason": "fix"})
+    c("недостача записана", r.get_json().get("ok"))
+    c("остаток стал ровно тем, что насчитали", r.get_json()["stock"] == 8)
+    ход = db.get_stock_moves(pid, limit=1)[0]
+    c("в журнале разница, а не итог", ход["delta"] == -2)
+
+    # Насчитали БОЛЬШЕ — раньше это было невозможно.
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 11, "reason": "fix"})
+    c("излишек записан", r.get_json().get("ok"))
+    c("остаток вырос до насчитанного", r.get_json()["stock"] == 11)
+    c("разница положительная", db.get_stock_moves(pid, limit=1)[0]["delta"] == 3)
+    c("закупочная цена не тронута", abs(float(db.get_product(pid)["cost"]) - 12.0) < 0.01)
+
+    # Сошлось — записывать нечего.
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 11, "reason": "fix"})
+    c("совпадение не пишется в журнал", r.status_code == 400 and r.get_json()["error"] == "no_change")
+    c("движений всё столько же", len(db.get_stock_moves(pid, limit=50)) == 2)
+
+    # Ноль при пересчёте — законный результат: полка пуста.
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 0, "reason": "fix"})
+    c("ноль при пересчёте разрешён", r.get_json().get("ok") and r.get_json()["stock"] == 0)
+    # А у прочих причин ноль по-прежнему промах, а не операция.
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 0, "reason": "broken"})
+    c("ноль в списании отвергнут", r.status_code == 400)
+
+    # У товара со вкусами считаем по выбранному вкусу, а не по товару целиком.
+    vid = db.add_product("Минск", "disposable", "ПересчётВкус", 30.0, 0, cost=15.0)
+    db.add_variant(vid, "Мята", 5)
+    db.add_variant(vid, "Вишня", 4)
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": vid, "qty": 2,
+                                                   "reason": "fix", "flavor": "Мята"})
+    c("вкус пересчитан", r.get_json().get("ok"))
+    вкусы = {v["flavor"]: v["stock"] for v in db.get_variants(vid)}
+    c("у Мяты стало 2", вкусы["Мята"] == 2)
+    c("Вишня не тронута", вкусы["Вишня"] == 4)
+    c("общий остаток пересобран", db.get_product(vid)["stock"] == 6)
+
+    _clean()
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)

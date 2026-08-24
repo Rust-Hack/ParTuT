@@ -68,7 +68,7 @@ function renderBrandList() {
   let html = "";
   // Общие бренды идут первыми: бренд «во всех категориях» — теперь норма,
   // а не исключение (Vaporesso делает и поды, и картриджи).
-  const groups = [["", "Во всех категориях"], ...CAT_OPTS];
+  const groups = группыКатегорий(filtered, [["", "Во всех категориях"], ...CAT_OPTS]);
   for (const [cat, cn] of groups) {
     const group = filtered.filter(b => (b.category || "") === cat);
     if (!group.length) continue;
@@ -295,10 +295,8 @@ async function addPickupPoint(btn) {
 
 function delPickupPoint(id) { confirmMsg("Удалить точку самовывоза?", () => doDelPickupPoint(id)); }
 async function doDelPickupPoint(id) {
-  try {
-    await fetch("/api/admin/point/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
-    await loadDelivery(); renderLocList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  if (!await админПост("/api/admin/point/delete", { id }, "удалить адрес")) return;
+  await loadDelivery(); renderLocList();
 }
 async function saveDeliveryMethod(btn) {
   const body = btn.closest(".sectbody");
@@ -326,10 +324,8 @@ async function addDeliveryMethod(btn) {
 }
 function delDeliveryMethod(id) { confirmMsg("Удалить способ получения?", () => doDelDeliveryMethod(id)); }
 async function doDelDeliveryMethod(id) {
-  try {
-    await fetch("/api/admin/delivery/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
-    await loadDelivery(); renderLocList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  if (!await админПост("/api/admin/delivery/delete", { id }, "удалить способ")) return;
+  await loadDelivery(); renderLocList();
 }
 $("locAdd").onclick = async () => {
   const name = $("locName").value.trim();
@@ -408,7 +404,8 @@ async function ensureBrandExists(name) {
     await fetch("/api/admin/brand", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ initData, name, category: "", flavors: [] }) });
     await fetchBrands();
-  } catch (e) {}
+  } catch (e) { /* молчим намеренно: продавцу справочник брендов не положен,
+                   а имя бренда всё равно сохранится строкой в товаре */ }
 }
 
 // ----- Поля характеристик строятся по настройкам категории -----
@@ -480,14 +477,17 @@ function renderAdminList() {
         <button class="iconbtn" data-hide="${p.id}" title="${p.hidden ? 'Вернуть на витрину' : 'Снять с витрины'}">${p.hidden ? '👁' : '🚫'}</button>
         <button class="iconbtn" data-edit="${p.id}">✏️</button>
         <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
+    const фото = p.photo_url ? "фото ✓" : "без фото";
+    const хит = p.is_hit ? " · 🔥" : "";
     if (hasVariants(p)) {
-      // товар-модель: цену/вкусы/остаток правим в редакторе (✏️)
+      // товар-модель: цену/вкусы/остаток правим в редакторе (✏️), но ВИДНО
+      // цену должно быть здесь: за ней в этот список и заходят чаще всего.
       return `<div class="admrow">
-        <div class="an">${esc(p.name)}<small>${p.city} · ${p.variants.length} вк · ${p.stock} шт${p.is_hit ? ' · 🔥' : ''}</small>${marks}</div>
+        <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.variants.length} вк · ${p.stock} шт · ${фото}${хит}</small>${marks}</div>
         ${tail}`;
     }
     return `<div class="admrow">
-      <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт · ${p.photo_url ? 'фото ✓' : 'без фото'}${p.is_hit ? ' · 🔥' : ''}</small>${marks}</div>
+      <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт · ${фото}${хит}</small>${marks}</div>
       ${tail}`;
   }).join("");
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
@@ -1030,7 +1030,7 @@ async function saveEdit(p) {
       await upd("price", $("edPrice").value);
       await upd("cost", $("edCost").value || 0);
       if (name) await upd("name", name);
-      await fetch("/api/admin/product/variants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, variants }) });
+      await послать("/api/admin/product/variants", { initData, id: editId, variants }, "вкусы");
     } else {
       const nm = $("edName").value.trim();
       if (!nm) { alertMsg("Введите название."); return; }
@@ -1047,14 +1047,15 @@ async function saveEdit(p) {
     }
     // Характеристики сохраняем одним запросом — сервер сам разложит крепость
     // и объём по своим колонкам, а остальное в JSON.
-    await fetch("/api/admin/product/specs", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData, id: editId, specs }) });
+    await послать("/api/admin/product/specs", { initData, id: editId, specs }, "характеристики");
     await upd("city", $("edCity").value, "точка");
     await upd("is_hit", $("edHit").checked ? 1 : 0);
     if (editPhotoFile) {
       const fd = new FormData();
       fd.append("initData", initData); fd.append("id", editId); fd.append("file", editPhotoFile);
-      await fetch("/api/admin/photo", { method: "POST", body: fd });
+      const r = await fetch("/api/admin/photo", { method: "POST", body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!d.ok) отказы.push(назвать("фото", d));
     }
     await refreshProducts();
     $("editView").classList.remove("show");
@@ -1078,12 +1079,12 @@ function delAdminRow(id) {
 // остаётся: остаток, движения склада и отзывы на месте.
 async function toggleHidden(id) {
   const p = shelf().find(x => x.id === id); if (!p) return;
-  try {
-    await fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData, id, field: "hidden", value: p.hidden ? 0 : 1 }) });
-    await refreshProducts();
-    toast(p.hidden ? "Снова на витрине" : "Снят с витрины — остаток сохранён");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  // Продавцу чужой точки сервер откажет — и раньше список просто
+  // перерисовывался по-старому, без единого слова.
+  if (!await админПост("/api/admin/product/update", { id, field: "hidden", value: p.hidden ? 0 : 1 },
+                       p.hidden ? "вернуть на витрину" : "снять с витрины")) return;
+  await refreshProducts();
+  toast(p.hidden ? "Снова на витрине" : "Снят с витрины — остаток сохранён");
 }
 async function doDelAdminRow(id, force) {
   try {
