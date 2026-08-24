@@ -82,3 +82,49 @@ def run_new_point_offers_flavors():
 
     _чисто()
     return c.fails
+
+
+def run_product_to_model():
+    """Одиночный товар превращается в модель — и после этого едет на точки.
+
+    Товары, заведённые до «Ассортимента», модели не имеют, и продать их в
+    другом городе можно было только заведя товар заново, руками, с теми же
+    полями. Это и была исходная жалоба владельца.
+    """
+    c = Checker("Товар без модели превращается в модель")
+    _чисто(); as_admin()
+
+    pid = db.add_product("Минск", "pods", "Старый под", 25.0, 0, cost=15.0,
+                         description="Описание", brand="OldBrand",
+                         strength="20", volume="30")
+    db.add_variant(pid, "Мята", 3)
+    db.add_variant(pid, "Ваниль", 2)
+    db.recalc_product_stock(pid)
+    c("у товара нет модели", db.get_product(pid)["model_id"] is None)
+
+    ответ = client.post("/api/admin/product/to-model", json={"initData": "x", "id": pid})
+    c("ручка ответила", ответ.status_code == 200 and ответ.get_json()["ok"])
+    mid = ответ.get_json()["model_id"]
+
+    c("товар привязан к модели", db.get_product(pid)["model_id"] == mid)
+    м = db.get_model(mid)
+    c("название перенесено", м["name"] == "Старый под")
+    c("бренд перенесён", м["brand"] == "OldBrand")
+    c(f"вкусы перенесены: {м['flavors']}", set(м["flavors"]) == {"Мята", "Ваниль"})
+    c("характеристики перенесены",
+      str(м["specs"].get("strength")) == "20" and str(м["specs"].get("volume")) == "30")
+
+    # Ради чего всё: теперь товар едет на вторую точку.
+    ответ2 = client.post("/api/admin/product/from-model", json={
+        "initData": "x", "model_id": mid, "city": "Туров", "price": "27", "cost": "15",
+        "variants": [{"flavor": "Мята", "stock": 4}]})
+    c("на второй точке заведён", ответ2.status_code == 200 and ответ2.get_json()["ok"])
+    c("на двух точках", len([p for p in db.get_all_products() if p["model_id"] == mid]) == 2)
+
+    # Повторное превращение — отказ, а не вторая модель.
+    ещё = client.post("/api/admin/product/to-model", json={"initData": "x", "id": pid})
+    c("второй раз нельзя", ещё.status_code == 400)
+    c("и модель осталась одна", db.get_product(pid)["model_id"] == mid)
+
+    _чисто()
+    return c.fails

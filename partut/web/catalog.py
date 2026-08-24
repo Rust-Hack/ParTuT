@@ -633,6 +633,60 @@ def api_admin_model_photo():
     return jsonify({"ok": True})
 
 
+@bp.route("/api/admin/product/to-model", methods=["POST"])
+def api_admin_product_to_model():
+    """Сделать из одиночного товара модель — чтобы он мог стоять на точках.
+
+    Товары, заведённые до «Ассортимента», модели не имеют, и продавать их в
+    другом городе можно было только заведя товар заново, руками, с теми же
+    полями. Ровно на это владелец и жаловался.
+
+    Описание берём из самого товара: название, бренд, характеристики, вкусы,
+    фото. Ничего не спрашиваем заново — всё это уже введено, и просить второй
+    раз значит не уважать чужое время.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    pid = inputs.целое(data.get("id"))
+    if pid is None:
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    deny = auth.deny_product(admin, pid)
+    if deny:
+        return deny
+    товар = db.get_product(pid)
+    if not товар:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    if товар["model_id"]:
+        return jsonify({"ok": False, "error": "already_model",
+                        "message": "У товара уже есть модель."}), 400
+
+    специи = dict(товар["specs"] or {}) if "specs" in товар.keys() and товар["specs"] else {}
+    for колонка in db.SPEC_COLUMNS:
+        значение = str(товар[колонка] or "").strip() if колонка in товар.keys() else ""
+        if значение:
+            специи[колонка] = значение
+    вкусы = [v["flavor"] for v in db.get_variants(pid)]
+    # Вкус одиночного товара мог лежать в поле flavor, а не в вариантах.
+    один = str(товар["flavor"] or "").strip() if "flavor" in товар.keys() else ""
+    if один and один not in вкусы:
+        вкусы.append(один)
+
+    mid = db.add_model(товар["category"], товар["name"], товар["brand"] or "",
+                       товар["description"] or "", специи, вкусы)
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("UPDATE products SET model_id = %s WHERE id = %s"), (mid, pid))
+    conn.commit()
+    conn.close()
+    if товар["photo"]:
+        db.set_model_photo(mid, товар["photo"], товар["photo_thumb"] or товар["photo"])
+    db.log_admin_action(int(admin["id"]), admin.get("name", ""), "product/to-model",
+                        f"товар {pid} → модель {mid}")
+    return jsonify({"ok": True, "model_id": mid})
+
+
 @bp.route("/api/admin/product/from-model", methods=["POST"])
 def api_admin_product_from_model():
     """Завоз: модель появляется на точке с ценой и остатком."""

@@ -181,7 +181,8 @@ def api_admin_request_decide():
 _STOCK_KEYS = ("products", "stats")
 _WRITE_PATHS = {
     "/api/admin/product": (), "/api/admin/product/update": (), "/api/admin/product/specs": (),
-    "/api/admin/product/from-model": (), "/api/admin/model": (), "/api/admin/model/delete": (),
+    "/api/admin/product/from-model": (), "/api/admin/product/to-model": (),
+    "/api/admin/model": (), "/api/admin/model/delete": (),
     "/api/admin/model/hide": (),
     "/api/admin/model/photo": (),
     "/api/admin/category/spec": ("categories",), "/api/admin/category/spec/update": ("categories",),

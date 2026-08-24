@@ -543,7 +543,6 @@ function renderEdit(p) {
       <div class="card-block form">
         <div style="font-weight:800">${esc(p.name)}</div>
         <div class="csub" style="margin-top:4px">${esc(p.brand || "")} · ${catName(p.category)} · ${esc(p.city)}</div>
-        <label>Точка (город)</label><select id="edCity">${cityOptions}</select>
         <div class="rowf">
           <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
           <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
@@ -596,12 +595,15 @@ function renderEdit(p) {
         <label>Описание</label><input id="edDesc" value="${esc(p.description || '')}">
         ${editHitBlock(p)}
         ${editPhotoBlock(p)}
+        ${toModelBlock()}
         <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
       </div>`;
     bindEditPhoto(); renderEditGallery();
     // Кнопки –/+ оживляем после отрисовки: разметку собрал qtyHtml,
     // обработчики вешаются здесь. Вкусы биндятся отдельно — они перерисовываются.
     bindQty($("editView"));
+    // Товар без модели: кнопка «Сделать моделью» — единственный путь к точкам.
+    if ($("edToModelNew")) $("edToModelNew").onclick = () => сделатьМоделью(p);
     bindPicker("edBrand"); bindPicker("edFlavor");
     $("edSave").onclick = () => saveEdit(p);
     return;
@@ -630,6 +632,7 @@ function renderEdit(p) {
       </div>
       ${editHitBlock(p)}
       ${editPhotoBlock(p)}
+      ${toModelBlock()}
       <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
     </div>`;
   renderEditVariants();
@@ -637,6 +640,8 @@ function renderEdit(p) {
   // Кнопки –/+ оживляем после отрисовки: разметку собрал qtyHtml,
   // обработчики вешаются здесь. Вкусы биндятся отдельно — они перерисовываются.
   bindQty($("editView"));
+  // Товар без модели: кнопка «Сделать моделью» — единственный путь к точкам.
+  if ($("edToModelNew")) $("edToModelNew").onclick = () => сделатьМоделью(p);
   $("edAddFlavor").onclick = () => {
     const v = $("edNewFlavor").value.trim(); if (!v) return;
     if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
@@ -656,26 +661,56 @@ function renderEdit(p) {
 // галочка врала бы, а вранью в интерфейсе цена — доверие ко всему остальному.
 let editPointFlavors = {};     // город -> [вкусы], выбранные для этой точки
 
-function editPointList(p, md) {
-  // Что вообще можно предложить: вкусы модели плюс те, что уже стоят на этой
-  // точке. Второе важно: вкус, заведённый в карточке до того, как ручки стали
-  // подтягивать его в модель, иначе пропал бы из выбора.
-  const из_модели = (md && md.flavors) || [];
-  const свои = (p.variants || []).map(v => v.flavor);
-  const все = [];
-  const видели = new Set();
-  [...из_модели, ...свои].forEach(f => {
-    const ключ = String(f || "").trim().toLowerCase();
-    if (ключ && !видели.has(ключ)) { видели.add(ключ); все.push(String(f).trim()); }
-  });
-  return все;
+function editPointList() {
+  // Вкусы берём ИЗ КАРТОЧКИ, прямо с экрана (editVariants), а не из сохранённой
+  // модели. Три причины, и все три — найденные грабли:
+  //
+  //  • добавил вкус вверху — он тут же виден внизу, а не после сохранения;
+  //  • верх и низ экрана говорят об одном товаре одинаково: если наверху
+  //    «Остаток» числом, то и внизу число, а не список вкусов;
+  //  • своя кнопка «Добавить вкус» в блоке становится не нужна — а третье
+  //    место, где заводят вкусы, это ровно то, из-за чего списки разошлись.
+  return editVariants.map(v => String(v.flavor || "").trim()).filter(Boolean);
+}
+
+let точкиТовар = null, точкиМодель = null;
+
+// Перерисовать блок точек — например, когда в карточке поменяли вкусы.
+// Отдельная функция, потому что зовут её из renderEditVariants, а тот про
+// товар и модель ничего не знает.
+function обновитьБлокТочек() {
+  if (точкиТовар) renderEditPoints(точкиТовар, точкиМодель);
+}
+
+// Товар без модели продавать на нескольких точках нельзя: точки держатся на
+// модели. Раньше это никак не объяснялось — блока точек просто не было, и
+// владелец заводил товар в другом городе заново, руками.
+function toModelBlock() {
+  return `<div style="border-top:1px solid var(--line);margin:20px 0 0"></div>
+    <label style="margin-top:16px">Точки продаж</label>
+    <div class="dnote" style="margin:0 0 10px">Этот товар заведён без модели, поэтому живёт только на одной точке. Модель — это описание товара, общее для всех городов; из неё он и добавляется куда угодно.</div>
+    <button class="closebtn" id="edToModelNew">📚 Сделать моделью</button>`;
+}
+
+async function сделатьМоделью(p) {
+  const r = await fetch("/api/admin/product/to-model", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ initData, id: p.id }) });
+  const d = await r.json().catch(() => ({}));
+  if (!d.ok) { alertMsg(d.message || "Не удалось сделать моделью."); return; }
+  await refreshProducts(); await fetchModels();
+  // Открываем карточку заново: теперь у товара есть модель, и в ней появится
+  // блок точек. Показать это сразу важнее, чем сэкономить одну перерисовку.
+  openEdit(p.id);
+  alertMsg("Готово ✅\n\nОписание уехало в «Ассортимент». Ниже появились точки продаж.");
 }
 
 function renderEditPoints(p, md) {
+  точкиТовар = p; точкиМодель = md;
   const узел = $("edPoints");
   if (!узел) return;
   const мой = myScope();
-  const вкусы = editPointList(p, md);
+  const вкусы = editPointList();
   editPointFlavors = {};
 
   const где = {};
@@ -691,8 +726,10 @@ function renderEditPoints(p, md) {
           <input type="checkbox" class="pchk" style="width:auto" checked ${свой ? "disabled" : ""}>
           Есть на точке «${esc(имя)}»</label>
         <div class="dnote" style="margin:6px 0 0">${свой
-          ? "эта карточка"
-          : `${(+уже.price).toFixed(2)} Br · ${уже.stock} шт · <a data-gopoint="${уже.id}">открыть</a>`}</div>
+          ? "эта карточка" + (p.hidden ? " · 🚫 снят с витрины" : "")
+          : `${(+уже.price).toFixed(2)} Br · ${уже.stock} шт`
+            + (уже.hidden ? " · 🚫 снят с витрины" : "")
+            + ` · <a data-gopoint="${уже.id}">открыть</a>`}</div>
       </div>`;
     }
     return `<div class="pointrow pointadd" data-city="${esc(имя)}">
@@ -704,11 +741,8 @@ function renderEditPoints(p, md) {
           <div><label>Закупка (Br)</label><input class="pcost" inputmode="decimal" value="${p.cost || ""}"></div>
         </div>
         ${вкусы.length
-          ? `<label>Какие вкусы есть на точке «${esc(имя)}»</label><div class="pflavors"></div>`
+          ? `<label>Какие из вкусов есть на точке «${esc(имя)}»</label><div class="pflavors"></div>`
           : `<label>Остаток (шт.)</label>${qtyHtml(0, 'class="pstock"')}`}
-        ${вкусы.length ? `<div style="display:flex;gap:8px;margin-top:10px">
-            <input class="pnewflavor" placeholder="Добавить вкус" style="flex:1" list="edFlavorOpts">
-            <button class="iconbtn ok pnewadd" style="width:auto;padding:0 16px">＋</button></div>` : ""}
       </div></div>`;
   }).join("") || `<p style="color:var(--hint)">Точек продаж пока нет.</p>`;
 
@@ -720,16 +754,6 @@ function renderEditPoints(p, md) {
     чек.onchange = () => {
       блок.querySelector(".pbody").style.display = чек.checked ? "" : "none";
       if (чек.checked) renderPointFlavors(блок, город);
-    };
-    const добавить = блок.querySelector(".pnewadd");
-    if (добавить) добавить.onclick = () => {
-      const поле = блок.querySelector(".pnewflavor");
-      const имя_вкуса = поле.value.trim();
-      if (!имя_вкуса) return;
-      const есть = editPointFlavors[город].some(f => f.toLowerCase() === имя_вкуса.toLowerCase());
-      if (!есть) editPointFlavors[город].push(имя_вкуса);
-      поле.value = "";
-      renderPointFlavors(блок, город);
     };
   });
 
@@ -788,6 +812,9 @@ function renderEditVariants() {
   $("edVarList").querySelectorAll(".edvst").forEach(inp => inp.oninput = () => { editVariants[+inp.dataset.i].stock = inp.value; });
   bindQty($("edVarList"));
   $("edVarList").querySelectorAll("[data-vdel]").forEach(b => b.onclick = () => { editVariants.splice(+b.dataset.vdel, 1); renderEditVariants(); });
+  // Блок точек живёт на тех же вкусах — перерисовываем и его, иначе внизу
+  // останется список, которого наверху уже нет.
+  if (typeof обновитьБлокТочек === "function") обновитьБлокТочек();
 }
 
 // Приводит точки к тому, что отмечено на экране: заводит новые, убирает снятые.
@@ -843,31 +870,69 @@ async function применитьТочки(p, убрать) {
 
 // Общий хвост сохранения: применить точки, обновить список, закрыть экран.
 // Вынесен, потому что зовётся из двух мест — сразу и после подтверждения.
-async function завершитьПравку(p, убрать) {
+async function завершитьПравку(p, убрать, отказы) {
   const итог = await применитьТочки(p, убрать);
   await refreshProducts();
   $("editView").classList.remove("show");
-  alertMsg(итог ? "Сохранено ✅\n\n" + итог : "Сохранено ✅");
+  const беды = (отказы || []).length ? "Не сохранилось — " + (отказы || []).join("; ") : "";
+  const строки = [беды, итог].filter(Boolean).join("\n");
+  // «Сохранено» пишем только если всё и правда сохранилось. Половина работы,
+  // объявленная успехом, — это ошибка, которую заметят через неделю по цифрам.
+  alertMsg(строки ? (беды ? "⚠️ Сохранено не всё\n\n" : "Сохранено ✅\n\n") + строки
+                  : "Сохранено ✅");
 }
 
 async function saveEdit(p) {
   const isVar = hasVariants(p);
-  const upd = (field, value) => fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, field, value }) });
+  // Ответы сервера ПРОВЕРЯЕМ. Раньше их не смотрели вовсе: сервер отказывал —
+  // «нельзя перенести туда, где товар уже есть», — а экран говорил
+  // «Сохранено ✅» и город оставался прежним. Ошибка, которая учит доверять
+  // неверному, хуже видимой поломки.
+  const отказы = [];
+  const ЛЮДСКИ = {
+    already_here: "на этой точке товар уже есть",
+    other_city: "это точка другого продавца",
+    forbidden: "нет прав на это действие",
+    bad_price: "цена должна быть больше нуля",
+    cost_required: "не указана закупочная цена",
+    bad_input: "поле заполнено неверно",
+    bad_value: "значение введено неверно — проверьте, что это число",
+    bad_price: "цена должна быть больше нуля",
+    bad_id: "товар не найден",
+    not_found: "товар не найден",
+  };
+  const назвать = (что, d) => `${что}: ${(d && (d.message || ЛЮДСКИ[d.error])) || "не сохранилось"}`;
+
+  const upd = async (field, value, что) => {
+    const r = await fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, field, value }) });
+    const d = await r.json().catch(() => ({}));
+    if (!d.ok) отказы.push(назвать(что || field, d));
+    return d;
+  };
+  const послать = async (адрес, тело, что) => {
+    const r = await fetch(адрес, { method: "POST", headers: { "Content-Type": "application/json" },
+                                   body: JSON.stringify(тело) });
+    const d = await r.json().catch(() => ({}));
+    if (!d.ok) отказы.push(назвать(что, d));
+    return d;
+  };
   $("edSave").disabled = true; $("edSave").textContent = "Сохраняю…";
   try {
     // Товар из ассортимента: сохраняем только то, что своё у этой точки.
     if (p.model_id) {
-      await upd("price", $("edPrice").value);
-      await upd("cost", $("edCost").value || 0);
+      await upd("price", $("edPrice").value, "цена");
+      await upd("cost", $("edCost").value || 0, "закупка");
       if (isVar) {
         const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
         if (!variants.length) { alertMsg("Оставьте хотя бы один вкус."); return; }
-        await fetch("/api/admin/product/variants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, variants }) });
+        await послать("/api/admin/product/variants", { initData, id: editId, variants }, "вкусы");
       } else {
-        await upd("stock", $("edStock").value);
+        await upd("stock", $("edStock").value, "остаток");
       }
-      await upd("city", $("edCity").value);
-      await upd("is_hit", $("edHit").checked ? 1 : 0);
+      // Города у товара с моделью правятся галочками ниже, а не селектом.
+      // Два контрола об одном и том же всегда расходятся: селект предлагал
+      // продавцу Турова все города, включая те, куда сервер его не пустит.
+      await upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»");
       // Точки — уже после того, как своя карточка сохранена: если что-то из
       // них упадёт, правки цены и остатка всё равно на месте.
       //
@@ -877,11 +942,11 @@ async function saveEdit(p) {
       if (убрать.length) {
         const где = убрать.map(т => `«${т.city}»`).join(", ");
         confirmMsg(`Убрать товар с точки ${где}? Остаток и движения склада этой точки удалятся. Отменить будет нечем.`,
-                   async () => { await завершитьПравку(p, убрать); });
+                   async () => { await завершитьПравку(p, убрать, отказы); });
         $("edSave").disabled = false; $("edSave").textContent = "Сохранить";
         return;
       }
-      await завершитьПравку(p, []);
+      await завершитьПравку(p, [], отказы);
       return;
     }
     const specs = collectSpecs("edSpecs");
@@ -913,7 +978,7 @@ async function saveEdit(p) {
     // и объём по своим колонкам, а остальное в JSON.
     await fetch("/api/admin/product/specs", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ initData, id: editId, specs }) });
-    await upd("city", $("edCity").value);
+    await upd("city", $("edCity").value, "точка");
     await upd("is_hit", $("edHit").checked ? 1 : 0);
     if (editPhotoFile) {
       const fd = new FormData();
@@ -922,7 +987,8 @@ async function saveEdit(p) {
     }
     await refreshProducts();
     $("editView").classList.remove("show");
-    alertMsg("Сохранено ✅");
+    alertMsg(отказы.length ? "⚠️ Сохранено не всё\n\nНе сохранилось — " + отказы.join("; ")
+                           : "Сохранено ✅");
   } catch (e) { alertMsg("Сеть недоступна."); }
   finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
 }

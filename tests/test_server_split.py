@@ -180,3 +180,40 @@ def run_standalone():
         except subprocess.TimeoutExpired:
             процесс.kill()
     return c.fails
+
+
+def run_write_paths_registered():
+    """Каждая ручка, меняющая каталог, обязана быть в _WRITE_PATHS.
+
+    Кэш сбрасывается в одном месте — в after_request по списку путей. Забыть
+    вписать туда новую ручку легко, а последствие подлое: сервер сохранил, а
+    приложение ещё полминуты показывает старое. Именно так и вышло с
+    /api/admin/product/to-model: экран говорил «Готово ✅», модель создавалась,
+    а список товаров оставался прежним — и выглядело это как «не сработало».
+
+    Проверяем ручки каталога: всё под /api/admin/product и /api/admin/model
+    меняет то, что кэшируется. Если появится ручка, которая только читает,
+    впишите её в ЧИТАЮЩИЕ — явно, чтобы это было решением, а не забывчивостью.
+    """
+    # Ручки, которые ничего не меняют, — списком и явно.
+    ЧИТАЮЩИЕ = {
+        "/api/admin/products",      # список товаров
+        "/api/admin/models",        # список моделей
+    }
+
+    c = Checker("Ручки записи сбрасывают кэш")
+    пишущие = []
+    for правило in server.app.url_map.iter_rules():
+        путь = str(правило)
+        if "POST" not in правило.methods:
+            continue
+        if not (путь.startswith("/api/admin/product") or путь.startswith("/api/admin/model")):
+            continue
+        if путь in ЧИТАЮЩИЕ:
+            continue
+        пишущие.append(путь)
+
+    c(f"ручки каталога найдены ({len(пишущие)})", len(пишущие) >= 8)
+    забыты = [п for п in пишущие if п not in server._WRITE_PATHS]
+    c("все вписаны в _WRITE_PATHS" + ("" if not забыты else f": забыты {забыты}"), not забыты)
+    return c.fails
