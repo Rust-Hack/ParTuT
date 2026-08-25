@@ -786,20 +786,29 @@ $("searchInput").oninput = (e) => {
   searchTimer = setTimeout(renderGrid, 160);   // перерисовать после паузы в наборе
 };
 
+// Смена города — одна на всё приложение: и для кнопки в шапке, и для настроек.
+// Две копии этой логики разошлись бы на первой же правке, а расходиться тут
+// нечему: город решает, что на витрине, что в корзине и куда поедет заказ.
+// после — что доделать на экране, с которого позвали.
+function switchCity(next, после) {
+  const перейти = () => {
+    if (next !== city) { for (const k in cart) delete cart[k]; }
+    city = next; $("pointName").textContent = city;
+    brandFilters = [];   // другая точка — другой набор брендов
+    prefetchDelivery();  // заранее подтянем способы получения новой точки
+    updateFilterBtn(); renderGrid(); renderNav();
+    if (после) после();
+  };
+  // Спрашиваем только когда есть что терять: корзина собирается по одной точке.
+  if (next !== city && Object.keys(cart).length)
+    confirmMsg("Сменить город? Корзина очистится: заказ собирается по одной точке.", перейти);
+  else перейти();
+}
+
 $("pointBtn").onclick = () => {
   $("pointList").innerHTML = cityList.map(c => `<button class="opt ${c===city?'active':''}" data-city="${esc(c)}">${esc(c)}</button>`).join("");
   $("pointList").querySelectorAll("[data-city]").forEach(b => b.onclick = () => {
-    const next = b.dataset.city;
-    const switchTo = () => {
-      if (next !== city) { for (const k in cart) delete cart[k]; }
-      city = next; $("pointName").textContent = city;
-      brandFilters = [];   // другая точка — другой набор брендов
-      prefetchDelivery();  // заранее подтянем способы получения новой точки
-      closeOverlay($("pointOverlay")); updateFilterBtn(); renderGrid(); renderNav();
-    };
-    if (next !== city && Object.keys(cart).length)
-      confirmMsg("Сменить точку? Корзина очистится.", switchTo);
-    else switchTo();
+    switchCity(b.dataset.city, () => closeOverlay($("pointOverlay")));
   });
   $("pointOverlay").classList.add("show");
 };
@@ -1007,6 +1016,19 @@ let rulesCache = null;
 
 $("rulesClose").onclick = () => $("rulesView").classList.remove("show");
 
+// Две вкладки, а не два экрана. Человек приходит сюда с готовым вопросом
+// («когда придут монеты?») — ему нужен быстрый ответ; и лишь иногда нужна
+// полная картина. Заставлять выбирать между двумя строками в профиле значит
+// заставлять угадывать, где ответ.
+let rulesTab = "faq";
+
+$("rulesTabs").querySelectorAll("[data-rt]").forEach(b => b.onclick = () => {
+  rulesTab = b.dataset.rt;
+  $("rulesTabs").querySelectorAll("[data-rt]").forEach(x => x.classList.toggle("on", x === b));
+  if (rulesCache) drawRules();
+  $("rulesView").scrollTop = 0;
+});
+
 async function openRules() {
   $("rulesView").classList.add("show");
   if (!rulesCache) {
@@ -1017,7 +1039,62 @@ async function openRules() {
       return;
     }
   }
-  renderRules(rulesCache);
+  drawRules();
+}
+
+function drawRules() {
+  if (rulesTab === "faq") renderFaq(rulesCache);
+  else renderRules(rulesCache);
+}
+
+// Вопросы теми словами, какими их задают в чате поддержки, — и ответы,
+// которые совпадают с тем, что приложение делает на самом деле.
+function renderFaq(r) {
+  const монетаBr = +r.coin_value || 0.01;
+  const заСотню = (100 * монетаBr).toFixed(2) === "1.00"
+    ? `100 монет = 1 ${CUR}` : `1 монета = ${монетаBr.toFixed(2)} ${CUR}`;
+
+  const вопросы = [
+    ["Когда придут монеты за заказ?",
+     `После того как продавец отметит заказ выданным, а не в момент оформления. Пока заказ в работе, монеты ещё не начислены — это защита от начислений за заказы, которые не состоялись.`],
+
+    ["Заказ отменился сам — почему?",
+     `Так бывает только с оплатой картой, если чек не загрузили за ${r.unpaid_hours} ч. Товар всё это время лежал отложенным, поэтому мы не держим его дольше. Оформите заново — и загрузите чек сразу.`],
+
+    ["Оплатил, но заказ всё ещё «ждёт подтверждения»",
+     `Продавец сверяет платёж вручную и подтверждает обычно за ${r.confirm_minutes} мин. Если прошло заметно больше — напишите по заказу, кнопка есть в «Мои заказы».`],
+
+    ["Можно заплатить при получении?",
+     `Да, если у выбранного способа есть «Наличными». Тогда чек загружать не нужно — заказ сразу уходит продавцу.`],
+
+    ["Передумал брать одну из позиций",
+     `Напишите продавцу по заказу — он изменит состав, пока заказ не выдан. Сумма пересчитается сама, и вам придёт сообщение с новым составом. Отменять весь заказ ради этого не нужно.`],
+
+    ["Нужного вкуса нет в списке",
+     `Наличие считается по каждой точке отдельно: в другом городе этот вкус может быть. А на карточке товара, которого нет, есть кнопка «Сообщить о поступлении» — напишем, как только привезём.`],
+
+    ["Заказ отклонили — вернут ли деньги?",
+     `Если платили картой — да, продавец вернёт перевод; он же напишет вам причину отказа. Монеты и промокод возвращаются автоматически, товар уходит обратно в продажу.`],
+
+    ["Мой отзыв не появился",
+     `Отзывы публикуются после проверки продавцом. Низкие оценки не удаляют — скрывают только спам и оскорбления. Оценить можно то, что вы получили, и один раз на товар.`],
+
+    ["Можно заказать товары из разных городов сразу?",
+     `Нет: заказ собирается по одной точке, оттуда его и выдают. Поэтому при смене города корзина очищается — приложение предупредит об этом заранее.`],
+
+    ["Монеты сгорают?",
+     `Нет, срока у них нет. ${заСотню}; тратятся скидкой — галочка в корзине и на экране оформления.`],
+
+    ["Когда придут монеты за приглашённого друга?",
+     `${r.referral_bonus} 🪙 — после его первого выданного заказа. Дальше вам идёт процент с каждого его заказа, и он растёт от числа тех, кто уже покупал.`],
+
+    ["Не успеваю забрать заказ сегодня",
+     `Напишите продавцу по заказу — подтверждённый заказ сам не отменяется и вас дождётся. Предупредить стоит: так товар точно не уедет обратно на полку.`],
+  ];
+
+  $("rulesBody").innerHTML = `<div class="card-block faqbox">${вопросы.map(([в, о]) => `
+      <details class="faq"><summary>${в}</summary><div class="faq-a">${о}</div></details>`).join("")}</div>
+    <div class="dnote" style="text-align:center;margin:0 0 8px">Не нашли своё? Напишите в поддержку — ответим в этом чате.</div>`;
 }
 
 function renderRules(r) {
@@ -1031,10 +1108,14 @@ function renderRules(r) {
   const ступени = (r.ref_tiers || []).slice().sort((a, b) => a.from - b.from);
   const порог = +r.free_delivery_from || 0;
 
-  const блок = (значок, title, html) => `<div class="card-block rulesec">
-      <div class="rules-h">${значок} ${title}</div>${html}</div>`;
+  // Шторками, как и вопросы: десять разделов подряд — это простыня, в которой
+  // свой раздел ищешь прокруткой. Свёрнутые, они умещаются в один экран, и
+  // видно сразу всё, о чём вообще можно спросить.
+  const блок = (значок, title, html) => `<details class="rulesec faq">
+      <summary><span class="rules-h">${значок} ${title}</span></summary>
+      <div class="faq-a rules-body">${html}</div></details>`;
 
-  $("rulesBody").innerHTML = [
+  const разделы = [
     блок("🔞", "Кому можно",
       `<p>Магазин продаёт товары для совершеннолетних. Оформляя заказ, вы подтверждаете, что вам есть 18.</p>`),
 
@@ -1100,6 +1181,7 @@ function renderRules(r) {
     блок("💬", "Если что-то не так",
       `<p>В профиле есть «Написать в поддержку», а у каждого заказа — «Написать по заказу». Ответ придёт в этот же чат.</p>`),
   ].join("");
+  $("rulesBody").innerHTML = `<div class="card-block faqbox">${разделы}</div>`;
 }
 
 // в приложение: правит их владелец из админки, и ждать выкатки ради запятой
@@ -1137,7 +1219,6 @@ $("docsClose").onclick = () => $("docsView").classList.remove("show");
 document.querySelectorAll("#docsTabs .doctab").forEach(b =>
   b.onclick = () => showDocTab(b.dataset.doc));
 $("myDocs").onclick = () => openDocs("offer");
-$("myRules").onclick = openRules;
 
 // Документы показываем покупателю ТОЛЬКО когда владелец заменил черновик своим
 // текстом. Болванка с местами вида [УНП] выглядит как настоящий документ и
@@ -1160,6 +1241,7 @@ async function openMySettings() {
   $("myPoints").innerHTML = `<p style="color:var(--hint);font-size:13px;margin:0">Загрузка…</p>`;
   $("myIdVal").textContent = (tgUser && tgUser.id) || "—";
   renderMyAlerts();
+  renderMyCities();
   try {
     const r = await fetch("/api/my-points");
     myPoints = (await r.json()).points || [];
@@ -1206,17 +1288,42 @@ async function stopWaiting(id) {
   } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
+function renderMyCities() {
+  const города = (cityList && cityList.length ? cityList : locations.map(l => l.name));
+  if (!города.length) { $("myCities").innerHTML = ""; return; }
+  $("myCities").innerHTML = `<div class="citypick">${города.map(г =>
+    `<button class="opt ${г === city ? "active" : ""}" data-mycity="${esc(г)}">${esc(г)}</button>`).join("")}</div>`;
+  $("myCities").querySelectorAll("[data-mycity]").forEach(b => b.onclick = () => switchCity(b.dataset.mycity, () => {
+    renderMyCities();
+    renderMyPoints();      // точки другого города — другой список
+  }));
+}
+
 function renderMyPoints() {
-  if (!myPoints.length) {
-    $("myPoints").innerHTML = `<p style="color:var(--hint);font-size:13px;margin:0">Точек самовывоза пока нет — их заводит магазин.</p>`;
+  // Показываем точки ТОЛЬКО текущего города. Общий список всех городов путал:
+  // человек выбирал адрес из другого города, приложение молча его не
+  // подставляло при заказе, и понять причину было неоткуда.
+  const свои = myPoints.filter(p => p.city === city);
+  // Точка, выбранная в другом городе, здесь не выбрана — так и говорим,
+  // вместо того чтобы делать вид, будто настройка пустая.
+  const чужая = myPointId && !свои.some(p => p.id === myPointId)
+    ? myPoints.find(p => p.id === myPointId) : null;
+  if (!свои.length) {
+    $("myPoints").innerHTML = `<p style="color:var(--hint);font-size:13px;margin:0">В городе «${esc(city)}» точек самовывоза нет — их заводит магазин.</p>`;
     return;
   }
   // «Не выбрано» — обычный вариант, а не отсутствие ответа: человек вправе
   // решать каждый раз заново.
-  const строки = [`<button class="opt ${!myPointId ? 'active' : ''}" data-mp="0">Спрашивать при заказе</button>`]
-    .concat(myPoints.map(p => `<button class="opt ${myPointId === p.id ? 'active' : ''}" data-mp="${p.id}">
-        ${esc(p.address)}<small class="ppnote">${esc(p.city)}${p.note ? ` · ${esc(p.note)}` : ""}</small></button>`));
-  $("myPoints").innerHTML = строки.join("");
+  const строки = [`<button class="opt ${!myPointId || чужая ? 'active' : ''}" data-mp="0">Спрашивать при заказе</button>`]
+    .concat(свои.map(p => `<button class="opt ${myPointId === p.id ? 'active' : ''}" data-mp="${p.id}">
+        ${esc(p.address)}${p.note ? `<small class="ppnote">${esc(p.note)}</small>` : ""}</button>`));
+  $("myPoints").innerHTML = строки.join("")
+    // Точка одна на человека и принадлежит своему городу. В другом городе она
+    // просто не применяется — и об этом надо сказать ровно то, что есть:
+    // прежний выбор цел, пока здесь не выбрали другой.
+    + (чужая ? `<div class="dnote" style="margin:6px 0 0">Для «${esc(city)}» точка не выбрана — спросим при заказе.
+        Ваш прежний выбор «${esc(чужая.address)}» в городе «${esc(чужая.city)}» сохранится,
+        пока вы не отметите точку здесь.</div>` : "");
   $("myPoints").querySelectorAll("[data-mp]").forEach(b => b.onclick = () => {
     myPointId = +b.dataset.mp || null; renderMyPoints();
   });

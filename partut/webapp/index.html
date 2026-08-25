@@ -317,7 +317,13 @@
     <div class="viewhead"><h2>⚙️ Мои настройки</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="myClose">‹ Назад</button></div>
     <div class="card-block form">
-      <label>Точка самовывоза по умолчанию</label>
+      <!-- Город здесь тот же, что в шапке: две разные «текущие точки» разошлись
+           бы на первой же смене, и человек не понял бы, какая из них считается. -->
+      <label>Город</label>
+      <div id="myCities"></div>
+      <div class="dnote" style="margin:8px 0 0">Из него собирается витрина и заказ. Тот же город, что наверху каталога.</div>
+
+      <label style="margin-top:18px">Точка самовывоза по умолчанию</label>
       <div id="myPoints"></div>
       <div class="dnote" style="margin:8px 0 0">Подставится при заказе. Поменять можно прямо в заказе — сюда возвращаться не нужно.</div>
 
@@ -355,9 +361,7 @@
         Адреса из ваших заказов — чтобы подставить в следующий. Историю заказов и баланс монет.
         Ваш Telegram-ID. Больше ничего: ни переписки, ни данных карты — оплата идёт мимо приложения.</div>
 
-      <button class="creq" id="myRules" style="margin:14px 0 0">
-        <span class="cl">📖 Как всё устроено</span><span class="ci">›</span></button>
-      <button class="creq" id="myDocs" style="margin:8px 0 0">
+      <button class="creq" id="myDocs" style="margin:14px 0 0">
         <span class="cl">📄 Оферта и обработка данных</span><span class="ci">›</span></button>
     </div>
   </div>
@@ -382,6 +386,10 @@
   <div class="view" id="rulesView">
     <div class="viewhead"><h2>📖 Как всё устроено</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="rulesClose">‹ Назад</button></div>
+    <div class="doctabs" id="rulesTabs">
+      <button class="doctab on" data-rt="faq">Вопросы</button>
+      <button class="doctab" data-rt="rules">Правила</button>
+    </div>
     <div id="rulesBody"><div class="card-block" style="color:var(--hint)">Загрузка…</div></div>
   </div>
 

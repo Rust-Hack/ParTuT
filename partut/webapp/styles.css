@@ -873,7 +873,9 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 /* Как всё устроено: правила словами покупателя. Каждый раздел — отдельная
    карточка, потому что их читают выборочно, а не подряд. */
 .rulesec { text-align: left; }
-.rules-h { font-weight: 800; font-size: 16px; margin: 0 0 8px; }
+/* Заголовок раздела крупнее вопроса: разделы — это карта, по ней ведут глазом. */
+.rules-h { font-weight: 800; font-size: 15.5px; }
+.rules-body { padding-bottom: 14px; }
 /* .view p красит абзацы в подсказочный серый и ставит по центру — так надо
    пустым экранам, но не странице, которую читают целиком. Здесь возвращаем
    обычный текст по левому краю, а серым остаются только сноски. */
@@ -889,6 +891,29 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 .reftiers span { flex: 1 1 auto; min-width: 72px; text-align: center; background: var(--surface-2);
   border-radius: 12px; padding: 9px 8px; font-size: 15px; font-weight: 800; }
 .reftiers small { display: block; color: var(--hint); font-size: 11.5px; font-weight: 600; margin-top: 2px; }
+
+/* Вопрос-ответ: свёрнутые вопросы, потому что человек ищет СВОЙ, а не читает
+   подряд. Открытый вопрос подсвечиваем — иначе в длинном списке теряешь, что
+   именно раскрыл. */
+.faqbox { text-align: left; padding: 4px 14px; }
+/* Города в настройках — рядом, а не столбцом: их два-три, и выбор из них
+   должен читаться как переключатель, а не как список адресов. */
+.citypick { display: flex; gap: 8px; flex-wrap: wrap; }
+/* width:auto обязателен: у .opt стоит width:100%, и без него города
+   встают столбцом, сколько бы их ни было. */
+.citypick .opt { flex: 1 1 auto; width: auto; min-width: 92px; text-align: center;
+  margin-bottom: 0; padding: 12px 10px; }
+.citypick .opt.active::after { content: none; }
+.faq { border-bottom: 1px solid var(--line); }
+.faq:last-child { border-bottom: none; }
+.faq > summary { list-style: none; cursor: pointer; padding: 13px 22px 13px 0; position: relative;
+  font-size: 14.5px; font-weight: 700; line-height: 1.4; }
+.faq > summary::-webkit-details-marker { display: none; }
+.faq > summary::after { content: "▼"; position: absolute; right: 2px; top: 15px;
+  color: var(--hint); font-size: 10px; transition: transform .2s; }
+.faq[open] > summary { color: var(--accent); }
+.faq[open] > summary::after { transform: rotate(180deg); }
+.faq-a { padding: 0 0 14px; font-size: 14.5px; line-height: 1.5; color: var(--hint); }
 
 .doctext {
   font-size: 14px; line-height: 1.65; color: var(--text);
