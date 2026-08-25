@@ -138,7 +138,7 @@ async function decideRequest(id, decision) {
     const d = await r.json();
     if (d.ok) { alertMsg(decision === "approve" ? "Разрешено ✅" : "Отклонено ✖️"); }
     else alertMsg(d.error === "already" ? "Заявка уже обработана." : "Не удалось.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   loadRequests(); loadReqBadge();
 }
 // Обычный админ инициирует чувствительную операцию → ждёт подтверждения супер-админа.
@@ -189,6 +189,8 @@ function renderModelForm() {
   $("mdSpecs").innerHTML = specFieldsHtml(cat, collectSpecs("mdSpecs"), "mds_");
   // Вкусы спрашиваем только там, где они есть: у зарядки их не бывает.
   $("mdFlavorsWrap").style.display = catHasFlavors(cat) ? "" : "none";
+  $("mdFlavorsLabel").textContent = catVariantMany(cat);
+  $("mdFlavorInput").placeholder = `Например: ${cat === "coils" ? "0.6 Ом" : cat === "podsystem" || cat === "devices" ? "Чёрный" : "Манго"}`;
   $("mdFlavorKnown").innerHTML = knownFlavors.map(f => `<option value="${esc(f)}">`).join("");
   renderModelFlavors();
 }
@@ -272,7 +274,7 @@ $("mdSave").onclick = async () => {
       alertMsg(updated ? `Сохранено ✅ Обновлено товаров на точках: ${updated}`
                        : "Модель сохранена ✅ Теперь можно добавить ещё фото и завезти её на точку.");
     }
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("mdSave").disabled = false; $("mdSave").textContent = editingModelId ? "Обновить модель" : "Сохранить модель"; }
 };
 
@@ -310,14 +312,12 @@ function renderModelList() {
       return `<div class="admrow">
         <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
           <small>${where}${off}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small></div>
-        <button class="iconbtn ok" data-mdstock="${m.id}" title="Добавить на точку">📥</button>
         ${own}</div>`;
     }).join("");
   }
   $("mdList").innerHTML = html;
   $("mdList").querySelectorAll("[data-mdedit]").forEach(b => b.onclick = () => editModel(+b.dataset.mdedit));
   $("mdList").querySelectorAll("[data-mddel]").forEach(b => b.onclick = () => delModel(+b.dataset.mddel));
-  $("mdList").querySelectorAll("[data-mdstock]").forEach(b => b.onclick = () => openStockIn(+b.dataset.mdstock));
   $("mdList").querySelectorAll("[data-mdhide]").forEach(b =>
     b.onclick = () => hideModel(+b.dataset.mdhide, b.dataset.on !== "1"));
 }
@@ -337,6 +337,7 @@ function openStockIn(modelId) {
   $("stockInPrice").value = ""; $("stockInCost").value = ""; $("stockInStock").value = "";
   $("stockInHit").checked = false;
   const withFlavors = m.flavors.length > 0;
+  $("stockInFlavorsLabel").textContent = `${catVariantMany(m.category)} и остаток`;
   $("stockInFlavorsWrap").style.display = withFlavors ? "" : "none";
   $("stockInStockWrap").style.display = withFlavors ? "none" : "";
   $("stockInFlavors").innerHTML = m.flavors.map(f =>
@@ -356,7 +357,7 @@ $("stockInSave").onclick = async () => {
   if (!price) { alertMsg("Укажите цену."); return; }
   const city = $("stockInCity").value;
   if (shelf().some(p => p.model_id === stockInModel.id && p.city === city)) {
-    alertMsg("На этой точке модель уже есть — правьте её в разделе «Товары».");
+    alertMsg("На этой точке модель уже есть — правьте её в «Ценах и остатках».");
     return;
   }
   // Закупку спрашиваем здесь, а не «когда-нибудь потом»: незаполненная,
@@ -393,7 +394,7 @@ $("stockInSave").onclick = async () => {
     await refreshProducts(); await fetchModels(); renderModelList();
     $("stockInView").classList.remove("show");
     alertMsg("Добавлено ✅");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("stockInSave").disabled = false; $("stockInSave").textContent = "Добавить на точку"; }
 };
 
@@ -429,7 +430,7 @@ async function hideModel(id, hidden) {
       await refreshProducts();
       renderModelList();
       toast(hidden ? `Снята с витрины · точек: ${d.count}` : `Снова продаётся · точек: ${d.count}`);
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
   });
 }
 
@@ -450,7 +451,7 @@ function delModel(id, force) {
       }
       await fetchModels(); renderModelList();
       toast("Убрана из ассортимента");
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
   });
 }
 
@@ -552,7 +553,7 @@ async function catApi(path, body) {
   try {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, ...body }) });
     return await r.json();
-  } catch (e) { alertMsg("Сеть недоступна."); return { ok: false }; }
+  } catch (e) { alertMsg(текстСбоя(e)); return { ok: false }; }
 }
 $("catAdd").onclick = async () => {
   const name = $("catNameNew").value.trim();
@@ -608,6 +609,10 @@ function renderSpecList() {
   if (!c) { $("specsView").classList.remove("show"); return; }
   $("specsCatName").textContent = `${c.emoji || ""} ${c.name}`.trim();
   $("specFlavors").checked = !!c.has_flavors;
+  // Слово нужно только тем категориям, у которых остаток вообще считается по
+  // вариантам: у устройства без вариантов подписывать нечего.
+  $("specVarWrap").style.display = c.has_flavors ? "" : "none";
+  $("specVarLabel").value = c.variant_label || "Вкус";
   const list = c.specs || [];
   $("specList").innerHTML = list.length
     ? list.map(s => `<div class="admrow">
@@ -621,6 +626,16 @@ $("specFlavors").onchange = async () => {
   await catApi("/api/admin/category/update", { code: specsCat, has_flavors: $("specFlavors").checked });
   await afterCatsChanged();
   renderSpecList();
+};
+// Слово сохраняем по уходу из поля, а не на каждую букву: иначе на «Сопр»
+// успело бы уехать полдюжины запросов.
+$("specVarLabel").onchange = async () => {
+  const слово = $("specVarLabel").value.trim();
+  if (!слово) { $("specVarLabel").value = "Вкус"; }
+  await catApi("/api/admin/category/update", { code: specsCat, variant_label: $("specVarLabel").value.trim() || "Вкус" });
+  await afterCatsChanged();
+  renderSpecList();
+  toast("Сохранено ✓");
 };
 $("specAdd").onclick = async () => {
   const label = $("specLabel").value.trim();
@@ -797,7 +812,7 @@ function resetStats() {
       const d = await r.json();
       if (d.ok) { alertMsg(`Готово ✅ Удалено заказов: ${d.orders}. Статистика обнулена.`); loadStats(); }
       else alertMsg(d.error === "forbidden" ? "Только для супер-админа." : "Не удалось.");
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
   };
   const msg = "Удалить ВСЕ заказы и обнулить счётчики игр? Отменить нельзя.";
   confirmMsg(msg, go);
@@ -854,7 +869,7 @@ async function openRaffleAdmin() {
     $("raffleAdminInfo").innerHTML = raffleRunning
       ? `Участников: <b>${ra.participants}</b> · до конца: ${raffleTimeLeft(ra.ends_at)}`
       : `Сейчас розыгрыш не идёт — вкладка «Розыгрыши» у покупателей скрыта.`;
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 $("raSave").onclick = async () => {
   const body = { initData, title: $("raTitle").value, prize1: $("raPrize1").value, prize2: $("raPrize2").value,
@@ -864,7 +879,7 @@ $("raSave").onclick = async () => {
     const r = await fetch("/api/admin/raffle/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json();
     alertMsg(d.ok ? "Сохранено ✅" : "Не удалось сохранить.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("raSave").disabled = false; $("raSave").textContent = "Сохранить"; }
 };
 $("raPhoto").onchange = async () => {
@@ -879,7 +894,7 @@ $("raPhoto").onchange = async () => {
     const d = await r.json();
     alertMsg(d.ok ? "Фото приза сохранено ✅"
                   : (d.error === "no_raffle" ? "Сначала начните розыгрыш." : "Не удалось загрузить."));
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 };
 $("raStart").onclick = async () => {
   const body = { initData, title: $("raTitle").value, prize1: $("raPrize1").value,
@@ -891,7 +906,7 @@ $("raStart").onclick = async () => {
     const d = await r.json();
     if (d.ok) { alertMsg("Розыгрыш начат ✅"); openRaffleAdmin(); }
     else alertMsg(d.error === "already" ? "Розыгрыш уже идёт." : "Не удалось начать.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("raStart").disabled = false; $("raStart").textContent = "Начать розыгрыш"; }
 };
 $("raDraw").onclick = () => {
@@ -954,7 +969,7 @@ $("msgSend").onclick = async () => {
     if (d.ok && d.sent) { closeOverlay($("msgOverlay")); alertMsg("Отправлено клиенту ✅"); }
     else if (d.ok) alertMsg("Клиент не получит — он не запускал бота.");
     else alertMsg(d.error === "forbidden" ? "Нет доступа." : "Не удалось.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("msgSend").disabled = false; $("msgSend").textContent = "Отправить"; }
 };
 
@@ -986,7 +1001,7 @@ $("compSend").onclick = async () => {
     if (d.ok && d.pending) { closeOverlay($("compOverlay")); alertMsg("Отправлено владельцу на подтверждение ⏳"); }
     else if (d.ok) { closeOverlay($("compOverlay")); alertMsg("Монеты начислены покупателю ✅"); }
     else alertMsg(d.message || (d.error === "other_city" ? "Это заказ другой точки." : "Не удалось."));
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("compSend").disabled = false; $("compSend").textContent = "Начислить"; }
 };
 
@@ -1092,7 +1107,7 @@ async function adjustCoins(sign) {
       alertMsg(sign > 0 ? "Добавлено ✅" : "Убрано ✅");
       loadAllUsers();
     } else alertMsg(d.error === "protected" ? "🛡 Монеты супер-админа трогать нельзя." : d.error === "bad_input" ? "Проверьте ID и количество." : "Не удалось.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 $("coinAdd").onclick = () => adjustCoins(1);
 $("coinRemove").onclick = () => adjustCoins(-1);
@@ -1111,7 +1126,7 @@ async function adjustSpins(sign) {
       alertMsg(sign > 0 ? "Начислено ✅" : "Убрано ✅");
       loadAllUsers();
     } else alertMsg(d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 $("spinAdd").onclick = () => adjustSpins(1);
 $("spinRemove").onclick = () => adjustSpins(-1);
@@ -1167,7 +1182,7 @@ async function doUnref(id) {
     if (handledPending(d)) return;
     if (d.ok) { alertMsg(d.result.unlinked ? "Отвязан ✅" : "У этого ID не было привязки."); refreshUsersAdmin(); }
     else alertMsg(d.error === "protected" ? "🛡 Супер-админа трогать нельзя." : d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 async function doDelUser(id) {
   try {
@@ -1176,7 +1191,7 @@ async function doDelUser(id) {
     if (handledPending(d)) return;
     if (d.ok) { alertMsg(d.result.deleted ? "Пользователь удалён ✅" : "Пользователь не найден."); refreshUsersAdmin(); }
     else alertMsg(d.error === "protected" ? "🛡 Супер-админа удалить нельзя." : d.error === "self" ? "Себя удалить нельзя." : d.error === "bad_id" ? "Неверный ID." : "Не удалось.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 function confirmDelUser(id) {
   const msg = `Удалить пользователя ID ${id}? Он потеряет монеты, прокруты и 18+. Заказы останутся в истории.`;
@@ -1203,7 +1218,7 @@ $("clearRefs").onclick = () => {
       if (handledPending(d)) return;
       if (d.ok) { alertMsg(`Отвязано: ${d.result.count} ✅`); refreshUsersAdmin(); }
       else alertMsg("Не удалось.");
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
   };
   confirmMsg("Отвязать всех ваших рефералов?", go);
 };
@@ -1249,7 +1264,7 @@ $("docsAdminSave").onclick = async () => {
     } else {
       alertMsg((d && d.message) || "Не удалось сохранить.");
     }
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("docsAdminSave").disabled = false; $("docsAdminSave").textContent = "Сохранить"; }
 };
 
@@ -1274,7 +1289,7 @@ async function openSettings() {
       coinValue = d.settings.coin_value || 0.01;
       renderGenerosity();
     }
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Цифры лояльности абстрактны сами по себе: «1 монета за Br» ничего не
@@ -1312,12 +1327,49 @@ $("setSave").onclick = async () => {
                  compensation_max: $("setCompMax").value };
   $("setSave").disabled = true; $("setSave").textContent = "Сохраняю…";
   try {
-    const r = await fetch("/api/admin/settings/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const d = await r.json();
-    alertMsg(d.ok ? "Сохранено ✅" : "Не удалось сохранить.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
-  finally { $("setSave").disabled = false; $("setSave").textContent = "Сохранить"; }
+    const d = await админПост("/api/admin/settings/update", body, "сохранить настройки");
+    if (d) показатьСохранённое(body, d.applied || {});
+  } finally { $("setSave").disabled = false; $("setSave").textContent = "Сохранить"; }
 };
+
+// Поля настроек и то, как их зовут по-человечески. Нужен для одного: сказать,
+// ЧТО именно поправилось, а не «сохранено» вообще.
+const ПОЛЯ_НАСТРОЕК = {
+  payment_info: ["setPay", "Реквизиты"],
+  confirm_minutes: ["setConfirm", "Время подтверждения"],
+  free_delivery_from: ["setFreeFrom", "Бесплатная доставка от"],
+  remind_after_days: ["setRemindDays", "Напоминать через (дней)"],
+  remind_daily_cap: ["setRemindCap", "Напоминаний в день"],
+  coins_per_byn: ["setCashback", "Кэшбэк"],
+  wheel_step: ["setWheelStep", "Шаг колеса"],
+  referral_bonus: ["setRefBonus", "Бонус за друга"],
+  compensation_max: ["setCompMax", "Потолок компенсации"],
+};
+
+function показатьСохранённое(отправили, легло) {
+  // Сервер прижимает значения к границам — и раньше делал это молча. Владелец
+  // вводил кэшбэк 9999, читал «Сохранено ✅» и уходил уверенный, что так и
+  // есть, хотя в базе лежала десятка. Показываем расхождение сразу и в полях,
+  // и словами: другого момента, когда человек об этом думает, не будет.
+  const поправлено = [];
+  for (const ключ in легло) {
+    const [id, имя] = ПОЛЯ_НАСТРОЕК[ключ] || [];
+    if (!id) continue;
+    const стало = String(легло[ключ]);
+    const было = String(отправили[ключ] ?? "").trim().replace(",", ".");
+    // Сравниваем числами, где это числа: «10» и «10.0» — одно и то же, и
+    // ругаться на такое значило бы кричать по любому сохранению.
+    const одно = было === стало ||
+      (было !== "" && !isNaN(+было) && !isNaN(+стало) && +было === +стало);
+    if (!одно) поправлено.push(`${имя}: ${было || "пусто"} → ${стало}`);
+    const поле = $(id);
+    if (поле) поле.value = стало;      // в поле — то, что действительно легло
+  }
+  alertMsg(поправлено.length
+    ? "Сохранено, но часть значений поправлена под допустимые границы:\n\n"
+      + поправлено.join("\n")
+    : "Сохранено ✅");
+}
 
 // ----- Склад: приход и списание -----
 // Раньше остаток правили числом в редакторе, и на вопрос «куда делось» ответа
@@ -1441,7 +1493,7 @@ $("stockSave").onclick = async () => {
     $("stockQty").value = ""; $("stockNote").value = "";
     await loadStockLog(stockProduct.id);
     toast(`${STOCK_REASONS[stockReason]}: остаток ${d.stock} шт`);
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { btn.disabled = false; btn.textContent = "Записать"; }
 };
 
@@ -1526,7 +1578,7 @@ async function reviewApi(path, body) {
   try {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, ...body }) });
     return await r.json();
-  } catch (e) { alertMsg("Сеть недоступна."); return { ok: false }; }
+  } catch (e) { alertMsg(текстСбоя(e)); return { ok: false }; }
 }
 async function decideReview(id, ok) {
   const d = await reviewApi("/api/admin/review/decide", { id, ok });
@@ -1607,7 +1659,7 @@ $("pmAdd").onclick = async () => {
     if (d.ok) { $("pmCode").value = ""; $("pmValue").value = ""; await loadPromos(); }
     else alertMsg({ exists: "Такой код уже есть.", bad_code: "Код без пробелов, до 24 символов.",
                     bad_value: "Скидка должна быть больше нуля (процент — не больше 100)." }[d.error] || "Не удалось создать код.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("pmAdd").disabled = false; $("pmAdd").textContent = "Создать код"; }
 };
 
@@ -1769,7 +1821,7 @@ $("stAdd").onclick = async () => {
     const d = await r.json();
     if (d.ok) { $("stId").value = ""; $("stNote").value = ""; await loadStaff(); alertMsg("Доступ выдан ✅"); }
     else alertMsg(d.error === "bad_city" ? "Такой точки нет." : "Не удалось выдать доступ.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("stAdd").disabled = false; $("stAdd").textContent = "Выдать доступ"; }
 };
 
@@ -1780,6 +1832,6 @@ async function doRemoveStaff(uid) {
     const d = await r.json();
     if (d.ok) await loadStaff();
     else alertMsg(d.error === "super_protected" ? "Владельца убрать нельзя." : "Не удалось убрать.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 

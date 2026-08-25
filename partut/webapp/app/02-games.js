@@ -269,7 +269,7 @@ async function spinSlot() {
   try {
     const r = await fetch("/api/slot/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, bet: slotBet }) });
     res = await r.json();
-  } catch (e) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg("Сеть недоступна."); return; }
+  } catch (e) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(текстСбоя(e)); return; }
   if (!res.ok) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
   bonus.coins = res.balance;
   const isWin = !!res.win;
@@ -414,7 +414,7 @@ async function joinRaffle() {
     const d = await r.json();
     if (d.ok) { alertMsg("Поздравляем! Вы участвуете в розыгрыше 🎉"); await fetchRaffle(); renderRaffle(); }
     else alertMsg(d.error === "not_eligible" ? "Ещё не набрана сумма для участия." : "Не удалось.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 function referralHtml() {
@@ -574,7 +574,7 @@ function renderWheel() {
       const d = await r.json();
       if (handledPending(d)) return;
       if (d.ok) { wheel.spins = d.result.spins; renderWheel(); }
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
   };
 }
 function refreshWheelInfo() {

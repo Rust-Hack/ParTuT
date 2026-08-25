@@ -4,6 +4,37 @@
 // Куски склеиваются сервером по порядку имён в один <script>.
 // Порядок важен: это одна программа, разложенная по файлам, а не модули.
 
+// ---------- Запрос, который обязан однажды закончиться ----------
+//
+// Мобильная сеть умеет не отвечать вовсе: соединение установлено, ответа нет,
+// и промис не завершится НИКОГДА. Кнопка при этом остаётся «Сохраняю…» и
+// заблокированной — до перезагрузки страницы. Никакой ошибки в консоли, просто
+// мёртвый экран, и человек думает, что сломался магазин.
+//
+// Срок ставим ОДИН раз поверх самого fetch, а не в каждом из девяноста вызовов:
+// иначе девяносто первый про него забудет, и поймать это будет нечем.
+const СРОК_ЗАПРОСА = 20000;     // обычная ручка отвечает за доли секунды
+const СРОК_ЗАГРУЗКИ = 60000;    // фото на 12 МБ по мобильной сети — дело долгое
+const _родной_fetch = window.fetch.bind(window);
+window.fetch = (адрес, наст) => {
+  наст = наст || {};
+  if (наст.signal) return _родной_fetch(адрес, наст);   // отменой уже управляют снаружи
+  const стоп = new AbortController();
+  const срок = (наст.body instanceof FormData) ? СРОК_ЗАГРУЗКИ : СРОК_ЗАПРОСА;
+  const таймер = setTimeout(() => стоп.abort(), срок);
+  return _родной_fetch(адрес, { ...наст, signal: стоп.signal })
+    .finally(() => clearTimeout(таймер));
+};
+
+// «Сеть недоступна» и «сервер молчит» лечатся по-разному: в первом случае
+// человек включает интернет, во втором — просто повторяет позже. Раньше и то и
+// другое называлось одинаково.
+function текстСбоя(e) {
+  return (e && e.name === "AbortError")
+    ? "Сервер не ответил вовремя. Попробуйте ещё раз через минуту."
+    : "Сеть недоступна.";
+}
+
 const tg = window.Telegram ? window.Telegram.WebApp : null;
 if (tg) {
   tg.ready();
@@ -88,6 +119,15 @@ applyCategories();
 // Характеристики категории (сопротивление, мощность, совместимость…).
 const specsOf = (code) => ((categories.find(c => c.code === code) || {}).specs) || [];
 const catHasFlavors = (code) => !!(categories.find(c => c.code === code) || {}).has_flavors;
+// Как называется то, по чему считается остаток. Механизм один — метка и число
+// штук, — а слово у каждой категории своё: у одноразки это вкус, у испарителя
+// сопротивление, у пода цвет. Разбиралось по живым магазинам: позиции одной
+// модели испарителя отличаются как «0,17 Ом, упак. 3 шт», а пода — расцветкой.
+const catVariant = (code) => ((categories.find(c => c.code === code) || {}).variant_label || "Вкус");
+const catVariantMany = (code) => {
+  const с = catVariant(code);
+  return с === "Вкус" ? "Вкусы" : с;      // «Сопротивление» и «Цвет» во множественном не нужны
+};
 async function fetchCategories() {
   try {
     const list = await bootFetch("categories", "/api/categories");
@@ -348,7 +388,7 @@ async function start() {
     renderNav();
     // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
     if (me.age_ok) loadCatalog().then(prefetchBonuses).then(openDeepLink); else $("ageView").classList.add("show");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Продавец приходит сюда из уведомления о заказе — кнопка в чате ведёт на
@@ -376,6 +416,10 @@ const ОТКАЗЫ = {
   already:     "Это уже сделано.",
   bad_number:  "Проверьте число.",
   bad_input:   "Поле заполнено неверно.",
+  not_image:   "Это не изображение. Нужен jpg, png или webp.",
+  too_large:   "Файл слишком большой.",
+  send_failed: "Телеграм не принял файл. Попробуйте другой снимок.",
+  no_file:     "Файл не выбран.",
 };
 
 async function админПост(адрес, тело, что) {
@@ -386,7 +430,7 @@ async function админПост(адрес, тело, что) {
     if (r.ok && d.ok) return d;
     alertMsg(d.message || ОТКАЗЫ[d.error] || (что ? `Не удалось: ${что}.` : "Не удалось."));
     return null;
-  } catch (e) { alertMsg("Сеть недоступна."); return null; }
+  } catch (e) { alertMsg(текстСбоя(e)); return null; }
 }
 
 // То же для отправки файла: там тело — FormData, а разбор ответа тот же.
@@ -397,7 +441,7 @@ async function админФайл(адрес, fd, что) {
     if (r.ok && d.ok) return d;
     alertMsg(d.message || ОТКАЗЫ[d.error] || (что ? `Не удалось: ${что}.` : "Не удалось."));
     return null;
-  } catch (e) { alertMsg("Сеть недоступна."); return null; }
+  } catch (e) { alertMsg(текстСбоя(e)); return null; }
 }
 
 function prefetchBonuses() { prefetchDelivery(); fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle(); }
@@ -677,7 +721,7 @@ async function notifyMe(id) {
     renderGrid(); renderFavs();
     if (currentProductId === id) renderProduct();
     alertMsg("Сообщим, как только появится 🔔");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Оценка видна прямо на полке, с первого же отзыва — но всегда рядом с их
@@ -751,20 +795,29 @@ $("searchInput").oninput = (e) => {
   searchTimer = setTimeout(renderGrid, 160);   // перерисовать после паузы в наборе
 };
 
+// Смена города — одна на всё приложение: и для кнопки в шапке, и для настроек.
+// Две копии этой логики разошлись бы на первой же правке, а расходиться тут
+// нечему: город решает, что на витрине, что в корзине и куда поедет заказ.
+// после — что доделать на экране, с которого позвали.
+function switchCity(next, после) {
+  const перейти = () => {
+    if (next !== city) { for (const k in cart) delete cart[k]; }
+    city = next; $("pointName").textContent = city;
+    brandFilters = [];   // другая точка — другой набор брендов
+    prefetchDelivery();  // заранее подтянем способы получения новой точки
+    updateFilterBtn(); renderGrid(); renderNav();
+    if (после) после();
+  };
+  // Спрашиваем только когда есть что терять: корзина собирается по одной точке.
+  if (next !== city && Object.keys(cart).length)
+    confirmMsg("Сменить город? Корзина очистится: заказ собирается по одной точке.", перейти);
+  else перейти();
+}
+
 $("pointBtn").onclick = () => {
   $("pointList").innerHTML = cityList.map(c => `<button class="opt ${c===city?'active':''}" data-city="${esc(c)}">${esc(c)}</button>`).join("");
   $("pointList").querySelectorAll("[data-city]").forEach(b => b.onclick = () => {
-    const next = b.dataset.city;
-    const switchTo = () => {
-      if (next !== city) { for (const k in cart) delete cart[k]; }
-      city = next; $("pointName").textContent = city;
-      brandFilters = [];   // другая точка — другой набор брендов
-      prefetchDelivery();  // заранее подтянем способы получения новой точки
-      closeOverlay($("pointOverlay")); updateFilterBtn(); renderGrid(); renderNav();
-    };
-    if (next !== city && Object.keys(cart).length)
-      confirmMsg("Сменить точку? Корзина очистится.", switchTo);
-    else switchTo();
+    switchCity(b.dataset.city, () => closeOverlay($("pointOverlay")));
   });
   $("pointOverlay").classList.add("show");
 };
@@ -904,12 +957,14 @@ function renderProfile() {
       <div class="prow"><span>${dark ? "🌙 Тёмная тема" : "☀️ Светлая тема"}</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
       <div class="prow" id="openMySettings"><span>⚙️ Мои настройки</span><span>›</span></div>
       <div class="prow" id="openMyOrders"><span>📦 Мои заказы</span><span>›</span></div>
+      <div class="prow" id="openRules"><span>📖 Как всё устроено</span><span>›</span></div>
       <div class="prow" id="openSupport"><span>💬 Написать в поддержку</span><span>›</span></div>
     </div></div>`;
   $("themeSwitch").onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark");
   $("openMySettings").onclick = openMySettings;
   if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
   $("openMyOrders").onclick = openMyOrders;
+  $("openRules").onclick = openRules;
   $("openSupport").onclick = () => openSupport();
 }
 // ----- Настройки покупателя -----
@@ -961,6 +1016,183 @@ function bindQty(корень, приПравке) {
 
 // ----- Документы магазина -----
 // Оферта и политика обработки данных. Тексты приходят с сервера, а не зашиты
+// ----- Как всё устроено -----
+// Правила словами покупателя. Числа берём с сервера настоящие: владелец
+// поменяет кэшбэк или порог бесплатной доставки — правила поменяются вместе с
+// ним. Переписать их в текст один раз значило бы завести вторую правду,
+// которая начнёт врать на первой же правке настроек.
+let rulesCache = null;
+
+$("rulesClose").onclick = () => $("rulesView").classList.remove("show");
+
+// Две вкладки, а не два экрана. Человек приходит сюда с готовым вопросом
+// («когда придут монеты?») — ему нужен быстрый ответ; и лишь иногда нужна
+// полная картина. Заставлять выбирать между двумя строками в профиле значит
+// заставлять угадывать, где ответ.
+let rulesTab = "faq";
+
+$("rulesTabs").querySelectorAll("[data-rt]").forEach(b => b.onclick = () => {
+  rulesTab = b.dataset.rt;
+  $("rulesTabs").querySelectorAll("[data-rt]").forEach(x => x.classList.toggle("on", x === b));
+  if (rulesCache) drawRules();
+  $("rulesView").scrollTop = 0;
+});
+
+async function openRules() {
+  $("rulesView").classList.add("show");
+  if (!rulesCache) {
+    try {
+      rulesCache = await (await fetch("/api/rules")).json();
+    } catch (e) {
+      $("rulesBody").innerHTML = `<div class="card-block" style="color:var(--hint)">Не удалось загрузить. Проверьте связь и попробуйте ещё раз.</div>`;
+      return;
+    }
+  }
+  drawRules();
+}
+
+function drawRules() {
+  if (rulesTab === "faq") renderFaq(rulesCache);
+  else renderRules(rulesCache);
+}
+
+// Вопросы теми словами, какими их задают в чате поддержки, — и ответы,
+// которые совпадают с тем, что приложение делает на самом деле.
+function renderFaq(r) {
+  const монетаBr = +r.coin_value || 0.01;
+  const заСотню = (100 * монетаBr).toFixed(2) === "1.00"
+    ? `100 монет = 1 ${CUR}` : `1 монета = ${монетаBr.toFixed(2)} ${CUR}`;
+
+  const вопросы = [
+    ["Когда придут монеты за заказ?",
+     `После того как продавец отметит заказ выданным, а не в момент оформления. Пока заказ в работе, монеты ещё не начислены — это защита от начислений за заказы, которые не состоялись.`],
+
+    ["Заказ отменился сам — почему?",
+     `Так бывает только с оплатой картой, если чек не загрузили за ${r.unpaid_hours} ч. Товар всё это время лежал отложенным, поэтому мы не держим его дольше. Оформите заново — и загрузите чек сразу.`],
+
+    ["Оплатил, но заказ всё ещё «ждёт подтверждения»",
+     `Продавец сверяет платёж вручную и подтверждает обычно за ${r.confirm_minutes} мин. Если прошло заметно больше — напишите по заказу, кнопка есть в «Мои заказы».`],
+
+    ["Можно заплатить при получении?",
+     `Да, если у выбранного способа есть «Наличными». Тогда чек загружать не нужно — заказ сразу уходит продавцу.`],
+
+    ["Передумал брать одну из позиций",
+     `Напишите продавцу по заказу — он изменит состав, пока заказ не выдан. Сумма пересчитается сама, и вам придёт сообщение с новым составом. Отменять весь заказ ради этого не нужно.`],
+
+    ["Нужного вкуса нет в списке",
+     `Наличие считается по каждой точке отдельно: в другом городе этот вкус может быть. А на карточке товара, которого нет, есть кнопка «Сообщить о поступлении» — напишем, как только привезём.`],
+
+    ["Заказ отклонили — вернут ли деньги?",
+     `Если платили картой — да, продавец вернёт перевод; он же напишет вам причину отказа. Монеты и промокод возвращаются автоматически, товар уходит обратно в продажу.`],
+
+    ["Мой отзыв не появился",
+     `Отзывы публикуются после проверки продавцом. Низкие оценки не удаляют — скрывают только спам и оскорбления. Оценить можно то, что вы получили, и один раз на товар.`],
+
+    ["Можно заказать товары из разных городов сразу?",
+     `Нет: заказ собирается по одной точке, оттуда его и выдают. Поэтому при смене города корзина очищается — приложение предупредит об этом заранее.`],
+
+    ["Монеты сгорают?",
+     `Нет, срока у них нет. ${заСотню}; тратятся скидкой — галочка в корзине и на экране оформления.`],
+
+    ["Когда придут монеты за приглашённого друга?",
+     `${r.referral_bonus} 🪙 — после его первого выданного заказа. Дальше вам идёт процент с каждого его заказа, и он растёт от числа тех, кто уже покупал.`],
+
+    ["Не успеваю забрать заказ сегодня",
+     `Напишите продавцу по заказу — подтверждённый заказ сам не отменяется и вас дождётся. Предупредить стоит: так товар точно не уедет обратно на полку.`],
+  ];
+
+  $("rulesBody").innerHTML = `<div class="card-block faqbox">${вопросы.map(([в, о]) => `
+      <details class="faq"><summary>${в}</summary><div class="faq-a">${о}</div></details>`).join("")}</div>
+    <div class="dnote" style="text-align:center;margin:0 0 8px">Не нашли своё? Напишите в поддержку — ответим в этом чате.</div>`;
+}
+
+function renderRules(r) {
+  // «100.00 Br» у круглого числа — лишний шум: пороги и шаги задают целыми.
+  const br = n => `${(+n) % 1 ? (+n).toFixed(2) : (+n)} ${CUR}`;
+  const монетаBr = +r.coin_value || 0.01;
+  const заРубль = +r.coins_per_byn || 0;
+  // «1 монета = 0.01 Br» человеку ничего не говорит. Говорит «100 монет = 1 Br».
+  const заСотню = (100 * монетаBr).toFixed(2);
+  const процентКэшбэка = (заРубль * монетаBr * 100).toFixed(заРубль * монетаBr * 100 % 1 ? 1 : 0);
+  const ступени = (r.ref_tiers || []).slice().sort((a, b) => a.from - b.from);
+  const порог = +r.free_delivery_from || 0;
+
+  // Шторками, как и вопросы: десять разделов подряд — это простыня, в которой
+  // свой раздел ищешь прокруткой. Свёрнутые, они умещаются в один экран, и
+  // видно сразу всё, о чём вообще можно спросить.
+  const блок = (значок, title, html) => `<details class="rulesec faq">
+      <summary><span class="rules-h">${значок} ${title}</span></summary>
+      <div class="faq-a rules-body">${html}</div></details>`;
+
+  const разделы = [
+    блок("🔞", "Кому можно",
+      `<p>Магазин продаёт товары для совершеннолетних. Оформляя заказ, вы подтверждаете, что вам есть 18.</p>`),
+
+    блок("🛒", "Как оформить заказ",
+      `<p>Выберите город наверху, добавьте товары в корзину и нажмите «Оформить». На следующем экране — способ получения, оплата, промокод и монеты.</p>
+       <p class="rules-note">Товар откладывается сразу, как только заказ создан. Поэтому если передумали — отмените заказ, а не бросайте его: пока он висит, товар не достанется никому другому.</p>`),
+
+    блок("💳", "Оплата",
+      `<p><b>Наличными при получении</b> — заказ сразу уходит продавцу.</p>
+       <p><b>Картой</b> — после оформления покажем реквизиты и сумму. Переведите и загрузите фото чека.</p>
+       <ul class="ruleslist">
+         <li>Продавец подтверждает обычно за <b>${r.confirm_minutes} мин</b>.</li>
+         <li>Заказ ждёт чек <b>${r.unpaid_hours} ч</b>, потом отменяется сам и товар возвращается в продажу.</li>
+         <li>Не успели перевести сразу — реквизиты всегда есть в «Мои заказы».</li>
+       </ul>`),
+
+    блок("📦", "Получение",
+      `<p><b>Самовывоз</b> — заберёте по адресу, который увидите при оформлении. Если адресов несколько, выберете сами.</p>
+       <p><b>Доставка</b> — спросим адрес и телефон. Курьер позвонит, если не сможет вас найти.</p>
+       ${порог ? `<p class="rules-note">Доставка бесплатная от <b>${br(порог)}</b> в заказе. В корзине видно, сколько осталось добрать.</p>` : ""}`),
+
+    блок("✖️", "Отмена и возврат",
+      `<p>Отменить заказ можно, пока продавец не выдал его: кнопка в «Мои заказы».</p>
+       <ul class="ruleslist">
+         <li>Товар возвращается в продажу.</li>
+         <li>Списанные монеты возвращаются на баланс.</li>
+         <li>Применённый промокод снова становится доступен.</li>
+       </ul>
+       <p class="rules-note">Если продавец отклонил заказ сам, вы получите сообщение с причиной.</p>`),
+
+    блок("🪙", "Монеты",
+      `<p><b>${заСотню === "1.00" ? "100 монет = 1 " + CUR : "1 монета = " + монетаBr.toFixed(2) + " " + CUR}.</b> Тратятся скидкой в следующем заказе — отметьте галочку в корзине или на экране оформления.</p>
+       <ul class="ruleslist">
+         ${заРубль ? `<li>За каждый ${CUR} покупки — <b>${заРубль} 🪙</b> (это ${процентКэшбэка}% от заказа).</li>` : ""}
+         <li>Начисляются <b>после выдачи</b> заказа, а не при оформлении.</li>
+         <li>Считаются с товаров, без стоимости доставки.</li>
+         <li>Не сгорают и не имеют срока.</li>
+       </ul>`),
+
+    блок("🎡", "Колесо и слот",
+      `<p>За каждые <b>${br(r.wheel_step)}</b> покупок даётся один прокрут колеса — на нём выигрываются монеты. Прогресс виден во вкладке «Бонусы».</p>
+       <p>«Облако Монет» — игра на уже накопленные монеты: ставка списывается, выигрыш начисляется.</p>`),
+
+    блок("👥", "Приглашайте друзей",
+      `<p>Во вкладке «Бонусы» есть ваша ссылка. Друг переходит по ней, и вы получаете:</p>
+       <ul class="ruleslist">
+         <li><b>${r.referral_bonus} 🪙</b> разово — за его первый заказ;</li>
+         <li>и процент с каждого его заказа дальше.</li>
+       </ul>
+       ${ступени.length ? `<p>Процент растёт от числа приглашённых, которые уже что-то купили:</p>
+       <div class="reftiers">${ступени.map((t, i) => {
+         const следующий = ступени[i + 1];
+         const кого = t.from === 0
+           ? (следующий ? `меньше ${следующий.from}` : "с самого начала")
+           : `от ${t.from}`;
+         return `<span><b>${t.percent}%</b><small>${кого}</small></span>`;
+       }).join("")}</div>` : ""}`),
+
+    блок("⭐", "Отзывы",
+      `<p>Оценить можно только то, что вы получили, и один раз на товар. Отзыв появляется на витрине после проверки продавцом.</p>
+       <p class="rules-note">Низкие оценки не удаляются — скрывают только спам и оскорбления. На отзыв магазин может ответить, ответ виден под ним.</p>`),
+
+    блок("💬", "Если что-то не так",
+      `<p>В профиле есть «Написать в поддержку», а у каждого заказа — «Написать по заказу». Ответ придёт в этот же чат.</p>`),
+  ].join("");
+  $("rulesBody").innerHTML = `<div class="card-block faqbox">${разделы}</div>`;
+}
+
 // в приложение: правит их владелец из админки, и ждать выкатки ради запятой
 // нельзя. Раз загруженные — держим в памяти: документ читают один раз.
 let docsCache = null;
@@ -1018,6 +1250,7 @@ async function openMySettings() {
   $("myPoints").innerHTML = `<p style="color:var(--hint);font-size:13px;margin:0">Загрузка…</p>`;
   $("myIdVal").textContent = (tgUser && tgUser.id) || "—";
   renderMyAlerts();
+  renderMyCities();
   try {
     const r = await fetch("/api/my-points");
     myPoints = (await r.json()).points || [];
@@ -1061,20 +1294,45 @@ async function stopWaiting(id) {
     renderMyAlerts();
     renderGrid();          // на витрине кнопка снова станет «сообщить о поступлении»
     toast("Больше не ждём ✓");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
+}
+
+function renderMyCities() {
+  const города = (cityList && cityList.length ? cityList : locations.map(l => l.name));
+  if (!города.length) { $("myCities").innerHTML = ""; return; }
+  $("myCities").innerHTML = `<div class="citypick">${города.map(г =>
+    `<button class="opt ${г === city ? "active" : ""}" data-mycity="${esc(г)}">${esc(г)}</button>`).join("")}</div>`;
+  $("myCities").querySelectorAll("[data-mycity]").forEach(b => b.onclick = () => switchCity(b.dataset.mycity, () => {
+    renderMyCities();
+    renderMyPoints();      // точки другого города — другой список
+  }));
 }
 
 function renderMyPoints() {
-  if (!myPoints.length) {
-    $("myPoints").innerHTML = `<p style="color:var(--hint);font-size:13px;margin:0">Точек самовывоза пока нет — их заводит магазин.</p>`;
+  // Показываем точки ТОЛЬКО текущего города. Общий список всех городов путал:
+  // человек выбирал адрес из другого города, приложение молча его не
+  // подставляло при заказе, и понять причину было неоткуда.
+  const свои = myPoints.filter(p => p.city === city);
+  // Точка, выбранная в другом городе, здесь не выбрана — так и говорим,
+  // вместо того чтобы делать вид, будто настройка пустая.
+  const чужая = myPointId && !свои.some(p => p.id === myPointId)
+    ? myPoints.find(p => p.id === myPointId) : null;
+  if (!свои.length) {
+    $("myPoints").innerHTML = `<p style="color:var(--hint);font-size:13px;margin:0">В городе «${esc(city)}» точек самовывоза нет — их заводит магазин.</p>`;
     return;
   }
   // «Не выбрано» — обычный вариант, а не отсутствие ответа: человек вправе
   // решать каждый раз заново.
-  const строки = [`<button class="opt ${!myPointId ? 'active' : ''}" data-mp="0">Спрашивать при заказе</button>`]
-    .concat(myPoints.map(p => `<button class="opt ${myPointId === p.id ? 'active' : ''}" data-mp="${p.id}">
-        ${esc(p.address)}<small class="ppnote">${esc(p.city)}${p.note ? ` · ${esc(p.note)}` : ""}</small></button>`));
-  $("myPoints").innerHTML = строки.join("");
+  const строки = [`<button class="opt ${!myPointId || чужая ? 'active' : ''}" data-mp="0">Спрашивать при заказе</button>`]
+    .concat(свои.map(p => `<button class="opt ${myPointId === p.id ? 'active' : ''}" data-mp="${p.id}">
+        ${esc(p.address)}${p.note ? `<small class="ppnote">${esc(p.note)}</small>` : ""}</button>`));
+  $("myPoints").innerHTML = строки.join("")
+    // Точка одна на человека и принадлежит своему городу. В другом городе она
+    // просто не применяется — и об этом надо сказать ровно то, что есть:
+    // прежний выбор цел, пока здесь не выбрали другой.
+    + (чужая ? `<div class="dnote" style="margin:6px 0 0">Для «${esc(city)}» точка не выбрана — спросим при заказе.
+        Ваш прежний выбор «${esc(чужая.address)}» в городе «${esc(чужая.city)}» сохранится,
+        пока вы не отметите точку здесь.</div>` : "");
   $("myPoints").querySelectorAll("[data-mp]").forEach(b => b.onclick = () => {
     myPointId = +b.dataset.mp || null; renderMyPoints();
   });
@@ -1110,7 +1368,7 @@ $("mySave").onclick = async () => {
     remindersOn = d.reminders_on !== false;
     $("myView").classList.remove("show");
     toast("Сохранено ✓");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { btn.disabled = false; btn.textContent = "Сохранить"; }
 };
 
@@ -1134,7 +1392,7 @@ $("supportSend").onclick = async () => {
     if (d.ok && d.delivered) { closeOverlay($("supportOverlay")); alertMsg("Отправлено ✅ Менеджер ответит в этом чате."); }
     else if (d.error === "cooldown") alertMsg(`Слишком часто. Подождите ${d.retry_after || 20} сек.`);
     else alertMsg("Не удалось отправить. Попробуйте позже.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("supportSend").disabled = false; $("supportSend").textContent = "Отправить"; }
 };
 

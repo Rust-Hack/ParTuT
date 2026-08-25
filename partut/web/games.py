@@ -412,7 +412,8 @@ def api_admin_raffle_photo():
         file_id, _thumb = photos._pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото приза: {e}")
-        return jsonify({"ok": False, "error": "send_failed"}), 500
+        return jsonify({"ok": False, "error": "send_failed",
+                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
     db.update_raffle_field(r["id"], "photo", file_id)
     return jsonify({"ok": True, "photo": file_id})
 

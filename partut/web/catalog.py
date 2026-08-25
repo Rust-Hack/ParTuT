@@ -148,7 +148,8 @@ def api_admin_category_update():
     sort = data.get("sort")
     db.update_category(code, name=data.get("name"), emoji=data.get("emoji"),
                        sort=(int(sort) if str(sort or "").strip().lstrip("-").isdigit() else None),
-                       has_flavors=(bool(data.get("has_flavors")) if "has_flavors" in data else None))
+                       has_flavors=(bool(data.get("has_flavors")) if "has_flavors" in data else None),
+                       variant_label=(inputs._text(data.get("variant_label")) if "variant_label" in data else None))
     return jsonify({"ok": True})
 
 
@@ -538,7 +539,8 @@ def api_admin_photo():
         file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото товара: {e}")
-        return jsonify({"ok": False, "error": "send_failed"}), 500
+        return jsonify({"ok": False, "error": "send_failed",
+                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
 
     db.update_field(pid, "photo", file_id)
     db.update_field(pid, "photo_thumb", thumb_id)
@@ -571,7 +573,8 @@ def api_admin_photo_add():
         file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото модели: {e}")
-        return jsonify({"ok": False, "error": "send_failed"}), 500
+        return jsonify({"ok": False, "error": "send_failed",
+                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
     photo_id = db.add_model_photo(mid, file_id, thumb_id)
     if not photo_id:
         return jsonify({"ok": False, "error": "too_many", "max": db.MAX_EXTRA_PHOTOS}), 400
@@ -710,7 +713,8 @@ def api_admin_model_photo():
         file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото модели: {e}")
-        return jsonify({"ok": False, "error": "send_failed"}), 500
+        return jsonify({"ok": False, "error": "send_failed",
+                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
     db.set_model_photo(mid, file_id, thumb_id)
     return jsonify({"ok": True})
 

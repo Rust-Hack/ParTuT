@@ -107,12 +107,14 @@ def run():
     r = client.post("/api/admin/category/delete", json={"initData": "x", "code": "liquid"})
     c2("без категорий остаться нельзя", r.status_code == 400 and r.get_json()["error"] == "last_one")
 
-    # Возвращаем стартовый набор (init_db сеет только в пустую таблицу).
+    # Возвращаем стартовый набор руками: init_db сеет только ОДИН раз за жизнь
+    # базы, и рассчитывать, что он подсыплет удалённое, больше нельзя.
     conn = db.connect(); cur = conn.cursor()
-    for code, name, emoji, sort in db.CATEGORY_SEED:
+    for code, name, emoji, sort, вкусы in db.CATEGORY_SEED:
         if code != "liquid":
-            cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort) VALUES (%s, %s, %s, %s)"),
-                        (code, name, emoji, sort))
+            cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort, has_flavors) "
+                              "VALUES (%s, %s, %s, %s, %s)"),
+                        (code, name, emoji, sort, вкусы))
     conn.commit(); conn.close()
     cache.bust()
     c2("стартовый набор восстановлен", len(db.category_codes()) == len(db.CATEGORY_SEED))

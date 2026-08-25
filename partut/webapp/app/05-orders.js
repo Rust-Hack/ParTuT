@@ -63,7 +63,7 @@ function openReviewSheet(p) {
         renderMyOrders();
         alertMsg("Спасибо! Отзыв появится после проверки ⭐");
       } else alertMsg(d.error === "not_allowed" ? "Оценить можно только полученный товар." : "Не удалось отправить.");
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
     finally { $("revSend").disabled = false; $("revSend").textContent = "Отправить отзыв"; }
   };
 }
@@ -130,7 +130,7 @@ function cancelMyOrder(o) {
         openMyOrders(); fetchBonus();
       }
       else alertMsg(d.error === "too_late" ? "Заказ уже подтверждён — отмена через поддержку." : "Не удалось отменить.");
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
   };
   const msg = `Отменить заказ #${o.id}?`;
   confirmMsg(msg, go);
@@ -377,7 +377,7 @@ $("oeditSave").onclick = async () => {
     } else {
       toast("Состав изменён, покупателю отправлено");
     }
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("oeditSave").disabled = false; }
 };
 

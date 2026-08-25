@@ -46,7 +46,7 @@ $("brSave").onclick = async () => {
     await refreshProducts();      // переименование бренда переносит и товары
     renderBrandList();
     alertMsg(d.moved ? `Бренд сохранён ✅ Товаров перенесено: ${d.moved}` : "Бренд сохранён ✅");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 };
 function resetBrandForm() {
   editingBrandId = null; brandFlavors = [];
@@ -125,7 +125,7 @@ async function doDelBrand(id, force) {
     }
     if (editingBrandId === id) resetBrandForm();
     await fetchBrands(); renderBrandList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Управление локациями
@@ -289,7 +289,7 @@ async function addPickupPoint(btn) {
     const r = await fetch("/api/admin/point", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if ((await r.json()).ok) { await loadDelivery(); renderLocList(); }
     else alertMsg("Не удалось добавить точку.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { btn.disabled = false; }
 }
 
@@ -308,7 +308,7 @@ async function saveDeliveryMethod(btn) {
     const d = await r.json();
     if (!d.ok) { alertMsg("Не удалось сохранить."); return; }
     await loadDelivery(); renderLocList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 async function addDeliveryMethod(btn) {
   const body = btn.closest(".sectbody");
@@ -320,7 +320,7 @@ async function addDeliveryMethod(btn) {
     const d = await r.json();
     if (!d.ok) { alertMsg("Не удалось добавить способ."); return; }
     await loadDelivery(); renderLocList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 function delDeliveryMethod(id) { confirmMsg("Удалить способ получения?", () => doDelDeliveryMethod(id)); }
 async function doDelDeliveryMethod(id) {
@@ -337,7 +337,7 @@ $("locAdd").onclick = async () => {
     $("locName").value = "";
     await refreshProducts();
     await loadDelivery(); renderLocList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 };
 function delLocation(id) { confirmMsg("Удалить локацию?", () => doDelLocation(id)); }
 async function doDelLocation(id) {
@@ -349,7 +349,7 @@ async function doDelLocation(id) {
       return;
     }
     await refreshProducts();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Переключение формы: одноразки vs обычный товар
@@ -439,7 +439,49 @@ function collectSpecs(scopeId) {
 
 // Форма «новый товар» переехала в «Ассортимент»: модель описывается один раз,
 // а здесь у товара остаётся то, что своё у каждой точки — цена и остаток.
-$("toModels").onclick = () => { $("productsView").classList.remove("show"); openModels(); };
+// Завоз на точку начинается здесь же, в «Ценах и остатках»: раньше отсюда
+// отсылали в «Ассортимент», и продавец уходил в раздел, который ведёт владелец
+// и в котором ему больше нечего делать.
+$("openStockPick").onclick = openStockPick;
+$("stockPickClose").onclick = () => $("stockPickView").classList.remove("show");
+$("stockPickSearch").oninput = renderStockPick;
+
+async function openStockPick() {
+  $("stockPickView").classList.add("show");
+  $("stockPickSearch").value = "";
+  // Модели грузились только при входе в «Ассортимент», а сюда попадают мимо
+  // него — список был пуст, и это выглядело как «завозить нечего».
+  $("stockPickList").innerHTML = `<p style="color:var(--hint);margin:8px 0 0">Загрузка…</p>`;
+  await fetchModels();
+  renderStockPick();
+}
+
+function renderStockPick() {
+  const q = ($("stockPickSearch").value || "").trim().toLowerCase();
+  const список = models.filter(m => !q || `${m.name} ${m.brand || ""}`.toLowerCase().includes(q));
+  if (!models.length) {
+    $("stockPickList").innerHTML = `<p style="color:var(--hint);font-size:13.5px;margin:8px 0 0">Ассортимент пуст. Модели — название, вкусы, фото — заводит владелец в разделе «Ассортимент».</p>`;
+    return;
+  }
+  if (!список.length) { $("stockPickList").innerHTML = `<p style="color:var(--hint);margin:8px 0 0">Ничего не найдено.</p>`; return; }
+  // Где модель уже стоит — прямо в строке: чаще всего сюда заходят завезти
+  // то, чего на своей точке ещё нет, и это должно быть видно до нажатия.
+  const мояТочка = myScope();
+  $("stockPickList").innerHTML = список.map(m => {
+    const стоит = shelf().filter(p => p.model_id === m.id);
+    const уже = мояТочка
+      ? (стоит.some(p => p.city === мояТочка) ? `<span class="tagbadge">уже на вашей точке</span>` : "")
+      : (стоит.length ? `<small>уже: ${стоит.map(p => esc(p.city)).join(", ")}</small>` : "");
+    return `<div class="admrow" data-pick="${m.id}">
+      <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
+        <small>${esc(catName(m.category))}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small>${уже}</div>
+      <span style="color:var(--hint)">›</span></div>`;
+  }).join("");
+  $("stockPickList").querySelectorAll("[data-pick]").forEach(b => b.onclick = () => {
+    $("stockPickView").classList.remove("show");
+    openStockIn(+b.dataset.pick);
+  });
+}
 
 function renderAdminList() {
   if (!shelf().length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
@@ -563,7 +605,7 @@ async function addEditPhotos(files) {
       const d = await r.json();
       if (d.ok) editPhotos.push({ id: d.photo_id, url: URL.createObjectURL(f) });
       else alertMsg(d.error === "too_many" ? `Больше ${MAX_EXTRA_PHOTOS} фото не нужно.` : "Фото не загрузилось.");
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
     const tmp = $("gLoading"); if (tmp) tmp.remove();
   }
   renderEditGallery();
@@ -578,7 +620,7 @@ function delEditPhoto(photoId) {
       editPhotos = editPhotos.filter(g => g.id !== photoId);
       renderEditGallery();
       refreshProducts();
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
   });
 }
 
@@ -600,9 +642,9 @@ function renderEdit(p) {
           <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
           <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
         </div>
-        ${isVar ? `<label>Вкусы и остаток</label><div id="edVarList"></div>
+        ${isVar ? `<label>${esc(catVariantMany(p.category))} и остаток</label><div id="edVarList"></div>
           <div style="display:flex;gap:8px;margin-top:10px">
-            <input id="edNewFlavor" placeholder="Добавить вкус" style="flex:1" list="edFlavorOpts">
+            <input id="edNewFlavor" placeholder="Добавить: ${esc(catVariant(p.category).toLowerCase())}" style="flex:1" list="edFlavorOpts">
             <datalist id="edFlavorOpts">${(md ? md.flavors : []).map(f => `<option value="${esc(f)}">`).join("")}</datalist>
             <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
           </div>`
@@ -676,10 +718,10 @@ function renderEdit(p) {
       <label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}">
       <label>Закупочная цена (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}">
       ${specs}
-      <label>Вкусы и остаток</label>
+      <label>${esc(catVariantMany(p.category))} и остаток</label>
       <div id="edVarList"></div>
       <div style="display:flex;gap:8px;margin-top:10px">
-        <input id="edNewFlavor" placeholder="Добавить вкус" style="flex:1" list="edFlavorOpts">
+        <input id="edNewFlavor" placeholder="Добавить: ${esc(catVariant(p.category).toLowerCase())}" style="flex:1" list="edFlavorOpts">
         <datalist id="edFlavorOpts">${avail.map(f => `<option value="${esc(f)}">`).join("")}</datalist>
         <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
       </div>
@@ -1061,7 +1103,7 @@ async function saveEdit(p) {
     $("editView").classList.remove("show");
     alertMsg(отказы.length ? "⚠️ Сохранено не всё\n\nНе сохранилось — " + отказы.join("; ")
                            : "Сохранено ✅");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
 }
 
@@ -1099,7 +1141,7 @@ async function doDelAdminRow(id, force) {
     }
     if (!d.ok) { alertMsg(d.message || "Не удалось удалить товар."); return; }
     await refreshProducts();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Убираем заставку после проигрыша анимации, чтобы не мешала кликам.

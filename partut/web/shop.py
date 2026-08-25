@@ -49,6 +49,34 @@ def api_locations():
     return cache.json_etag(cached)
 
 
+@bp.route("/api/rules")
+def api_rules():
+    """Числа, по которым живёт магазин, — для экрана «Как всё устроено».
+
+    Отдаём именно НАСТОЯЩИЕ настройки, а не переписанные в текст один раз:
+    владелец поменяет кэшбэк или порог бесплатной доставки, и правила поменяются
+    вместе с ним. Правила, разошедшиеся с магазином, хуже отсутствующих — по ним
+    человек считает свою выгоду и приходит с претензией.
+
+    Открыто всем и без входа: правила, которые видно только вошедшему, своей
+    задачи не выполняют. Секретного здесь ничего нет — всё это покупатель и так
+    видит по частям в корзине, бонусах и на оформлении.
+    """
+    готовое = cache.get("rules")
+    if готовое is None:
+        готовое = cache.put("rules", {
+            "coin_value": shopinfo.COIN_VALUE,          # сколько рублей стоит монета
+            "coins_per_byn": db.coins_per_byn(),        # монет за рубль заказа
+            "wheel_step": db.wheel_step(),              # рублей на один прокрут колеса
+            "referral_bonus": db.referral_bonus(),      # монет за первый заказ друга
+            "ref_tiers": [{"from": м, "percent": п} for м, п in sorted(db.REFERRAL_TIERS)],
+            "confirm_minutes": shopinfo._confirm_minutes(),
+            "unpaid_hours": config.CANCEL_UNPAID_HOURS,
+            "free_delivery_from": shopinfo._free_delivery_from(),
+        }, 300)
+    return cache.json_etag(готовое)
+
+
 @bp.route("/api/docs")
 def api_docs():
     """Оферта и политика обработки данных — открыты всем, без подписи.

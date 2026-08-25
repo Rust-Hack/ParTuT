@@ -343,7 +343,7 @@ async function doSubmitOrder() {
       $("doneView").classList.add("show");
     }
     fetchBonus();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally {
     submitting = false;
     if (btn) { btn.disabled = false; btn.textContent = btnText; }
@@ -424,8 +424,10 @@ $("receiptFile").onchange = async (e) => {
       $("doneText").textContent = `Чек по заказу #${currentOrder.order_id} получен. Продавец подтвердит за ~${currentOrder.confirm_minutes} минут.`;
       $("doneView").classList.add("show");
       for (const k in cart) delete cart[k]; renderNav();
-    } else alertMsg("Не удалось отправить чек. Попробуйте ещё раз.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+    } else alertMsg(d.message || "Не удалось отправить чек. Попробуйте ещё раз.");
+    // Причину говорит сервер: «это не фото» и «файл слишком большой» лечатся
+    // по-разному, а «попробуйте ещё раз» с тем же файлом не лечится вовсе.
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("uploadBtn").disabled = false; $("uploadBtn").textContent = "📷 Загрузить чек"; }
 };
 $("doneBtn").onclick = () => { showTab("catalog"); $("doneView").classList.remove("show"); };
@@ -476,7 +478,7 @@ function renderProduct() {
   let flavorHtml = "";
   if (hasVariants(p)) {
     // Вкусы — строками на всю ширину, чтобы список не «прыгал» при добавлении.
-    flavorHtml = `<div style="font-weight:700;margin:16px 0 8px">Вкусы:</div><div class="fsel-list">` +
+    flavorHtml = `<div style="font-weight:700;margin:16px 0 8px">${esc(catVariantMany(p.category))}:</div><div class="fsel-list">` +
       p.variants.map(v => {
         const out = v.stock <= 0;
         const qty = cart[cartKey(p.id, v.flavor)] ? cart[cartKey(p.id, v.flavor)].qty : 0;
@@ -559,7 +561,7 @@ function renderProdActions(p) {
       $("prodActions").innerHTML = `<button class="bigbtn" id="pdGoCart">В корзину · ${items} шт · ${(items*p.price).toFixed(2)} ${CUR}</button>`;
       $("pdGoCart").onclick = () => { $("productView").classList.remove("show"); renderGrid(); showTab("cart"); };
     } else {
-      $("prodActions").innerHTML = `<div style="text-align:center;color:var(--hint);padding:10px 0">Нажмите на вкус, чтобы добавить</div>`;
+      $("prodActions").innerHTML = `<div style="text-align:center;color:var(--hint);padding:10px 0">Нажмите на ${esc(catVariant(p.category).toLowerCase())}, чтобы добавить</div>`;
     }
     return;
   }
