@@ -343,7 +343,7 @@ async function doSubmitOrder() {
       $("doneView").classList.add("show");
     }
     fetchBonus();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally {
     submitting = false;
     if (btn) { btn.disabled = false; btn.textContent = btnText; }
@@ -424,8 +424,10 @@ $("receiptFile").onchange = async (e) => {
       $("doneText").textContent = `Чек по заказу #${currentOrder.order_id} получен. Продавец подтвердит за ~${currentOrder.confirm_minutes} минут.`;
       $("doneView").classList.add("show");
       for (const k in cart) delete cart[k]; renderNav();
-    } else alertMsg("Не удалось отправить чек. Попробуйте ещё раз.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+    } else alertMsg(d.message || "Не удалось отправить чек. Попробуйте ещё раз.");
+    // Причину говорит сервер: «это не фото» и «файл слишком большой» лечатся
+    // по-разному, а «попробуйте ещё раз» с тем же файлом не лечится вовсе.
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("uploadBtn").disabled = false; $("uploadBtn").textContent = "📷 Загрузить чек"; }
 };
 $("doneBtn").onclick = () => { showTab("catalog"); $("doneView").classList.remove("show"); };
