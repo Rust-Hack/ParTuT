@@ -870,6 +870,26 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 .doctab.on { background: var(--surface-2); color: var(--text); border-color: transparent }
 /* Документ читают с телефона и целиком: узкая колонка и воздух между абзацами
    важнее плотности — иначе до нужного пункта не доскроллить. */
+/* Как всё устроено: правила словами покупателя. Каждый раздел — отдельная
+   карточка, потому что их читают выборочно, а не подряд. */
+.rulesec { text-align: left; }
+.rules-h { font-weight: 800; font-size: 16px; margin: 0 0 8px; }
+/* .view p красит абзацы в подсказочный серый и ставит по центру — так надо
+   пустым экранам, но не странице, которую читают целиком. Здесь возвращаем
+   обычный текст по левому краю, а серым остаются только сноски. */
+.rulesec p { margin: 0 0 10px; font-size: 14.5px; line-height: 1.5;
+  text-align: left; color: var(--text); }
+.rulesec p:last-child { margin-bottom: 0; }
+.rulesec .rules-note { color: var(--hint); font-size: 13.5px; }
+.ruleslist { margin: 0 0 10px; padding-left: 20px; font-size: 14.5px; line-height: 1.5; }
+.ruleslist li { margin-bottom: 5px; }
+.ruleslist li:last-child { margin-bottom: 0; }
+/* Ступени процента — не список, а шкала: их сравнивают между собой. */
+.reftiers { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.reftiers span { flex: 1 1 auto; min-width: 72px; text-align: center; background: var(--surface-2);
+  border-radius: 12px; padding: 9px 8px; font-size: 15px; font-weight: 800; }
+.reftiers small { display: block; color: var(--hint); font-size: 11.5px; font-weight: 600; margin-top: 2px; }
+
 .doctext {
   font-size: 14px; line-height: 1.65; color: var(--text);
   white-space: pre-wrap; word-break: break-word;

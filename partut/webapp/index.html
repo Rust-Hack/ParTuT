@@ -346,7 +346,18 @@
       <div class="dnote" style="margin:6px 0 0">Назовите его продавцу, если нужно найти вас или ваш заказ.</div>
 
       <div style="border-top:1px solid var(--line);margin:24px 0 0"></div>
-      <button class="creq" id="myDocs" style="margin:18px 0 0">
+
+      <!-- Что магазин о человеке знает — простыми словами и рядом с полями,
+           которые он только что заполнил. Это не заменяет политику обработки
+           данных, но отвечает на вопрос тогда, когда он возникает. -->
+      <label style="margin-top:18px">Что мы о вас храним</label>
+      <div class="dnote" style="margin:2px 0 0">Телефон и точку — те, что выше, чтобы не вводить их каждый раз.
+        Адреса из ваших заказов — чтобы подставить в следующий. Историю заказов и баланс монет.
+        Ваш Telegram-ID. Больше ничего: ни переписки, ни данных карты — оплата идёт мимо приложения.</div>
+
+      <button class="creq" id="myRules" style="margin:14px 0 0">
+        <span class="cl">📖 Как всё устроено</span><span class="ci">›</span></button>
+      <button class="creq" id="myDocs" style="margin:8px 0 0">
         <span class="cl">📄 Оферта и обработка данных</span><span class="ci">›</span></button>
     </div>
   </div>
@@ -362,6 +373,16 @@
       <button class="doctab" data-doc="privacy">Обработка данных</button>
     </div>
     <div class="card-block"><div class="doctext" id="docsText">Загрузка…</div></div>
+  </div>
+
+  <!-- Раздел: как всё устроено.
+       Правила словами покупателя, а не юридический документ: оферта живёт
+       отдельно. Все числа приходят с сервера настоящими — правила, разошедшиеся
+       с магазином, хуже отсутствующих: по ним человек считает свою выгоду. -->
+  <div class="view" id="rulesView">
+    <div class="viewhead"><h2>📖 Как всё устроено</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="rulesClose">‹ Назад</button></div>
+    <div id="rulesBody"><div class="card-block" style="color:var(--hint)">Загрузка…</div></div>
   </div>
 
   <!-- Раздел: промокоды -->
