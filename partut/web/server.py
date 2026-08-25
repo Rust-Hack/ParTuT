@@ -889,6 +889,9 @@ def api_categories():
                                             # Вкусы есть не у всего: у картриджей их нет,
                                             # а у жидкостей товар без них не завести.
                                             "has_flavors": bool(c.get("has_flavors")),
+                                            # Как называется вариант: у одноразок «Вкус»,
+                                            # у испарителей «Сопротивление», у подов «Цвет».
+                                            "variant_label": (c.get("variant_label") or "Вкус"),
                                             "specs": by_cat.get(c["code"], [])}
                                            for c in db.list_categories()], 300)
     return cache.json_etag(cached)

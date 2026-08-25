@@ -642,9 +642,9 @@ function renderEdit(p) {
           <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
           <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
         </div>
-        ${isVar ? `<label>Вкусы и остаток</label><div id="edVarList"></div>
+        ${isVar ? `<label>${esc(catVariantMany(p.category))} и остаток</label><div id="edVarList"></div>
           <div style="display:flex;gap:8px;margin-top:10px">
-            <input id="edNewFlavor" placeholder="Добавить вкус" style="flex:1" list="edFlavorOpts">
+            <input id="edNewFlavor" placeholder="Добавить: ${esc(catVariant(p.category).toLowerCase())}" style="flex:1" list="edFlavorOpts">
             <datalist id="edFlavorOpts">${(md ? md.flavors : []).map(f => `<option value="${esc(f)}">`).join("")}</datalist>
             <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
           </div>`
@@ -718,10 +718,10 @@ function renderEdit(p) {
       <label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}">
       <label>Закупочная цена (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}">
       ${specs}
-      <label>Вкусы и остаток</label>
+      <label>${esc(catVariantMany(p.category))} и остаток</label>
       <div id="edVarList"></div>
       <div style="display:flex;gap:8px;margin-top:10px">
-        <input id="edNewFlavor" placeholder="Добавить вкус" style="flex:1" list="edFlavorOpts">
+        <input id="edNewFlavor" placeholder="Добавить: ${esc(catVariant(p.category).toLowerCase())}" style="flex:1" list="edFlavorOpts">
         <datalist id="edFlavorOpts">${avail.map(f => `<option value="${esc(f)}">`).join("")}</datalist>
         <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
       </div>

@@ -148,7 +148,8 @@ def api_admin_category_update():
     sort = data.get("sort")
     db.update_category(code, name=data.get("name"), emoji=data.get("emoji"),
                        sort=(int(sort) if str(sort or "").strip().lstrip("-").isdigit() else None),
-                       has_flavors=(bool(data.get("has_flavors")) if "has_flavors" in data else None))
+                       has_flavors=(bool(data.get("has_flavors")) if "has_flavors" in data else None),
+                       variant_label=(inputs._text(data.get("variant_label")) if "variant_label" in data else None))
     return jsonify({"ok": True})
 
 

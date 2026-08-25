@@ -189,6 +189,8 @@ function renderModelForm() {
   $("mdSpecs").innerHTML = specFieldsHtml(cat, collectSpecs("mdSpecs"), "mds_");
   // Вкусы спрашиваем только там, где они есть: у зарядки их не бывает.
   $("mdFlavorsWrap").style.display = catHasFlavors(cat) ? "" : "none";
+  $("mdFlavorsLabel").textContent = catVariantMany(cat);
+  $("mdFlavorInput").placeholder = `Например: ${cat === "coils" ? "0.6 Ом" : cat === "podsystem" || cat === "devices" ? "Чёрный" : "Манго"}`;
   $("mdFlavorKnown").innerHTML = knownFlavors.map(f => `<option value="${esc(f)}">`).join("");
   renderModelFlavors();
 }
@@ -335,6 +337,7 @@ function openStockIn(modelId) {
   $("stockInPrice").value = ""; $("stockInCost").value = ""; $("stockInStock").value = "";
   $("stockInHit").checked = false;
   const withFlavors = m.flavors.length > 0;
+  $("stockInFlavorsLabel").textContent = `${catVariantMany(m.category)} и остаток`;
   $("stockInFlavorsWrap").style.display = withFlavors ? "" : "none";
   $("stockInStockWrap").style.display = withFlavors ? "none" : "";
   $("stockInFlavors").innerHTML = m.flavors.map(f =>
@@ -606,6 +609,10 @@ function renderSpecList() {
   if (!c) { $("specsView").classList.remove("show"); return; }
   $("specsCatName").textContent = `${c.emoji || ""} ${c.name}`.trim();
   $("specFlavors").checked = !!c.has_flavors;
+  // Слово нужно только тем категориям, у которых остаток вообще считается по
+  // вариантам: у устройства без вариантов подписывать нечего.
+  $("specVarWrap").style.display = c.has_flavors ? "" : "none";
+  $("specVarLabel").value = c.variant_label || "Вкус";
   const list = c.specs || [];
   $("specList").innerHTML = list.length
     ? list.map(s => `<div class="admrow">
@@ -619,6 +626,16 @@ $("specFlavors").onchange = async () => {
   await catApi("/api/admin/category/update", { code: specsCat, has_flavors: $("specFlavors").checked });
   await afterCatsChanged();
   renderSpecList();
+};
+// Слово сохраняем по уходу из поля, а не на каждую букву: иначе на «Сопр»
+// успело бы уехать полдюжины запросов.
+$("specVarLabel").onchange = async () => {
+  const слово = $("specVarLabel").value.trim();
+  if (!слово) { $("specVarLabel").value = "Вкус"; }
+  await catApi("/api/admin/category/update", { code: specsCat, variant_label: $("specVarLabel").value.trim() || "Вкус" });
+  await afterCatsChanged();
+  renderSpecList();
+  toast("Сохранено ✓");
 };
 $("specAdd").onclick = async () => {
   const label = $("specLabel").value.trim();

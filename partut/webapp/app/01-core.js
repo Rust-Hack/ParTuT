@@ -119,6 +119,15 @@ applyCategories();
 // Характеристики категории (сопротивление, мощность, совместимость…).
 const specsOf = (code) => ((categories.find(c => c.code === code) || {}).specs) || [];
 const catHasFlavors = (code) => !!(categories.find(c => c.code === code) || {}).has_flavors;
+// Как называется то, по чему считается остаток. Механизм один — метка и число
+// штук, — а слово у каждой категории своё: у одноразки это вкус, у испарителя
+// сопротивление, у пода цвет. Разбиралось по живым магазинам: позиции одной
+// модели испарителя отличаются как «0,17 Ом, упак. 3 шт», а пода — расцветкой.
+const catVariant = (code) => ((categories.find(c => c.code === code) || {}).variant_label || "Вкус");
+const catVariantMany = (code) => {
+  const с = catVariant(code);
+  return с === "Вкус" ? "Вкусы" : с;      // «Сопротивление» и «Цвет» во множественном не нужны
+};
 async function fetchCategories() {
   try {
     const list = await bootFetch("categories", "/api/categories");

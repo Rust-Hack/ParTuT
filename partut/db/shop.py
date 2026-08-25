@@ -141,9 +141,10 @@ def seed_categories():
     cur.execute("SELECT COUNT(*) AS c FROM categories")
     if cur.fetchone()["c"] == 0:
         for code, name, emoji, sort, вкусы in db.CATEGORY_SEED:
-            cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort, has_flavors) "
-                              "VALUES (%s, %s, %s, %s, %s)"),
-                        (code, name, emoji, sort, вкусы))
+            cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort, has_flavors, variant_label) "
+                              "VALUES (%s, %s, %s, %s, %s, %s)"),
+                        (code, name, emoji, sort, вкусы,
+                         db.ВАРИАНТЫ_ПО_УМОЛЧАНИЮ.get(code, "Вкус")))
         conn.commit()
     conn.close()
 
@@ -244,7 +245,7 @@ def category_codes():
     return {c["code"] for c in list_categories()}
 
 
-def add_category(name, emoji="", sort=0):
+def add_category(name, emoji="", sort=0, variant_label="Вкус"):
     """Добавляет категорию. Возвращает код или None, если такая уже есть."""
     name = (name or "").strip()[:40]
     if not name:
@@ -259,17 +260,23 @@ def add_category(name, emoji="", sort=0):
     if not sort:
         cur.execute("SELECT COALESCE(MAX(sort), 0) AS mx FROM categories")
         sort = int(cur.fetchone()["mx"]) + 10          # новая встаёт в конец списка
-    cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort) VALUES (%s, %s, %s, %s)"),
-                (code, name, (emoji or "").strip()[:8], int(sort)))
+    cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort, variant_label) "
+                      "VALUES (%s, %s, %s, %s, %s)"),
+                (code, name, (emoji or "").strip()[:8], int(sort),
+                 (variant_label or "Вкус").strip()[:20] or "Вкус"))
     conn.commit()
     conn.close()
     return code
 
 
-def update_category(code, name=None, emoji=None, sort=None, has_flavors=None):
-    """Переименовать категорию или сменить значок. Код не меняется — за ним товары."""
+def update_category(code, name=None, emoji=None, sort=None, has_flavors=None, variant_label=None):
+    """Переименовать категорию, сменить значок или слово для варианта.
+    Код не меняется — за ним товары."""
     conn = db.connect()
     cur = conn.cursor()
+    if variant_label is not None:
+        слово = (variant_label or "").strip()[:20] or "Вкус"
+        cur.execute(db._q("UPDATE categories SET variant_label = %s WHERE code = %s"), (слово, code))
     if has_flavors is not None:
         cur.execute(db._q("UPDATE categories SET has_flavors = %s WHERE code = %s"),
                     (1 if has_flavors else 0, code))

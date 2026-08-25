@@ -616,7 +616,7 @@
     <details class="sect">
       <summary class="secthead">➕ Завезти на точку</summary>
       <div class="sectbody">
-        <p style="color:var(--hint);font-size:13.5px;margin:0 0 12px;text-align:left">Выберите, что завозите, — и укажите точку, цену и остаток. Название, вкусы и фото у модели уже есть, второй раз их описывать не нужно.</p>
+        <p style="color:var(--hint);font-size:13.5px;margin:0 0 12px;text-align:left">Выберите, что завозите, — и укажите точку, цену и остаток. Название, варианты и фото у модели уже есть, второй раз их описывать не нужно.</p>
         <button class="bigbtn" id="openStockPick">📥 Выбрать, что завезти</button>
       </div>
     </details>
@@ -684,7 +684,14 @@
       <p style="color:var(--hint);font-size:13px;margin:4px 0 0;text-align:left">Эти поля вы заполняете у товара, а покупатель видит их в карточке. У картриджа это сопротивление и совместимость, у пода — мощность и аккумулятор.</p>
 
       <label class="chk" style="margin-top:12px"><input type="checkbox" id="specFlavors" style="width:auto">
-        <span style="margin-left:8px">Товар заводится списком вкусов</span></label>
+        <span style="margin-left:8px">Остаток считается по вариантам</span></label>
+      <!-- Механизм один — метка и число штук, — а слово у каждой категории своё.
+           У одноразки это вкус, у испарителя сопротивление, у пода цвет. -->
+      <div id="specVarWrap" style="display:none">
+        <label style="margin-top:12px">Как называется вариант</label>
+        <input id="specVarLabel" placeholder="Вкус" maxlength="20">
+        <div class="dnote" style="margin:6px 0 0">Одним словом, в единственном числе: «Вкус», «Сопротивление», «Цвет», «Объём». Так это и будет подписано у вас при завозе и у покупателя в карточке.</div>
+      </div>
 
       <div id="specList" style="margin-top:12px"></div>
 
@@ -721,7 +728,7 @@
       </div>
       <div id="stockInStockWrap"><label>Остаток (шт.)</label><input id="stockInStock" inputmode="numeric" placeholder="10"></div>
       <div id="stockInFlavorsWrap" style="display:none">
-        <label>Вкусы и остаток</label>
+        <label id="stockInFlavorsLabel">Вкусы и остаток</label>
         <div id="stockInFlavors"></div>
       </div>
       <div class="chk" style="margin-top:12px"><input type="checkbox" id="stockInHit">
@@ -739,14 +746,14 @@
     <details class="sect" id="mdFormSect">
       <summary class="secthead">➕ Новая модель</summary>
       <div class="sectbody form">
-        <p style="color:var(--hint);font-size:13px;margin:0 0 6px;text-align:left">Здесь описывается сам товар: бренд, характеристики, вкусы и фото. Цена и остаток — в «Товарах», отдельно по каждой точке.</p>
+        <p style="color:var(--hint);font-size:13px;margin:0 0 6px;text-align:left">Здесь описывается сам товар: бренд, характеристики, варианты и фото. Цена и остаток — в «Ценах и остатках», отдельно по каждой точке.</p>
         <label>Категория</label><select id="mdCat"></select>
         <label>Бренд</label><div id="mdBrandBox"></div>
         <label>Название модели</label><input id="mdName" placeholder="Например: XROS 3">
         <label>Описание (необязательно)</label><input id="mdDesc" placeholder="Коротко">
         <div id="mdSpecs"></div>
         <div id="mdFlavorsWrap">
-          <label>Вкусы</label>
+          <label id="mdFlavorsLabel">Вкусы</label>
           <div style="display:flex;gap:8px">
             <input id="mdFlavorInput" placeholder="Например: Манго" style="flex:1" list="mdFlavorKnown">
             <datalist id="mdFlavorKnown"></datalist>
