@@ -140,9 +140,10 @@ def seed_categories():
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) AS c FROM categories")
     if cur.fetchone()["c"] == 0:
-        for code, name, emoji, sort in db.CATEGORY_SEED:
-            cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort) VALUES (%s, %s, %s, %s)"),
-                        (code, name, emoji, sort))
+        for code, name, emoji, sort, вкусы in db.CATEGORY_SEED:
+            cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort, has_flavors) "
+                              "VALUES (%s, %s, %s, %s, %s)"),
+                        (code, name, emoji, sort, вкусы))
         conn.commit()
     conn.close()
 
