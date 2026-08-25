@@ -242,7 +242,7 @@
     <div class="mgroup">Каждый день</div>
     <div class="prow" id="mRequests" style="display:none"><span>📥 Заявки на подтверждение <b id="reqBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
     <div class="prow" id="mOrders"><span>📦 Заказы <b id="ordBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
-    <div class="prow" id="mProducts"><span>🛍 Товары <b id="lowBadge" class="reqbadge warn" style="display:none">0</b></span><span>›</span></div>
+    <div class="prow" id="mProducts"><span>🏬 Цены и остатки <b id="lowBadge" class="reqbadge warn" style="display:none">0</b></span><span>›</span></div>
     <div class="prow" id="mReviews"><span>⭐ Отзывы <b id="revBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
 
     <div class="mgroup" id="gCatalog">Что мы продаём</div>
@@ -610,14 +610,14 @@
 
   <!-- Раздел: Товары (добавление + список) -->
   <div class="view" id="productsView">
-    <div class="viewhead"><h2>🛍 Товары</h2>
+    <div class="viewhead"><h2>🏬 Цены и остатки</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="productsClose">‹ Назад</button></div>
 
     <details class="sect">
-      <summary class="secthead">➕ Новый товар</summary>
+      <summary class="secthead">➕ Завезти на точку</summary>
       <div class="sectbody">
-        <p style="color:var(--hint);font-size:13.5px;margin:0 0 12px;text-align:left">Товар — это наличие модели на точке: цена, закупка и остаток. Сама модель (бренд, характеристики, вкусы, фото) описывается один раз в «Ассортименте», и оттуда же добавляется на любую точку кнопкой 📥.</p>
-        <button class="bigbtn" id="toModels">📚 Открыть ассортимент</button>
+        <p style="color:var(--hint);font-size:13.5px;margin:0 0 12px;text-align:left">Выберите, что завозите, — и укажите точку, цену и остаток. Название, вкусы и фото у модели уже есть, второй раз их описывать не нужно.</p>
+        <button class="bigbtn" id="openStockPick">📥 Выбрать, что завезти</button>
       </div>
     </details>
 
@@ -631,6 +631,18 @@
         <div id="adminList"></div>
       </div>
     </details>
+  </div>
+
+  <!-- Что завозим: список моделей с подсказкой, где каждая уже стоит.
+       Живёт в «Ценах и остатках», а не в «Ассортименте»: завоз — это работа
+       продавца точки, а ассортимент ведёт владелец. -->
+  <div class="view" id="stockPickView">
+    <div class="viewhead"><h2>📥 Что завозим</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="stockPickClose">‹ Назад</button></div>
+    <div class="card-block">
+      <input id="stockPickSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
+      <div id="stockPickList"></div>
+    </div>
   </div>
 
   <!-- Раздел: Локации -->

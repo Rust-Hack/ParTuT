@@ -310,14 +310,12 @@ function renderModelList() {
       return `<div class="admrow">
         <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
           <small>${where}${off}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small></div>
-        <button class="iconbtn ok" data-mdstock="${m.id}" title="Добавить на точку">📥</button>
         ${own}</div>`;
     }).join("");
   }
   $("mdList").innerHTML = html;
   $("mdList").querySelectorAll("[data-mdedit]").forEach(b => b.onclick = () => editModel(+b.dataset.mdedit));
   $("mdList").querySelectorAll("[data-mddel]").forEach(b => b.onclick = () => delModel(+b.dataset.mddel));
-  $("mdList").querySelectorAll("[data-mdstock]").forEach(b => b.onclick = () => openStockIn(+b.dataset.mdstock));
   $("mdList").querySelectorAll("[data-mdhide]").forEach(b =>
     b.onclick = () => hideModel(+b.dataset.mdhide, b.dataset.on !== "1"));
 }
@@ -356,7 +354,7 @@ $("stockInSave").onclick = async () => {
   if (!price) { alertMsg("Укажите цену."); return; }
   const city = $("stockInCity").value;
   if (shelf().some(p => p.model_id === stockInModel.id && p.city === city)) {
-    alertMsg("На этой точке модель уже есть — правьте её в разделе «Товары».");
+    alertMsg("На этой точке модель уже есть — правьте её в «Ценах и остатках».");
     return;
   }
   // Закупку спрашиваем здесь, а не «когда-нибудь потом»: незаполненная,

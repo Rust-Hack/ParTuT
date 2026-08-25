@@ -439,7 +439,49 @@ function collectSpecs(scopeId) {
 
 // Форма «новый товар» переехала в «Ассортимент»: модель описывается один раз,
 // а здесь у товара остаётся то, что своё у каждой точки — цена и остаток.
-$("toModels").onclick = () => { $("productsView").classList.remove("show"); openModels(); };
+// Завоз на точку начинается здесь же, в «Ценах и остатках»: раньше отсюда
+// отсылали в «Ассортимент», и продавец уходил в раздел, который ведёт владелец
+// и в котором ему больше нечего делать.
+$("openStockPick").onclick = openStockPick;
+$("stockPickClose").onclick = () => $("stockPickView").classList.remove("show");
+$("stockPickSearch").oninput = renderStockPick;
+
+async function openStockPick() {
+  $("stockPickView").classList.add("show");
+  $("stockPickSearch").value = "";
+  // Модели грузились только при входе в «Ассортимент», а сюда попадают мимо
+  // него — список был пуст, и это выглядело как «завозить нечего».
+  $("stockPickList").innerHTML = `<p style="color:var(--hint);margin:8px 0 0">Загрузка…</p>`;
+  await fetchModels();
+  renderStockPick();
+}
+
+function renderStockPick() {
+  const q = ($("stockPickSearch").value || "").trim().toLowerCase();
+  const список = models.filter(m => !q || `${m.name} ${m.brand || ""}`.toLowerCase().includes(q));
+  if (!models.length) {
+    $("stockPickList").innerHTML = `<p style="color:var(--hint);font-size:13.5px;margin:8px 0 0">Ассортимент пуст. Модели — название, вкусы, фото — заводит владелец в разделе «Ассортимент».</p>`;
+    return;
+  }
+  if (!список.length) { $("stockPickList").innerHTML = `<p style="color:var(--hint);margin:8px 0 0">Ничего не найдено.</p>`; return; }
+  // Где модель уже стоит — прямо в строке: чаще всего сюда заходят завезти
+  // то, чего на своей точке ещё нет, и это должно быть видно до нажатия.
+  const мояТочка = myScope();
+  $("stockPickList").innerHTML = список.map(m => {
+    const стоит = shelf().filter(p => p.model_id === m.id);
+    const уже = мояТочка
+      ? (стоит.some(p => p.city === мояТочка) ? `<span class="tagbadge">уже на вашей точке</span>` : "")
+      : (стоит.length ? `<small>уже: ${стоит.map(p => esc(p.city)).join(", ")}</small>` : "");
+    return `<div class="admrow" data-pick="${m.id}">
+      <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
+        <small>${esc(catName(m.category))}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small>${уже}</div>
+      <span style="color:var(--hint)">›</span></div>`;
+  }).join("");
+  $("stockPickList").querySelectorAll("[data-pick]").forEach(b => b.onclick = () => {
+    $("stockPickView").classList.remove("show");
+    openStockIn(+b.dataset.pick);
+  });
+}
 
 function renderAdminList() {
   if (!shelf().length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
