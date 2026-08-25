@@ -123,6 +123,51 @@ def run():
     return c.fails + c2.fails
 
 
+def run_restore():
+    """Возврат стартового набора: добавляет только отсутствующее.
+
+    Засев работает один раз за жизнь базы — удалённое не возвращается само.
+    Способ вернуть его осознанно нужен, но он не должен затирать чужую работу:
+    свои категории владельца и его переименования обязаны уцелеть.
+    """
+    c = Checker("Возврат стартовых категорий")
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute("DELETE FROM category_specs")
+    cur.execute("DELETE FROM categories")
+    conn.commit(); conn.close()
+    cache.bust()
+    as_admin()
+
+    # Своя категория и переименованная стандартная — их трогать нельзя.
+    свой = db.add_category("Паучи", "🟤")
+    db.add_category("Одноразки")            # тот же код, что у стандартной
+    db.update_category("odnorazki", name="Одноразочки")
+    cache.bust()
+    было = len(db.category_codes())
+
+    r = client.post("/api/admin/category/restore", json={"initData": "x"})
+    d = r.get_json()
+    cache.bust()
+    c("возврат отработал", r.status_code == 200 and d.get("ok"))
+    c("добавлены все шесть стандартных", len(d.get("added") or []) == len(db.CATEGORY_SEED))
+    c("своё не тронуто", свой in db.category_codes())
+    c("переименованная цела",
+      next(x for x in db.list_categories() if x["code"] == "odnorazki")["name"] == "Одноразочки")
+    c("итого прибавилось ровно на возвращённые", len(db.category_codes()) == было + len(db.CATEGORY_SEED))
+    c("у жидкостей вкусы включены",
+      next(x for x in db.list_categories() if x["code"] == "liquid")["has_flavors"] == 1)
+    c("у расходников слово «Сопротивление»",
+      next(x for x in db.list_categories() if x["code"] == "coils")["variant_label"] == "Сопротивление")
+    c("характеристики досыпаны", len([s for s in db.list_category_specs() if s["category"] == "coils"]) > 0)
+
+    # Повторное нажатие ничего не удваивает.
+    d2 = client.post("/api/admin/category/restore", json={"initData": "x"}).get_json()
+    cache.bust()
+    c("повтор ничего не добавил", d2.get("added") == [])
+
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)

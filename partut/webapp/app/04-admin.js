@@ -259,7 +259,7 @@ $("mdSave").onclick = async () => {
     const updated = d.updated, wasNew = !editingModelId;
     resetModelForm();
     await Promise.all([fetchModels(), fetchFlavors()]);
-    await refreshProducts();     // правка модели меняет и товары на точках
+    await refreshAll();          // правка модели меняет и товары, и справочник вкусов
     renderModelList();
     // У новой модели галерея появляется только сейчас — id для неё уже есть.
     if (wasNew) editModel(d.id);
@@ -588,8 +588,21 @@ function delCat(code) {
     toast("Категория удалена");
   });
 }
+// Вернуть то, что удаляли. Добавляет ТОЛЬКО отсутствующее: свои категории и
+// переименования владельца не трогает — иначе кнопка «вернуть» однажды
+// затёрла бы чужую работу.
+$("catRestore").onclick = () => confirmMsg(
+  "Вернуть стандартные категории — одноразки, жидкости, подсистемы, расходники, устройства, аксессуары? Ваши собственные категории и названия останутся как есть.",
+  async () => {
+    const d = await админПост("/api/admin/category/restore", {}, "вернуть категории");
+    if (!d) return;
+    await afterCatsChanged();
+    const n = (d.added || []).length;
+    alertMsg(n ? `Возвращено категорий: ${n} ✅` : "Все стандартные категории уже на месте.");
+  });
+
 async function afterCatsChanged() {
-  await refreshProducts();     // фильтры каталога и формы админки строятся по категориям
+  await refreshAll();          // фильтры каталога и формы админки строятся по категориям
   renderCatList();
 }
 

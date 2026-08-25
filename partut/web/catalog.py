@@ -206,6 +206,21 @@ def api_admin_category_spec_delete():
     return jsonify({"ok": True})
 
 
+@bp.route("/api/admin/category/restore", methods=["POST"])
+def api_admin_category_restore():
+    """Вернуть стартовые категории, которых сейчас нет.
+
+    Засев работает один раз за жизнь базы: удалённое не возвращается само. Это
+    правильно, но способ вернуть его осознанно нужен — иначе единственным
+    выходом остаётся правка базы руками.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    if not auth.get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    добавлены = db.restore_seed_categories()
+    return jsonify({"ok": True, "added": добавлены})
+
+
 @bp.route("/api/admin/category/delete", methods=["POST"])
 def api_admin_category_delete():
     """Удалить можно только пустую категорию: иначе товары остались бы в разделе,

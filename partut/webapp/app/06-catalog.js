@@ -43,7 +43,7 @@ $("brSave").onclick = async () => {
     }
     resetBrandForm();
     await fetchBrands(); await fetchFlavors(); renderKnownFlavors();
-    await refreshProducts();      // переименование бренда переносит и товары
+    await refreshAll();           // переименование бренда переносит и товары, и вкусы
     renderBrandList();
     alertMsg(d.moved ? `Бренд сохранён ✅ Товаров перенесено: ${d.moved}` : "Бренд сохранён ✅");
   } catch (e) { alertMsg(текстСбоя(e)); }
@@ -335,7 +335,7 @@ $("locAdd").onclick = async () => {
     const d = await r.json();
     if (!d.ok) { alertMsg("Не удалось добавить локацию."); return; }
     $("locName").value = "";
-    await refreshProducts();
+    await refreshAll();          // появился город: он в фильтрах и в формах
     await loadDelivery(); renderLocList();
   } catch (e) { alertMsg(текстСбоя(e)); }
 };
@@ -348,7 +348,7 @@ async function doDelLocation(id) {
       alertMsg(d.error === "has_products" ? "Нельзя удалить: в этой локации есть товары. Сначала уберите их." : "Не удалось удалить локацию.");
       return;
     }
-    await refreshProducts();
+    await refreshAll();          // города пропали из фильтров и форм
   } catch (e) { alertMsg(текстСбоя(e)); }
 }
 

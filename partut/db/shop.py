@@ -149,6 +149,35 @@ def seed_categories():
     conn.close()
 
 
+def restore_seed_categories():
+    """Вернуть стартовые категории, которых сейчас нет. Возвращает список кодов.
+
+    Нужна потому, что засев теперь работает ровно один раз за жизнь базы:
+    удалённое больше не возвращается само — и это правильно, но должен быть
+    способ вернуть его осознанно, а не правкой базы руками.
+
+    Добавляет ТОЛЬКО отсутствующие: свои категории владельца и его правки
+    названий не трогает. Характеристики досыпает тем, у кого их нет.
+    """
+    есть = category_codes()
+    добавлены = []
+    conn = db.connect()
+    cur = conn.cursor()
+    for code, name, emoji, sort, вкусы in db.CATEGORY_SEED:
+        if code in есть:
+            continue
+        cur.execute(db._q("INSERT INTO categories (code, name, emoji, sort, has_flavors, variant_label) "
+                          "VALUES (%s, %s, %s, %s, %s, %s)"),
+                    (code, name, emoji, sort, вкусы,
+                     db.ВАРИАНТЫ_ПО_УМОЛЧАНИЮ.get(code, "Вкус")))
+        добавлены.append(code)
+    conn.commit()
+    conn.close()
+    if добавлены:
+        seed_category_specs()      # характеристики тем, у кого их ещё нет
+    return добавлены
+
+
 def seed_category_specs():
     """Стартовые характеристики — только для категорий, у которых их ещё нет."""
     conn = db.connect()

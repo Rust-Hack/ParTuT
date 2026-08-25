@@ -482,10 +482,29 @@ async function loadCatalog() {
   recomputeCities(); renderChips(); updateFilterBtn(); renderGrid();
   fetchAlsoBought(); fetchFlavors();   // подсказки корзины и справочник вкусов — в фоне
 }
+// После любой правки перечитывались ТОВАРЫ, ТОЧКИ, КАТЕГОРИИ и СПРАВОЧНИК
+// ВКУСОВ — пять запросов на каждое нажатие. Замерено на живом магазине: любой
+// поход к серверу стоит около 0.8 с, и цена эта одинакова для тридцати байт и
+// для всей витрины. Между тем цена товара не меняет ни списка городов, ни
+// категорий: перечитывать их незачем.
+//
+// Поэтому обычная правка обновляет только товары, а справочники — те немногие
+// места, которые их и меняют (категории, точки, бренды, модели).
 async function refreshProducts() {
+  await Promise.all([fetchProducts(), (me && me.is_admin) ? fetchAdminProducts() : null]);
+  перерисоватьПослеПравки();
+}
+
+// Полное обновление: когда поменялось то, из чего строятся фильтры и формы.
+async function refreshAll() {
   await Promise.all([fetchLocations(), fetchProducts(), fetchCategories(), fetchFlavors(),
                      (me && me.is_admin) ? fetchAdminProducts() : null]);
-  recomputeCities(); renderChips(); updateFilterBtn(); renderGrid(); renderNav();
+  recomputeCities();
+  перерисоватьПослеПравки();
+}
+
+function перерисоватьПослеПравки() {
+  renderChips(); updateFilterBtn(); renderGrid(); renderNav();
   if ($("productsView").classList.contains("show")) renderAdminList();
   if ($("locationsView").classList.contains("show")) renderLocList();
 }

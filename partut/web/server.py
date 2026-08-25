@@ -179,25 +179,38 @@ def api_admin_request_decide():
 # Значение — какие ключи кэша сбросить после успешного запроса; пустой кортеж = весь кэш.
 # Заказы трогают только остатки, поэтому чистят каталог и статистику, а не всё подряд.
 _STOCK_KEYS = ("products", "stats")
+# Что сбрасывает каждая пишущая ручка. Пустой набор = «весь кэш», и это дорого:
+# после правки цены магазин заново читает из базы и категории, и точки, и
+# способы доставки, хотя ни одно из них не менялось. Каждое такое чтение — свой
+# поход к базе, а она не под боком. Поэтому у каждой ручки перечислено то, что
+# она действительно портит.
+# Ключи перечислены те, что реально кладутся в кэш (см. cache.put): products,
+# flavors, also_bought, categories, locations, rules, docs, orders_done.
+# «stats» держим за компанию с _STOCK_KEYS — там он уже был, и лишний префикс
+# ничего не стоит, а вот забытый стоил бы устаревшей цифры.
+_ТОВАРЫ = ("products", "flavors", "also", "stats")
+_СПРАВОЧНИКИ = _ТОВАРЫ + ("categories",)
+
 _WRITE_PATHS = {
-    "/api/admin/product": (), "/api/admin/product/update": (), "/api/admin/product/specs": (),
-    "/api/admin/product/from-model": (), "/api/admin/product/to-model": (),
-    "/api/admin/model": (), "/api/admin/model/delete": (),
-    "/api/admin/model/hide": (),
-    "/api/admin/model/photo": (),
+    "/api/admin/product": _ТОВАРЫ, "/api/admin/product/update": _ТОВАРЫ,
+    "/api/admin/product/specs": _ТОВАРЫ,
+    "/api/admin/product/from-model": _ТОВАРЫ, "/api/admin/product/to-model": _ТОВАРЫ,
+    "/api/admin/model": _ТОВАРЫ, "/api/admin/model/delete": _ТОВАРЫ,
+    "/api/admin/model/hide": _ТОВАРЫ,
+    "/api/admin/model/photo": _ТОВАРЫ,
     "/api/admin/category/spec": ("categories",), "/api/admin/category/spec/update": ("categories",),
     "/api/admin/category/spec/delete": ("categories",),
-    "/api/admin/product/variants": (), "/api/admin/product/delete": (),
-    "/api/admin/photo": (), "/api/admin/photo/add": (), "/api/admin/photo/delete": (),
+    "/api/admin/product/variants": _ТОВАРЫ, "/api/admin/product/delete": _ТОВАРЫ,
+    "/api/admin/photo": _ТОВАРЫ, "/api/admin/photo/add": _ТОВАРЫ, "/api/admin/photo/delete": _ТОВАРЫ,
     # Оценка живёт в карточке товара, поэтому её публикация обновляет витрину.
-    "/api/admin/review/decide": (), "/api/admin/review/delete": (),
+    "/api/admin/review/decide": _ТОВАРЫ, "/api/admin/review/delete": _ТОВАРЫ,
     "/api/admin/location": (), "/api/admin/location/delete": (),
-    "/api/admin/category": ("categories",), "/api/admin/category/update": ("categories",),
-    "/api/admin/category/delete": ("categories",),
+    "/api/admin/category": _СПРАВОЧНИКИ, "/api/admin/category/update": _СПРАВОЧНИКИ,
+    "/api/admin/category/delete": _СПРАВОЧНИКИ, "/api/admin/category/restore": _СПРАВОЧНИКИ,
     "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),
     "/api/admin/point": (), "/api/admin/point/update": (), "/api/admin/point/delete": (),
     "/api/admin/stock/move": _STOCK_KEYS,
-    "/api/admin/brand": (), "/api/admin/brand/delete": (),
+    "/api/admin/brand": _ТОВАРЫ, "/api/admin/brand/delete": _ТОВАРЫ,
     "/api/admin/settings/update": (), "/api/admin/stats/reset": (),
     "/api/order": _STOCK_KEYS,                  # меняют остаток на складе
     "/api/order/cancel": _STOCK_KEYS,
