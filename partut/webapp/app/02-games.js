@@ -424,7 +424,7 @@ function referralHtml() {
     : `<p style="color:var(--hint)">Ссылка появится чуть позже.</p>`;
   const tierBar = [2, 3, 4, 5].map(t => `<div class="rtier ${(bonus.ref_percent || 2) >= t ? 'on' : ''}">${t}%</div>`).join("");
   const nextLine = bonus.next_need
-    ? `Ещё <b>${bonus.next_need}</b> активных реферала — и вы будете получать <b>${bonus.next_percent}%</b>`
+    ? `Ещё <b>${bonus.next_need}</b> ${plural(bonus.next_need, "активный реферал", "активных реферала", "активных рефералов")} — и вы будете получать <b>${bonus.next_percent}%</b>`
     : "Максимальный процент достигнут 🎉";
   const list = (bonus.referrals_list || []).length
     ? bonus.referrals_list.map((r, i) => `<div class="statrow"><span>Реферал ${i + 1}</span><b style="color:${r.active ? '#2e9e4f' : 'var(--hint)'}">${r.active ? "активен" : "ждём заказ"}</b></div>`).join("")

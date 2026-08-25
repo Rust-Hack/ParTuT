@@ -121,7 +121,14 @@ function cancelMyOrder(o) {
     try {
       const r = await fetch("/api/order/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, order_id: o.id }) });
       const d = await r.json();
-      if (d.ok) { alertMsg("Заказ отменён. Монеты возвращены."); openMyOrders(); fetchBonus(); }
+      if (d.ok) {
+        // Про монеты говорим, только если они были. Обещание вернуть то, чего
+        // не списывали, отправляет человека проверять баланс и искать ошибку.
+        alertMsg(+(o.coins_discount || 0) > 0
+          ? "Заказ отменён. Монеты возвращены."
+          : "Заказ отменён. Товар вернулся в продажу.");
+        openMyOrders(); fetchBonus();
+      }
       else alertMsg(d.error === "too_late" ? "Заказ уже подтверждён — отмена через поддержку." : "Не удалось отменить.");
     } catch (e) { alertMsg("Сеть недоступна."); }
   };
