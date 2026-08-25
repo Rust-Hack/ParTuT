@@ -4,6 +4,37 @@
 // Куски склеиваются сервером по порядку имён в один <script>.
 // Порядок важен: это одна программа, разложенная по файлам, а не модули.
 
+// ---------- Запрос, который обязан однажды закончиться ----------
+//
+// Мобильная сеть умеет не отвечать вовсе: соединение установлено, ответа нет,
+// и промис не завершится НИКОГДА. Кнопка при этом остаётся «Сохраняю…» и
+// заблокированной — до перезагрузки страницы. Никакой ошибки в консоли, просто
+// мёртвый экран, и человек думает, что сломался магазин.
+//
+// Срок ставим ОДИН раз поверх самого fetch, а не в каждом из девяноста вызовов:
+// иначе девяносто первый про него забудет, и поймать это будет нечем.
+const СРОК_ЗАПРОСА = 20000;     // обычная ручка отвечает за доли секунды
+const СРОК_ЗАГРУЗКИ = 60000;    // фото на 12 МБ по мобильной сети — дело долгое
+const _родной_fetch = window.fetch.bind(window);
+window.fetch = (адрес, наст) => {
+  наст = наст || {};
+  if (наст.signal) return _родной_fetch(адрес, наст);   // отменой уже управляют снаружи
+  const стоп = new AbortController();
+  const срок = (наст.body instanceof FormData) ? СРОК_ЗАГРУЗКИ : СРОК_ЗАПРОСА;
+  const таймер = setTimeout(() => стоп.abort(), срок);
+  return _родной_fetch(адрес, { ...наст, signal: стоп.signal })
+    .finally(() => clearTimeout(таймер));
+};
+
+// «Сеть недоступна» и «сервер молчит» лечатся по-разному: в первом случае
+// человек включает интернет, во втором — просто повторяет позже. Раньше и то и
+// другое называлось одинаково.
+function текстСбоя(e) {
+  return (e && e.name === "AbortError")
+    ? "Сервер не ответил вовремя. Попробуйте ещё раз через минуту."
+    : "Сеть недоступна.";
+}
+
 const tg = window.Telegram ? window.Telegram.WebApp : null;
 if (tg) {
   tg.ready();
@@ -348,7 +379,7 @@ async function start() {
     renderNav();
     // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
     if (me.age_ok) loadCatalog().then(prefetchBonuses).then(openDeepLink); else $("ageView").classList.add("show");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Продавец приходит сюда из уведомления о заказе — кнопка в чате ведёт на
@@ -376,6 +407,10 @@ const ОТКАЗЫ = {
   already:     "Это уже сделано.",
   bad_number:  "Проверьте число.",
   bad_input:   "Поле заполнено неверно.",
+  not_image:   "Это не изображение. Нужен jpg, png или webp.",
+  too_large:   "Файл слишком большой.",
+  send_failed: "Телеграм не принял файл. Попробуйте другой снимок.",
+  no_file:     "Файл не выбран.",
 };
 
 async function админПост(адрес, тело, что) {
@@ -386,7 +421,7 @@ async function админПост(адрес, тело, что) {
     if (r.ok && d.ok) return d;
     alertMsg(d.message || ОТКАЗЫ[d.error] || (что ? `Не удалось: ${что}.` : "Не удалось."));
     return null;
-  } catch (e) { alertMsg("Сеть недоступна."); return null; }
+  } catch (e) { alertMsg(текстСбоя(e)); return null; }
 }
 
 // То же для отправки файла: там тело — FormData, а разбор ответа тот же.
@@ -397,7 +432,7 @@ async function админФайл(адрес, fd, что) {
     if (r.ok && d.ok) return d;
     alertMsg(d.message || ОТКАЗЫ[d.error] || (что ? `Не удалось: ${что}.` : "Не удалось."));
     return null;
-  } catch (e) { alertMsg("Сеть недоступна."); return null; }
+  } catch (e) { alertMsg(текстСбоя(e)); return null; }
 }
 
 function prefetchBonuses() { prefetchDelivery(); fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle(); }
@@ -677,7 +712,7 @@ async function notifyMe(id) {
     renderGrid(); renderFavs();
     if (currentProductId === id) renderProduct();
     alertMsg("Сообщим, как только появится 🔔");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Оценка видна прямо на полке, с первого же отзыва — но всегда рядом с их
@@ -1061,7 +1096,7 @@ async function stopWaiting(id) {
     renderMyAlerts();
     renderGrid();          // на витрине кнопка снова станет «сообщить о поступлении»
     toast("Больше не ждём ✓");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 function renderMyPoints() {
@@ -1110,7 +1145,7 @@ $("mySave").onclick = async () => {
     remindersOn = d.reminders_on !== false;
     $("myView").classList.remove("show");
     toast("Сохранено ✓");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { btn.disabled = false; btn.textContent = "Сохранить"; }
 };
 
@@ -1134,7 +1169,7 @@ $("supportSend").onclick = async () => {
     if (d.ok && d.delivered) { closeOverlay($("supportOverlay")); alertMsg("Отправлено ✅ Менеджер ответит в этом чате."); }
     else if (d.error === "cooldown") alertMsg(`Слишком часто. Подождите ${d.retry_after || 20} сек.`);
     else alertMsg("Не удалось отправить. Попробуйте позже.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("supportSend").disabled = false; $("supportSend").textContent = "Отправить"; }
 };
 

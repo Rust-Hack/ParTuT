@@ -46,7 +46,7 @@ $("brSave").onclick = async () => {
     await refreshProducts();      // переименование бренда переносит и товары
     renderBrandList();
     alertMsg(d.moved ? `Бренд сохранён ✅ Товаров перенесено: ${d.moved}` : "Бренд сохранён ✅");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 };
 function resetBrandForm() {
   editingBrandId = null; brandFlavors = [];
@@ -125,7 +125,7 @@ async function doDelBrand(id, force) {
     }
     if (editingBrandId === id) resetBrandForm();
     await fetchBrands(); renderBrandList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Управление локациями
@@ -289,7 +289,7 @@ async function addPickupPoint(btn) {
     const r = await fetch("/api/admin/point", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if ((await r.json()).ok) { await loadDelivery(); renderLocList(); }
     else alertMsg("Не удалось добавить точку.");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { btn.disabled = false; }
 }
 
@@ -308,7 +308,7 @@ async function saveDeliveryMethod(btn) {
     const d = await r.json();
     if (!d.ok) { alertMsg("Не удалось сохранить."); return; }
     await loadDelivery(); renderLocList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 async function addDeliveryMethod(btn) {
   const body = btn.closest(".sectbody");
@@ -320,7 +320,7 @@ async function addDeliveryMethod(btn) {
     const d = await r.json();
     if (!d.ok) { alertMsg("Не удалось добавить способ."); return; }
     await loadDelivery(); renderLocList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 function delDeliveryMethod(id) { confirmMsg("Удалить способ получения?", () => doDelDeliveryMethod(id)); }
 async function doDelDeliveryMethod(id) {
@@ -337,7 +337,7 @@ $("locAdd").onclick = async () => {
     $("locName").value = "";
     await refreshProducts();
     await loadDelivery(); renderLocList();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 };
 function delLocation(id) { confirmMsg("Удалить локацию?", () => doDelLocation(id)); }
 async function doDelLocation(id) {
@@ -349,7 +349,7 @@ async function doDelLocation(id) {
       return;
     }
     await refreshProducts();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Переключение формы: одноразки vs обычный товар
@@ -563,7 +563,7 @@ async function addEditPhotos(files) {
       const d = await r.json();
       if (d.ok) editPhotos.push({ id: d.photo_id, url: URL.createObjectURL(f) });
       else alertMsg(d.error === "too_many" ? `Больше ${MAX_EXTRA_PHOTOS} фото не нужно.` : "Фото не загрузилось.");
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
     const tmp = $("gLoading"); if (tmp) tmp.remove();
   }
   renderEditGallery();
@@ -578,7 +578,7 @@ function delEditPhoto(photoId) {
       editPhotos = editPhotos.filter(g => g.id !== photoId);
       renderEditGallery();
       refreshProducts();
-    } catch (e) { alertMsg("Сеть недоступна."); }
+    } catch (e) { alertMsg(текстСбоя(e)); }
   });
 }
 
@@ -1061,7 +1061,7 @@ async function saveEdit(p) {
     $("editView").classList.remove("show");
     alertMsg(отказы.length ? "⚠️ Сохранено не всё\n\nНе сохранилось — " + отказы.join("; ")
                            : "Сохранено ✅");
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
 }
 
@@ -1099,7 +1099,7 @@ async function doDelAdminRow(id, force) {
     }
     if (!d.ok) { alertMsg(d.message || "Не удалось удалить товар."); return; }
     await refreshProducts();
-  } catch (e) { alertMsg("Сеть недоступна."); }
+  } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
 // Убираем заставку после проигрыша анимации, чтобы не мешала кликам.
