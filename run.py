@@ -37,6 +37,15 @@ def _keep_warm():
         print("keep-warm выключен (KEEP_WARM=0)")
         return
     url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    # Раньше лог молчал, пока всё хорошо, и говорил, только когда что-то сломалось.
+    # С панели хостинга «работает тихо» и «поток умер» выглядели одинаково —
+    # тем же способом однажды уже путал молчащий адрес резервной копии.
+    # Поэтому печатаем один раз при старте (что настроено) и один раз на первый
+    # успех каждого вида пинга — дальше молчим, чтобы не засорять лог навсегда.
+    print("keep-warm: Neon — да" + (f", Render — {url}" if url else ", Render — НЕ настроен (нет RENDER_EXTERNAL_URL, самопинг сайта выключен)"),
+          flush=True)
+    db_ok_logged = False
+    url_ok_logged = not url      # без адреса эту ветку и так не выполняем
     while True:
         time.sleep(240)         # каждые 4 минуты (Neon засыпает ~через 5 мин простоя)
         # 1) будим/держим Neon
@@ -46,12 +55,18 @@ def _keep_warm():
             cur.execute("SELECT 1")
             cur.fetchone()
             conn.close()
+            if not db_ok_logged:
+                print("keep-warm: первый пинг Neon прошёл", flush=True)
+                db_ok_logged = True
         except Exception as e:
             print(f"keep-warm БД не удался: {e}")
         # 2) держим Render (только если знаем свой адрес)
         if url:
             try:
                 requests.get(url + "/health", timeout=10)
+                if not url_ok_logged:
+                    print("keep-warm: первый пинг Render прошёл", flush=True)
+                    url_ok_logged = True
             except Exception as e:
                 print(f"keep-warm пинг не удался: {e}")
 
