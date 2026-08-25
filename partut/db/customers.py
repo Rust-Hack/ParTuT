@@ -294,15 +294,23 @@ def list_users(search="", limit=300):
         # Сравниваем и приведённое к нижнему регистру, и как набрали: LOWER()
         # в SQLite умеет только латиницу, и поиск по русскому имени молча не
         # находил бы ничего на одной базе и находил на другой.
-        like = f"%{search.lower()}%"
-        raw = f"%{search}%"
+        # % и _ — джокеры LIKE, а не буквы. Ищут здесь имя, а не шаблон:
+        # запрос «%» находил ВСЕХ, «_» — тоже всех, и админ, набравший
+        # подчёркивание из ника, получал мусор вместо человека. Экранируем;
+        # обратный слэш — первым, иначе он съест собственные экраны.
+        экран = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{экран.lower()}%"
+        raw = f"%{экран}%"
         cur.execute(db._q(
             "SELECT DISTINCT u.user_id AS user_id FROM users u "
             "LEFT JOIN orders o ON o.user_id = u.user_id "
-            "WHERE CAST(u.user_id AS TEXT) LIKE %s "
-            "   OR LOWER(COALESCE(o.username,'')) LIKE %s OR COALESCE(o.username,'') LIKE %s "
-            "   OR LOWER(COALESCE(u.username,'')) LIKE %s OR COALESCE(u.username,'') LIKE %s "
-            "   OR LOWER(COALESCE(u.first_name,'')) LIKE %s OR COALESCE(u.first_name,'') LIKE %s "
+            "WHERE CAST(u.user_id AS TEXT) LIKE %s ESCAPE '\\' "
+            "   OR LOWER(COALESCE(o.username,'')) LIKE %s ESCAPE '\\' "
+            "   OR COALESCE(o.username,'') LIKE %s ESCAPE '\\' "
+            "   OR LOWER(COALESCE(u.username,'')) LIKE %s ESCAPE '\\' "
+            "   OR COALESCE(u.username,'') LIKE %s ESCAPE '\\' "
+            "   OR LOWER(COALESCE(u.first_name,'')) LIKE %s ESCAPE '\\' "
+            "   OR COALESCE(u.first_name,'') LIKE %s ESCAPE '\\' "
             "ORDER BY u.user_id DESC LIMIT %s"),
             (raw, like, raw, like, raw, like, raw, limit))
         match_ids = [r["user_id"] for r in cur.fetchall()]
