@@ -195,6 +195,14 @@ function renderDelivery() {
   const afterPromo = Math.max(0, subtotal - promoOff);
   const maxCoins = Math.min(bonus.coins || 0, Math.floor(afterPromo / coinVal));
   const discount = useCoins ? +(maxCoins * coinVal).toFixed(2) : 0;
+  // Монеты предлагаем И ЗДЕСЬ, а не только в корзине. Это экран, на котором
+  // человек думает о деньгах: рядом поле промокода, рядом сумма. Оставить
+  // монеты экраном раньше — значит, что накопленное чаще всего не тратится, и
+  // программа лояльности существует только на бумаге.
+  const coinsRow = maxCoins > 0
+    ? `<label class="coinsopt" style="margin:14px 0 0"><input type="checkbox" id="delCoinsChk" ${useCoins ? "checked" : ""}>
+         <span>Списать ${maxCoins} 🪙 — скидка ${(maxCoins * coinVal).toFixed(2)} Br</span></label>`
+    : "";
   let fee = selMethod !== null ? (deliveryMethods[selMethod].fee || 0) : 0;
   // Порог считаем от стоимости ТОВАРОВ, до скидки монетами: иначе покупатель
   // дотягивается до бесплатной доставки своими же монетами. Сервер проверяет
@@ -216,7 +224,7 @@ function renderDelivery() {
   // в момент перевода денег незнакомому человеку.
   const trust = ordersDone ? `<div class="trustline">🤝 Магазин выполнил ${ordersDone} заказов</div>` : "";
   const btn = `<button class="bigbtn" id="delSubmit" style="margin-top:14px"></button>${trust}`;
-  $("deliveryBody").innerHTML = `<div class="dlabel">Способ получения</div>${methodBtns}${extra}${sum}${btn}`;
+  $("deliveryBody").innerHTML = `<div class="dlabel">Способ получения</div>${methodBtns}${extra}${coinsRow}${sum}${btn}`;
   refreshDelSubmit();
   $("deliveryBody").querySelectorAll("[data-dm]").forEach(b => b.onclick = () => {
     selMethod = +b.dataset.dm; selPayment = null;
@@ -244,6 +252,7 @@ function renderDelivery() {
     selPoint = +b.dataset.pp; renderDelivery();
   });
   $("deliveryBody").querySelectorAll("[data-pm]").forEach(b => b.onclick = () => { selPayment = b.dataset.pm; renderDelivery(); });
+  if ($("delCoinsChk")) $("delCoinsChk").onchange = () => { useCoins = $("delCoinsChk").checked; renderDelivery(); };
   // Кнопку обновляем прямо во время ввода, но БЕЗ перерисовки: перерисовка
   // забрала бы фокус из поля на первом же символе.
   if ($("delAddr")) $("delAddr").oninput = () => { selAddress = $("delAddr").value; refreshDelSubmit(); };
@@ -320,9 +329,17 @@ async function doSubmitOrder() {
       renderPayReq(d);
       $("payView").classList.add("show");
     } else {
-      $("doneText").textContent = d.payment_method === "cash"
-        ? `Заказ #${d.order_id} принят! Оплата наличными при получении. Продавец свяжется с вами.`
-        : `Заказ #${d.order_id} принят! Продавец скоро свяжется с вами.`;
+      // Последний экран перед тем, как человек закроет приложение. Раньше он
+      // не говорил ни суммы, ни адреса — а на самовывозе адрес и есть главное:
+      // покупатель выбрал его десять секунд назад и уже не помнит, какой из
+      // двух. Дальше адрес живёт только в «Моих заказах», куда ещё надо дойти.
+      const строки = [`Заказ #${d.order_id} на ${(+d.total).toFixed(2)} Br принят.`];
+      if (!m.needs_address && d.delivery_address) строки.push(`Забрать: ${d.delivery_address}.`);
+      else if (d.delivery_address) строки.push(`Привезём: ${d.delivery_address}.`);
+      строки.push(d.payment_method === "cash"
+        ? "Оплата наличными при получении. Продавец свяжется с вами."
+        : "Продавец скоро свяжется с вами.");
+      $("doneText").textContent = строки.join(" ");
       $("doneView").classList.add("show");
     }
     fetchBonus();
@@ -376,6 +393,13 @@ function renderPayReq(d) {
     html.push(`<div class="rline" style="color:var(--hint);font-size:13px">Реквизиты не загрузились. Напишите в поддержку — пришлём их в чат.</div>`);
   } else {
     html.push(`<div class="rline" style="color:var(--hint);font-size:13px">Нажмите на номер — он скопируется.</div>`);
+  }
+  // Про срок говорим ЗДЕСЬ, а не письмом через сутки. Человек, выбравший
+  // «оплачу позже», возвращается через два дня и не находит ни заказа, ни
+  // товара — и причину узнать неоткуда, если о ней не сказали заранее.
+  const часов = d.unpaid_hours || payUnpaidHours;
+  if (часов) {
+    html.push(`<div class="rline" style="color:var(--hint);font-size:13px">Заказ ждёт чек ${часов} ч, потом отменится сам и товар вернётся в продажу.</div>`);
   }
   $("payReq").innerHTML = html.join("");
   $("payReq").querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {

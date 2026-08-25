@@ -392,6 +392,14 @@ def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
     restore_order_stock(order)
     if order["coins_used"]:
         db.add_coins(order["user_id"], order["coins_used"], "refund")
+    # Промокод возвращаем так же, как склад и монеты. Скидкой никто не
+    # воспользовался — значит и запас кода тратить не за что. Иначе код на три
+    # применения сгорал на отменённых заказах, и следующему покупателю магазин
+    # честно отвечал «разобрали», хотя не получил её ещё никто.
+    код = (order["promo_code"] or "") if "promo_code" in order.keys() else ""
+    скидка = float(order["promo_discount"] or 0) if "promo_discount" in order.keys() else 0.0
+    if код and скидка > 0:
+        db.release_promo(код)
     return order
 
 
@@ -448,7 +456,11 @@ def update_order_items(order_id, quantities, coin_value):
             else:
                 cur.execute(db._q(f"UPDATE products SET stock = {db.GREATEST}(0, stock - %s) WHERE id = %s"),
                             (delta, pid))
-            name = it.get("name", "") + (f" · {flavor}" if flavor else "")
+            # Вкус уже вписан в название («Cuvie Plus — Арбуз») — второй раз
+            # его приписывать незачем: это увидит и покупатель в сообщении, и
+            # владелец в журнале.
+            имя = it.get("name", "")
+            name = имя if (not flavor or flavor.lower() in имя.lower()) else f"{имя} · {flavor}"
             changes.append(f"{name}: {was} → {now}" if now else f"{name}: убрано")
             it["qty"] = now
 

@@ -32,7 +32,7 @@ from partut.integrations import tgsend
 from partut import inputs
 from partut import limits
 from partut import notifications
-from partut.config import admins_for_city
+from partut.config import admins_for_city, CANCEL_UNPAID_HOURS
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.
@@ -99,6 +99,7 @@ def _order_reply(order):
         "needs_receipt": (order["payment_method"] == "card") and not order["receipt_file_id"],
         "payment_info": shopinfo._payment_info(),
         "confirm_minutes": shopinfo._confirm_minutes(),
+        "unpaid_hours": CANCEL_UNPAID_HOURS,
         "repeat": True,
     }
 
@@ -326,6 +327,7 @@ def api_order():
         "needs_receipt": needs_receipt,
         "payment_info": shopinfo._payment_info(),
         "confirm_minutes": shopinfo._confirm_minutes(),
+        "unpaid_hours": CANCEL_UNPAID_HOURS,
     })
 
 
@@ -409,7 +411,8 @@ def api_my_orders():
     # Реквизиты нужны и здесь: кто выбрал «оплачу позже», возвращается сюда, а
     # номер счёта видел один раз на экране оформления и больше нигде.
     return jsonify({"ok": True, "orders": orders, "payment_info": shopinfo._payment_info(),
-                    "confirm_minutes": shopinfo._confirm_minutes()})
+                    "confirm_minutes": shopinfo._confirm_minutes(),
+                    "unpaid_hours": CANCEL_UNPAID_HOURS})
 
 
 def _notify_new_order(order_id, user_id):

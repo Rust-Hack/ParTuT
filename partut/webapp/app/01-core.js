@@ -641,6 +641,17 @@ function subtitleFor(p) {
   return parts.join(" · ");
 }
 
+// Название позиции заказа. В заказе вкус лежит ДВАЖДЫ: он вписан в само
+// название («Cuvie Plus — Арбуз», так его видит продавец в чате одной строкой)
+// и лежит отдельным полем. Печатать оба — значит показать вкус дважды:
+// «Cuvie Plus — Арбуз · Арбуз». Добавляем вкус только если его там ещё нет.
+function имяПозиции(it) {
+  const имя = String(it.name || "");
+  const вкус = String(it.flavor || "");
+  if (!вкус) return имя;
+  return имя.toLowerCase().includes(вкус.toLowerCase()) ? имя : `${имя} · ${вкус}`;
+}
+
 function hasVariants(p) { return p.variants && p.variants.length > 0; }
 function variantStock(p, flavor) { const v = (p.variants || []).find(x => x.flavor === flavor); return v ? v.stock : 0; }
 function cartKey(id, flavor) { return flavor ? id + "::" + flavor : "" + id; }

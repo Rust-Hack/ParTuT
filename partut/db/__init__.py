@@ -2375,7 +2375,7 @@ from partut.db.stock import (                                          # noqa: E
 # --- Промокоды ---
 # Код занимается одной транзакцией с заказом — см. partut/db/promos.py.
 from partut.db.promos import (                                         # noqa: E402
-    _promo_row, check_promo, consume_promo,                             # noqa: F401
+    _promo_row, check_promo, consume_promo, release_promo,              # noqa: F401
     list_promos, add_promo, set_promo_active,                           # noqa: F401
     delete_promo, _reserve_promo,                                       # noqa: F401
 )

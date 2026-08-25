@@ -59,6 +59,24 @@ def check_promo(code, user_id, subtotal):
     return round(min(discount, subtotal), 2), None
 
 
+def release_promo(code):
+    """Возвращает одно использование коду — заказ отменён, скидкой не воспользовались.
+
+    Обратная сторона consume_promo. Без неё код на три применения сгорал на
+    отменённых заказах: скидку не получил никто, а магазин отвечал следующему
+    покупателю «разобрали». Код без ограничения по числу трогать нечего.
+    """
+    code = (code or "").strip().upper()
+    if not code:
+        return
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("UPDATE promos SET uses_left = uses_left + 1 "
+                      "WHERE code = %s AND uses_left IS NOT NULL"), (code,))
+    conn.commit()
+    conn.close()
+
+
 def consume_promo(code):
     """Списывает одно использование. Без ограничения по числу — ничего не делает."""
     code = (code or "").strip().upper()

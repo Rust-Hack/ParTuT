@@ -297,6 +297,11 @@ def api_admin_add():
     price = inputs.дробное(data.get("price"))
     if price is None:
         return jsonify({"ok": False, "error": "bad_number"}), 400
+    # Ноль и минус до этого проходили и превращались в 0.00 уже в базе:
+    # товар появлялся на витрине бесплатным. Заводить его так нельзя.
+    if price <= 0:
+        return jsonify({"ok": False, "error": "bad_price",
+                        "message": "Цена должна быть больше нуля."}), 400
     cost, беда = _закупка(data)
     if беда:
         return беда
@@ -311,7 +316,7 @@ def api_admin_add():
     variants = data.get("variants")
     if isinstance(variants, list) and variants:
         vol = str(data.get("puffs") or data.get("volume") or "").strip()
-        pid = db.add_product(city, category, name, max(0.0, price), 0, is_hit, desc,
+        pid = db.add_product(city, category, name, price, 0, is_hit, desc,
                              brand=brand, flavor="", strength=strength, volume=vol, cost=cost)
         for v in variants:
             fl = str(v.get("flavor", "")).strip()
@@ -353,9 +358,22 @@ def api_admin_update():
     raw = data.get("value")
     try:
         if field in ("price", "cost"):
-            value = max(0.0, float(str(raw or 0).replace(",", ".")))
+            # Раньше здесь стоял max(0, ...) — и «-50» молча становилось нулём,
+            # а ручка отвечала «сохранено». Товар уезжал на витрину бесплатным,
+            # и узнать об этом было неоткуда: в ответе ошибки нет, в списке
+            # стоит 0.00, будто так и задумано. Отказ дешевле молчания.
+            value = float(str(raw or 0).replace(",", "."))
+            if value < 0:
+                return jsonify({"ok": False, "error": "bad_value",
+                                "message": "Цена не может быть отрицательной."}), 400
+            if field == "price" and value == 0:
+                return jsonify({"ok": False, "error": "bad_value",
+                                "message": "Цена должна быть больше нуля."}), 400
         elif field == "stock":
-            value = max(0, int(raw))
+            value = int(raw)
+            if value < 0:
+                return jsonify({"ok": False, "error": "bad_value",
+                                "message": "Остаток не может быть отрицательным."}), 400
         elif field in ("name", "description", "brand", "flavor", "strength", "volume"):
             value = str(raw).strip()
         elif field == "category":
@@ -484,6 +502,19 @@ def api_admin_delete():
     return jsonify({"ok": True})
 
 
+def _не_картинка(file):
+    """Готовый отказ, если прислали не изображение, иначе None.
+
+    Само правило живёт в photos — им пользуется и розыгрыш, а тащить ради
+    одной проверки catalog в games значило бы завести лишнее ребро в графе
+    зависимостей.
+    """
+    if photos.это_картинка(file):
+        return None
+    return jsonify({"ok": False, "error": "not_image",
+                    "message": "Это не изображение. Нужен файл jpg, png или webp."}), 400
+
+
 @bp.route("/api/admin/photo", methods=["POST"])
 def api_admin_photo():
     """Загрузить фото товара. Отправляем картинку админу (тихо), чтобы получить file_id."""
@@ -497,6 +528,9 @@ def api_admin_photo():
     file = request.files.get("file")
     if not file:
         return jsonify({"ok": False, "error": "no_file"}), 400
+    беда = _не_картинка(file)
+    if беда:
+        return беда
 
     try:
         msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
@@ -525,6 +559,9 @@ def api_admin_photo_add():
     file = request.files.get("file")
     if not file:
         return jsonify({"ok": False, "error": "no_file"}), 400
+    беда = _не_картинка(file)
+    if беда:
+        return беда
     if len(db.model_photos(mid)) >= db.MAX_EXTRA_PHOTOS:
         # Проверяем ДО отправки в Telegram: иначе картинка уедет впустую.
         return jsonify({"ok": False, "error": "too_many", "max": db.MAX_EXTRA_PHOTOS}), 400
@@ -664,6 +701,9 @@ def api_admin_model_photo():
     file = request.files.get("file")
     if not file:
         return jsonify({"ok": False, "error": "no_file"}), 400
+    беда = _не_картинка(file)
+    if беда:
+        return беда
     try:
         msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
                             caption="🖼 Фото модели сохранено", disable_notification=True)

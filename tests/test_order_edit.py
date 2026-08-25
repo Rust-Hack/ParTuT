@@ -165,6 +165,37 @@ def run():
     return c.fails + c2.fails + c3.fails + c4.fails
 
 
+def run_flavor_not_doubled():
+    """Вкус не должен печататься дважды.
+
+    В позиции заказа вкус лежит ДВАЖДЫ: вписан в название («Cuvie Plus — Арбуз»
+    — так продавец видит его в чате одной строкой) и лежит отдельным полем.
+    Список изменений склеивал оба и выдавал «Cuvie Plus — Арбуз · Арбуз».
+    """
+    c = Checker("Вкус в названии не задваивается")
+    _clean()
+
+    pid = db.add_product("Минск", "disposable", "Cuvie Plus", 39.0, 0)
+    db.add_variant(pid, "Арбуз", 10)
+    oid = _order([{"id": pid, "name": "Cuvie Plus — Арбуз", "flavor": "Арбуз",
+                   "price": 39.0, "qty": 2}], 78.0)
+
+    _, changes = db.update_order_items(oid, {0: 1}, 0.01)
+    строка = changes[0]
+    c("вкус назван один раз", строка.count("Арбуз") == 1)
+    c("название на месте", строка.startswith("Cuvie Plus — Арбуз"))
+    c("видно, что изменилось", "2 → 1" in строка)
+
+    # А если вкуса в названии нет — приписать его по-прежнему надо.
+    oid2 = _order([{"id": pid, "name": "Cuvie Plus", "flavor": "Арбуз",
+                    "price": 39.0, "qty": 2}], 78.0)
+    _, ch2 = db.update_order_items(oid2, {0: 1}, 0.01)
+    c("к чистому названию вкус приписан", ch2[0].startswith("Cuvie Plus · Арбуз"))
+
+    _clean()
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)

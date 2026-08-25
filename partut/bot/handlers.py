@@ -32,7 +32,7 @@ load_dotenv()
 
 # Общие настройки и справочники берём из config.py (их же использует server.py).
 from partut.config import (
-    BOT_TOKEN, WEBAPP_URL, CITIES,
+    BOT_TOKEN, WEBAPP_URL, CITIES, CANCEL_UNPAID_HOURS,
     SUPER_ADMIN_IDS, is_admin, is_super_admin, admin_city,
 )
 
@@ -594,7 +594,7 @@ def parse_int(text):
         return None
 
 
-CANCEL_UNPAID_HOURS = 24   # авто-отмена карточных заказов без чека спустя столько часов
+# CANCEL_UNPAID_HOURS переехал в config: о нём говорят и покупателю на экране оплаты.
 
 # Сводка дня владельцу: во сколько (час) и часовой пояс (сервер Render — UTC, Минск = UTC+3).
 SUMMARY_HOUR = int(os.environ.get("SUMMARY_HOUR", "21"))

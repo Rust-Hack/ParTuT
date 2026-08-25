@@ -403,6 +403,9 @@ def api_admin_raffle_photo():
     file = request.files.get("file")
     if not file:
         return jsonify({"ok": False, "error": "no_file"}), 400
+    if not photos.это_картинка(file):
+        return jsonify({"ok": False, "error": "not_image",
+                        "message": "Это не изображение. Нужен файл jpg, png или webp."}), 400
     try:
         msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
                             caption="🖼 Фото приза сохранено", disable_notification=True)

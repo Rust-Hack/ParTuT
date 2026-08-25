@@ -7,6 +7,7 @@
 let myOrders = [];
 let payInfoText = "";          // реквизиты магазина — приходят вместе со списком заказов
 let payConfirmMin = 15;        // за сколько обычно подтверждают (из настроек магазина)
+let payUnpaidHours = 0;        // сколько заказ ждёт чек, прежде чем отмениться сам
 $("myOrdersClose").onclick = () => $("myOrdersView").classList.remove("show");
 async function openMyOrders() {
   $("myOrdersView").classList.add("show");
@@ -17,6 +18,7 @@ async function openMyOrders() {
     myOrders = d.orders || [];
     if (d.payment_info) payInfoText = d.payment_info;   // чтобы показать реквизиты повторно
     if (d.confirm_minutes) payConfirmMin = d.confirm_minutes;
+    if (d.unpaid_hours) payUnpaidHours = d.unpaid_hours;
   } catch (e) { myOrders = []; }
   await loadReviewables();      // «оцените покупку» показываем сразу, а не вторым экраном
   renderMyOrders();
@@ -74,7 +76,7 @@ function renderMyOrders() {
   $("myOrdersList").innerHTML = reviewPromptHtml() + myOrders.map((o, idx) => {
     const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
     const items = (o.items || []).map(it =>
-      `<div class="oitem"><span>${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} ${CUR}</span></div>`).join("");
+      `<div class="oitem"><span>${esc(имяПозиции(it))} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} ${CUR}</span></div>`).join("");
     const pm = { card: "💳 Картой", cash: "💵 Наличными", none: "🚕 При получении" }[o.payment_method] || "";
     const details = [
       o.delivery_method ? ["Получение", o.delivery_method + (o.delivery_address ? " · " + esc(o.delivery_address) : "")] : null,
@@ -110,7 +112,7 @@ function renderMyOrders() {
     const o = myOrders[+b.dataset.pay];
     currentOrder = { order_id: o.id, confirm_minutes: payConfirmMin };
     $("payTitle").textContent = `Оплата заказа #${o.id}`;
-    renderPayReq({ total: +o.total, payment_info: payInfoText });
+    renderPayReq({ total: +o.total, payment_info: payInfoText, unpaid_hours: payUnpaidHours });
     $("payView").classList.add("show");
   });
 }
@@ -145,7 +147,7 @@ function repeatOrder(o) {
   (o.items || []).forEach(it => {
     const p = allProducts.find(x => x.id === it.id);
     const avail = p ? (it.flavor ? variantStock(p, it.flavor) : p.stock) : 0;
-    if (!p || avail <= 0) { unavail.push(esc(it.name) + (it.flavor ? " · " + esc(it.flavor) : "")); return; }
+    if (!p || avail <= 0) { unavail.push(esc(имяПозиции(it))); return; }
     toAdd.push({ id: p.id, flavor: it.flavor || null, qty: Math.min(it.qty, avail) });
   });
   if (!toAdd.length) { alertMsg("Эти товары сейчас недоступны."); return; }
@@ -251,7 +253,7 @@ function renderOrders() {
   $("ordersList").innerHTML = list.map(o => {
     const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
     const items = (o.items || []).map(it =>
-      `<div class="oitem"><span>${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} Br</span></div>`).join("");
+      `<div class="oitem"><span>${esc(имяПозиции(it))} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} Br</span></div>`).join("");
     const receipt = o.receipt_url
       ? `<div class="oreceipt"><img src="${o.receipt_url}" alt="чек — нажмите, чтобы открыть" data-ocheck="${esc(o.receipt_url)}"></div>`
       : "";
@@ -318,7 +320,7 @@ function renderOrderEdit() {
   $("oeditItems").innerHTML = items.map((it, i) => {
     const q = oeditQty[i];
     return `<div class="admrow">
-      <div class="an">${esc(it.name)}${it.flavor ? " · " + esc(it.flavor) : ""}
+      <div class="an">${esc(имяПозиции(it))}
         <small>${(+it.price).toFixed(2)} Br за шт${q !== +it.qty ? ` · было ${it.qty}` : ""}</small></div>
       <button class="iconbtn" data-oq="-1" data-i="${i}">−</button>
       <b style="min-width:22px;text-align:center">${q}</b>
