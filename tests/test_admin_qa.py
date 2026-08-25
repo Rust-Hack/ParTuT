@@ -176,6 +176,119 @@ def run_загрузки_и_поиск():
     return провалы
 
 
+def run_мусор_вместо_картинки():
+    """Не-картинка — ошибка ВВОДА, а не сбой сервера.
+
+    Раньше файл улетал в Телеграм, тот отказывался, и мы отвечали пятисоткой.
+    Админ читал «Не удалось» без единого намёка на причину и грузил тот же
+    файл заново. У чека покупателя было хуже: приложение прямо советовало
+    «попробуйте ещё раз» — с тем же файлом это не сработает никогда.
+    """
+    import io
+    from _common import as_admin, as_user
+    провалы = []
+
+    as_admin()
+    c = Checker("Фото товара: мусор отбивается внятно")
+    pid = db.add_product("Минск", "disposable", "КЧ-мусор", 10.0, 1)
+    мусор = [("PDF", b"%PDF-1.4\n", "chek.pdf", "application/pdf"),
+             ("скрипт", b"#!/bin/sh\nrm -rf /\n", "evil.sh", "application/x-sh"),
+             ("архив", b"PK\x03\x04", "a.zip", "application/zip")]
+    for имя, тело, файл, тип in мусор:
+        r = client.post("/api/admin/photo", data={
+            "initData": "x", "id": str(pid), "file": (io.BytesIO(тело), файл, тип)},
+            content_type="multipart/form-data")
+        о = r.get_json() or {}
+        # 400, а не 500: виноват файл, а не сервер.
+        c(f"{имя}: отказ 400", r.status_code == 400 and о.get("error") == "not_image")
+        c(f"{имя}: причина названа", "изображен" in (о.get("message") or "").lower())
+    провалы += c.fails
+
+    c2 = Checker("Чек покупателя: то же правило")
+    as_user(9401)
+    oid = db.create_order(9401, "b", "Минск",
+                          [{"id": pid, "name": "т", "price": 10.0, "qty": 1}], 10.0, "")
+    db.set_order_delivery(oid, "Самовывоз", "", 0, "card")
+    r = client.post("/api/receipt", data={
+        "initData": "x", "order_id": str(oid),
+        "file": (io.BytesIO(b"%PDF-1.4\n"), "chek.pdf", "application/pdf")},
+        content_type="multipart/form-data")
+    о = r.get_json() or {}
+    c2("PDF вместо чека отбит", r.status_code == 400 and о.get("error") == "not_image")
+    # Человек уже заплатил: отказ обязан говорить, ЧТО прислать вместо этого.
+    c2("сказано, что прислать", "снимок" in (о.get("message") or "").lower())
+    c2("чек к заказу не привязался", db.get_order(oid)["receipt_file_id"] is None)
+    провалы += c2.fails
+    return провалы
+
+
+def run_настройки_не_врут():
+    """Прижали значение — обязаны сказать, к чему прижали.
+
+    Владелец вводил кэшбэк 9999, читал «Сохранено ✅» и уходил уверенный, что
+    так и есть, — а в базе лежала десятка. Ошибиться на порядок в проценте от
+    КАЖДОГО заказа легко, а узнать об этом было неоткуда, кроме выручки через
+    неделю.
+    """
+    from _common import as_admin
+    as_admin()
+    c = Checker("Сервер отвечает тем, что легло")
+
+    def сохранить(**поля):
+        return (client.post("/api/admin/settings/update",
+                            json={"initData": "x", **поля}).get_json() or {})
+
+    d = сохранить(coins_per_byn=9999)
+    c("прижатое значение возвращается", d.get("applied", {}).get("coins_per_byn") == 10.0)
+    d = сохранить(confirm_minutes=0)
+    c("нижняя граница тоже видна", d.get("applied", {}).get("confirm_minutes") == 1)
+    d = сохранить(coins_per_byn=2)
+    c("нормальное значение возвращается как есть",
+      d.get("applied", {}).get("coins_per_byn") == 2.0)
+    d = сохранить(coins_per_byn="бесплатно")
+    c("не-число не попадает в ответ вовсе", "coins_per_byn" not in d.get("applied", {}))
+
+    # Реквизиты уходят КАЖДОМУ покупателю на экран оплаты — им нужен потолок.
+    сохранить(payment_info="я" * 200000)
+    легло = client.post("/api/admin/settings",
+                        json={"initData": "x"}).get_json()["settings"]["payment_info"]
+    c("реквизиты ограничены по длине", len(легло) <= 2000)
+    сохранить(payment_info="Карта: 0000 0000 0000 0000")
+    return c.fails
+
+
+def run_поиск_ищет_буквы():
+    """% и _ — это символы в нике, а не шаблон поиска."""
+    from _common import as_admin
+    as_admin()
+    c = Checker("Джокеры LIKE не управляют поиском")
+    conn = db.connect(); cur = conn.cursor()
+    люди = [(880101, "vasya"), (880102, "ma_sha"), (880103, "skidka100%"), (880104, "petya")]
+    for uid, ник in люди:
+        cur.execute(db._q("INSERT INTO users (user_id, created_at, username) VALUES (%s,%s,%s)"),
+                    (uid, "2026-01-01 10:00", ник))
+    conn.commit(); conn.close()
+    try:
+        def найти(q):
+            d = client.post("/api/admin/users",
+                            json={"initData": "x", "search": q}).get_json()
+            return {u["username"] for u in d["users"]}
+        # Раньше «%» находил ВСЮ базу, а «ma_sha» — заодно и «masha», потому что
+        # подчёркивание в LIKE значит «любой символ».
+        c("процент ищется как символ", найти("%") == {"skidka100%"})
+        c("подчёркивание ищется как символ", найти("_") == {"ma_sha"})
+        c("обычный поиск не сломан", найти("vasya") == {"vasya"})
+        c("шаблон не срабатывает", найти("%_%") == set())
+        return c.fails
+    finally:
+        conn = db.connect(); cur = conn.cursor()
+        cur.execute(db._q("DELETE FROM users WHERE user_id >= %s"), (880101,))
+        conn.commit(); conn.close()
+        cache.bust()
+
+
 if __name__ == "__main__":
     import sys
-    sys.exit(1 if (run_права() + run_настройки() + run_загрузки_и_поиск()) else 0)
+    sys.exit(1 if (run_права() + run_настройки() + run_загрузки_и_поиск()
+                   + run_мусор_вместо_картинки() + run_настройки_не_врут()
+                   + run_поиск_ищет_буквы()) else 0)
