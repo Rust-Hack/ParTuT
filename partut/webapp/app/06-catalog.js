@@ -1016,10 +1016,20 @@ async function saveEdit(p) {
   };
   const назвать = (что, d) => `${что}: ${(d && (d.message || ЛЮДСКИ[d.error])) || "не сохранилось"}`;
 
-  const upd = async (field, value, что) => {
-    const r = await fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id: editId, field, value }) });
+  // Поля копим и отправляем ОДНИМ запросом. Раньше каждое поле шло своим:
+  // сохранение карточки — до десяти полных обменов с сервером подряд, по
+  // секунде каждый на мобильной сети. «Сохраняю…» висело десять секунд.
+  const поля = {}, имена = {};
+  const upd = (field, value, что) => { поля[field] = value; имена[field] = что || field; };
+  const отправитьПоля = async () => {
+    if (!Object.keys(поля).length) return { ok: true };
+    const r = await fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                         body: JSON.stringify({ initData, id: editId, fields: поля }) });
     const d = await r.json().catch(() => ({}));
-    if (!d.ok) отказы.push(назвать(что || field, d));
+    if (!d.ok) { отказы.push(назвать("правка товара", d)); return d; }
+    // Сервер сохраняет всё, что прошло, и называет, что не прошло: отказ в
+    // цене не повод потерять только что вписанное описание.
+    for (const [field, беда] of Object.entries(d.failed || {})) отказы.push(назвать(имена[field] || field, беда));
     return d;
   };
   const послать = async (адрес, тело, что) => {
@@ -1033,19 +1043,20 @@ async function saveEdit(p) {
   try {
     // Товар из ассортимента: сохраняем только то, что своё у этой точки.
     if (p.model_id) {
-      await upd("price", $("edPrice").value, "цена");
-      await upd("cost", $("edCost").value || 0, "закупка");
+      upd("price", $("edPrice").value, "цена");
+      upd("cost", $("edCost").value || 0, "закупка");
       if (isVar) {
         const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
         if (!variants.length) { alertMsg("Оставьте хотя бы один вкус."); return; }
         await послать("/api/admin/product/variants", { initData, id: editId, variants }, "вкусы");
       } else {
-        await upd("stock", $("edStock").value, "остаток");
+        upd("stock", $("edStock").value, "остаток");
       }
       // Города у товара с моделью правятся галочками ниже, а не селектом.
       // Два контрола об одном и том же всегда расходятся: селект предлагал
       // продавцу Турова все города, включая те, куда сервер его не пустит.
-      await upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»");
+      upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»");
+      await отправитьПоля();
       // Точки — уже после того, как своя карточка сохранена: если что-то из
       // них упадёт, правки цены и остатка всё равно на месте.
       //
@@ -1069,29 +1080,30 @@ async function saveEdit(p) {
       // У одноразок число затяжек — часть названия модели («Elf Bar 6000»).
       const name = (p.category === "disposable" && specs.volume)
         ? [p.brand, specs.volume].filter(x => x && x !== "0").join(" ") : (p.brand || p.name);
-      await upd("price", $("edPrice").value);
-      await upd("cost", $("edCost").value || 0);
-      if (name) await upd("name", name);
+      upd("price", $("edPrice").value, "цена");
+      upd("cost", $("edCost").value || 0, "закупка");
+      if (name) upd("name", name, "название");
       await послать("/api/admin/product/variants", { initData, id: editId, variants }, "вкусы");
     } else {
       const nm = $("edName").value.trim();
       if (!nm) { alertMsg("Введите название."); return; }
-      await upd("category", $("edCat").value);
-      await upd("name", nm);
-      await upd("price", $("edPrice").value);
-      await upd("cost", $("edCost").value || 0);
-      await upd("stock", $("edStock").value);
+      upd("category", $("edCat").value, "категория");
+      upd("name", nm, "название");
+      upd("price", $("edPrice").value, "цена");
+      upd("cost", $("edCost").value || 0, "закупка");
+      upd("stock", $("edStock").value, "остаток");
       const brandName = pickerValue("edBrand");
       await ensureBrandExists(brandName);
-      await upd("brand", brandName);
-      await upd("flavor", pickerValue("edFlavor"));
-      await upd("description", $("edDesc").value.trim());
+      upd("brand", brandName, "бренд");
+      upd("flavor", pickerValue("edFlavor"), "вкус");
+      upd("description", $("edDesc").value.trim(), "описание");
     }
     // Характеристики сохраняем одним запросом — сервер сам разложит крепость
     // и объём по своим колонкам, а остальное в JSON.
     await послать("/api/admin/product/specs", { initData, id: editId, specs }, "характеристики");
-    await upd("city", $("edCity").value, "точка");
-    await upd("is_hit", $("edHit").checked ? 1 : 0);
+    upd("city", $("edCity").value, "точка");
+    upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»");
+    await отправитьПоля();
     if (editPhotoFile) {
       const fd = new FormData();
       fd.append("initData", initData); fd.append("id", editId); fd.append("file", editPhotoFile);

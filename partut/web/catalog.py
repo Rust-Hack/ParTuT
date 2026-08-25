@@ -340,9 +340,68 @@ def api_admin_add():
     return jsonify({"ok": True, "id": pid})
 
 
+def _проверить_поле(admin, pid, field, raw):
+    """Проверяет одно поле товара. Возвращает (значение, ответ-отказ).
+
+    Вынесено из ручки, чтобы одна и та же проверка работала и для одного поля,
+    и для пачки: правило, продублированное для «быстрого пути», однажды
+    разойдётся с медленным — и дыра появится ровно там, где её не ищут.
+    """
+    try:
+        if field in ("price", "cost"):
+            # Раньше здесь стоял max(0, ...) — и «-50» молча становилось нулём,
+            # а ручка отвечала «сохранено». Товар уезжал на витрину бесплатным,
+            # и узнать об этом было неоткуда: в ответе ошибки нет, в списке
+            # стоит 0.00, будто так и задумано. Отказ дешевле молчания.
+            value = float(str(raw or 0).replace(",", "."))
+            if value < 0:
+                return None, ("bad_value", "Цена не может быть отрицательной.")
+            if field == "price" and value == 0:
+                return None, ("bad_value", "Цена должна быть больше нуля.")
+        elif field == "stock":
+            value = int(raw)
+            if value < 0:
+                return None, ("bad_value", "Остаток не может быть отрицательным.")
+        elif field in ("name", "description", "brand", "flavor", "strength", "volume"):
+            value = str(raw).strip()
+        elif field == "category":
+            value = str(raw).strip()
+            if value not in db.category_codes():
+                return None, ("bad_value", None)
+        elif field == "city":
+            value = str(raw).strip()
+            names = {loc["name"] for loc in db.get_locations()}
+            if value not in names:
+                return None, ("bad_value", None)
+            # Перенос — это и есть смена точки: чужую нельзя ни как источник,
+            # ни как цель, иначе товар уезжает туда, где продавец не отвечает.
+            if not auth.may_city(admin, value):
+                return None, ("other_city", "Это другая точка — её ведёт другой продавец.")
+            cur = db.get_product(pid)
+            mid = (cur["model_id"] if cur and "model_id" in cur.keys() else None)
+            if mid and value != cur["city"] and any(
+                    p["city"] == value and p["id"] != pid
+                    and (p["model_id"] if "model_id" in p.keys() else None) == mid
+                    for p in db.get_all_products()):
+                # Перенос на точку, где эта модель уже стоит, создал бы двойника.
+                return None, ("already_here", "На этой точке товар уже есть.")
+        elif field in ("is_hit", "hidden"):
+            value = 1 if raw else 0
+        else:
+            return None, ("bad_field", None)
+    except (TypeError, ValueError):
+        return None, ("bad_value", None)
+    return value, None
+
 @bp.route("/api/admin/product/update", methods=["POST"])
 def api_admin_update():
-    """Изменить одно поле товара (price / stock / name / description / is_hit)."""
+    """Изменить поля товара. Можно одно (field/value) или сразу пачкой (fields).
+
+    Пачкой — потому что сохранение карточки меняло до десяти полей и слало на
+    каждое отдельный запрос. По мобильной сети это десять полных обменов с
+    сервером подряд: секунда на каждый, и «Сохраняю…» висит десять секунд. Одно
+    поле по-прежнему принимается — им пользуются переключатели в списке.
+    """
     data = request.get_json(force=True, silent=True) or {}
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
@@ -355,59 +414,42 @@ def api_admin_update():
     if deny:
         return deny
 
-    field = data.get("field")
-    raw = data.get("value")
-    try:
-        if field in ("price", "cost"):
-            # Раньше здесь стоял max(0, ...) — и «-50» молча становилось нулём,
-            # а ручка отвечала «сохранено». Товар уезжал на витрину бесплатным,
-            # и узнать об этом было неоткуда: в ответе ошибки нет, в списке
-            # стоит 0.00, будто так и задумано. Отказ дешевле молчания.
-            value = float(str(raw or 0).replace(",", "."))
-            if value < 0:
-                return jsonify({"ok": False, "error": "bad_value",
-                                "message": "Цена не может быть отрицательной."}), 400
-            if field == "price" and value == 0:
-                return jsonify({"ok": False, "error": "bad_value",
-                                "message": "Цена должна быть больше нуля."}), 400
-        elif field == "stock":
-            value = int(raw)
-            if value < 0:
-                return jsonify({"ok": False, "error": "bad_value",
-                                "message": "Остаток не может быть отрицательным."}), 400
-        elif field in ("name", "description", "brand", "flavor", "strength", "volume"):
-            value = str(raw).strip()
-        elif field == "category":
-            value = str(raw).strip()
-            if value not in db.category_codes():
-                return jsonify({"ok": False, "error": "bad_value"}), 400
-        elif field == "city":
-            value = str(raw).strip()
-            names = {loc["name"] for loc in db.get_locations()}
-            if value not in names:
-                return jsonify({"ok": False, "error": "bad_value"}), 400
-            # Перенос — это и есть смена точки: чужую нельзя ни как источник,
-            # ни как цель, иначе товар уезжает туда, где продавец не отвечает.
-            deny = auth.deny_city(admin, value)
-            if deny:
-                return deny
-            cur = db.get_product(pid)
-            mid = (cur["model_id"] if cur and "model_id" in cur.keys() else None)
-            if mid and value != cur["city"] and any(
-                    p["city"] == value and p["id"] != pid
-                    and (p["model_id"] if "model_id" in p.keys() else None) == mid
-                    for p in db.get_all_products()):
-                # Перенос на точку, где эта модель уже стоит, создал бы двойника.
-                return jsonify({"ok": False, "error": "already_here"}), 400
-        elif field in ("is_hit", "hidden"):
-            value = 1 if raw else 0
-        else:
-            return jsonify({"ok": False, "error": "bad_field"}), 400
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "bad_value"}), 400
+    пачка = data.get("fields")
+    if not isinstance(пачка, dict):
+        пачка = {data.get("field"): data.get("value")}
+        одиночное = True
+    else:
+        одиночное = False
 
-    db.update_field(pid, field, value)
-    return jsonify({"ok": True})
+    отказы = {}
+    приняты = {}
+    for field, raw in пачка.items():
+        value, беда = _проверить_поле(admin, pid, field, raw)
+        if беда:
+            отказы[field] = {"error": беда[0], "message": беда[1]}
+        else:
+            приняты[field] = value
+
+    # Одиночное поле отвечает как раньше — кодом и текстом: на него завязаны
+    # переключатели, которые ждут именно такой ответ.
+    if одиночное and отказы:
+        _, беда = next(iter(отказы.items()))
+        ответ = {"ok": False, "error": беда["error"]}
+        if беда["message"]:
+            ответ["message"] = беда["message"]
+        # «Чужая точка» — это отказ в праве, а не кривые данные: код должен
+        # остаться 403, иначе он сливается с опечаткой в цене.
+        код = 403 if беда["error"] in ("other_city", "forbidden") else 400
+        return jsonify(ответ), код
+
+    for field, value in приняты.items():
+        db.update_field(pid, field, value)
+
+    # Пачка сохраняет всё, что прошло, и честно называет, что не прошло:
+    # отказать в цене — не повод потерять только что вписанное описание.
+    if отказы:
+        return jsonify({"ok": True, "saved": sorted(приняты), "failed": отказы})
+    return jsonify({"ok": True, "saved": sorted(приняты)})
 
 
 def _свести_вкусы(сырые, эталон=None):
