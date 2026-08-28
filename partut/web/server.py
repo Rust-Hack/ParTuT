@@ -185,11 +185,16 @@ _STOCK_KEYS = ("products", "stats")
 # поход к базе, а она не под боком. Поэтому у каждой ручки перечислено то, что
 # она действительно портит.
 # Ключи перечислены те, что реально кладутся в кэш (см. cache.put): products,
-# flavors, also_bought, categories, locations, rules, docs, orders_done.
+# flavors, also_bought, categories, brands, locations, rules, docs, orders_done.
 # «stats» держим за компанию с _STOCK_KEYS — там он уже был, и лишний префикс
 # ничего не стоит, а вот забытый стоил бы устаревшей цифры.
 _ТОВАРЫ = ("products", "flavors", "also", "stats")
 _СПРАВОЧНИКИ = _ТОВАРЫ + ("categories",)
+# «brands» не входил сюда до 28 августа — правка бренда не сбрасывала его кэш
+# (300 с) вовсе, и владелец видел старый список бренда, пока не истечёт TTL,
+# а с ETag ещё и получал 304 на явный перезапрос. Отдельно от _ТОВАРЫ: только
+# два маршрута ниже трогают таблицу brands, а не любая правка товара.
+_БРЕНДЫ = _ТОВАРЫ + ("brands",)
 
 _WRITE_PATHS = {
     "/api/admin/product": _ТОВАРЫ, "/api/admin/product/update": _ТОВАРЫ,
@@ -210,7 +215,7 @@ _WRITE_PATHS = {
     "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),
     "/api/admin/point": (), "/api/admin/point/update": (), "/api/admin/point/delete": (),
     "/api/admin/stock/move": _STOCK_KEYS,
-    "/api/admin/brand": _ТОВАРЫ, "/api/admin/brand/delete": _ТОВАРЫ,
+    "/api/admin/brand": _БРЕНДЫ, "/api/admin/brand/delete": _БРЕНДЫ,
     "/api/admin/settings/update": (), "/api/admin/stats/reset": (),
     "/api/order": _STOCK_KEYS,                  # меняют остаток на складе
     "/api/order/cancel": _STOCK_KEYS,

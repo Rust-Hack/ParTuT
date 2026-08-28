@@ -63,6 +63,36 @@ def run():
     return c.fails + c2.fails
 
 
+def run_бренды():
+    """Правка бренда обязана сбросить кэш /api/brands — до 28 августа не сбрасывала:
+    список бренда мог отставать до 5 минут (TTL), а ETag на явный перезапрос
+    отвечал 304 — та же стопка, отдающая старое, что и у кэша заказов выше."""
+    as_admin()
+    cache.bust()
+    c = Checker("Кэш брендов + инвалидация")
+
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute("DELETE FROM brands"); conn.commit(); conn.close()
+
+    n0 = len(client.get("/api/brands").get_json())
+    c("старт: брендов нет", n0 == 0)
+
+    db.add_brand("CacheBrand", "podsystem", [])   # в обход эндпоинта → кэш не знает
+    n1 = len(client.get("/api/brands").get_json())
+    c("кэш работает: бренд пока не виден", n1 == 0)
+
+    r = client.post("/api/admin/brand", json={"initData": "x", "name": "RealBrand", "category": "podsystem"})
+    c("write-path → 200", r.status_code == 200)
+    n2 = len(client.get("/api/brands").get_json())
+    c("после записи кэш сброшен: оба бренда видны", n2 == 2)
+
+    bid = next(b["id"] for b in client.get("/api/brands").get_json() if b["name"] == "RealBrand")
+    client.post("/api/admin/brand", json={"initData": "x", "id": bid, "name": "RealBrand 2", "category": "podsystem"})
+    names = {b["name"] for b in client.get("/api/brands").get_json()}
+    c("переименование тоже сбрасывает кэш", "RealBrand 2" in names and "RealBrand" not in names)
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
-    sys.exit(1 if run() else 0)
+    sys.exit(1 if (run() + run_бренды()) else 0)
