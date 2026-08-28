@@ -513,9 +513,20 @@ def api_admin_variants():
     модель_ = товар_["model_id"] if товар_ and "model_id" in товар_.keys() else None
     известные = (db.get_model(модель_) or {}).get("flavors", []) if модель_ else []
 
+    # Браузер не даёт сохранить пустой список — но браузер не единственный,
+    # кто умеет послать этот запрос. Без проверки здесь пустой variants[]
+    # проходил молча: товар получал остаток 0 без единого отказа, а если
+    # список был непустым — стирал настоящий остаток тем же путём. Считаем
+    # ПОСЛЕ свода (дубли/пустые имена схлопнутся), но ДО удаления старого —
+    # отказ не должен успевать снести то, что уже стояло на точке.
+    норм_вкусы = _свести_вкусы(data.get("variants") or [], известные)
+    if not норм_вкусы:
+        return jsonify({"ok": False, "error": "no_variants",
+                        "message": "Нужен хотя бы один вариант — со всеми пустыми остаток посчитать нечем."}), 400
+
     db.delete_variants(pid)
     вкусы = []
-    for v in _свести_вкусы(data.get("variants") or [], известные):
+    for v in норм_вкусы:
         db.add_variant(pid, v["flavor"], v["stock"])
         вкусы.append(v["flavor"])
     db.recalc_product_stock(pid)
@@ -860,16 +871,26 @@ def api_admin_product_from_model():
     cost, беда = _закупка(data)
     if беда:
         return беда
-    variants = data.get("variants") if isinstance(data.get("variants"), list) else []
+    raw_variants = data.get("variants") if isinstance(data.get("variants"), list) else []
+    # Модель со вкусами — это её механика, не выбор продавца на конкретной
+    # точке: раз модель заводит остаток по вариантам, завоз обязан привезти
+    # хотя бы один. Определяем по МОДЕЛИ (m["flavors"]), а не по тому, пришли
+    # ли variants в запросе — иначе пустой список [] молча уводил завоз на
+    # путь «обычный остаток», и модель со вкусами получала точку без единого
+    # варианта: остаток 0, вкусов нет, а отказа не было вовсе.
+    норм_вкусы = _свести_вкусы(raw_variants, (m["flavors"] or [])) if m["flavors"] else []
+    if m["flavors"] and not норм_вкусы:
+        return jsonify({"ok": False, "error": "no_variants",
+                        "message": "Нужен хотя бы один вариант — со всеми пустыми остаток посчитать нечем."}), 400
     try:
         stock = max(0, int(data.get("stock") or 0))
     except (TypeError, ValueError):
         stock = 0
     pid = db.add_product_from_model(mid, city, max(0.0, price), cost,
-                                    0 if variants else stock, 1 if data.get("is_hit") else 0)
-    if variants:
+                                    0 if норм_вкусы else stock, 1 if data.get("is_hit") else 0)
+    if норм_вкусы:
         заведены = []
-        for v in _свести_вкусы(variants, (m["flavors"] or [])):
+        for v in норм_вкусы:
             db.add_variant(pid, v["flavor"], v["stock"])
             заведены.append(v["flavor"])
         db.recalc_product_stock(pid)

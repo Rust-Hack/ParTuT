@@ -51,10 +51,15 @@ def run():
       client.post("/api/admin/model", json={"initData": "x", "category": "нет", "name": "X"}).status_code == 400)
 
     # --- Завоз на две точки ---
+    # Модель со вкусами (dedup выше) — завоз обязан привезти хотя бы один
+    # вариант, как и настоящий экран: без variants сервер теперь отказывает
+    # (см. c7 ниже), «stock» тут ни при чём.
     r1 = client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": mid,
-                                                            "city": "Минск", "price": "12", "cost": "7", "stock": "10"})
+                                                            "city": "Минск", "price": "12", "cost": "7",
+                                                            "variants": [{"flavor": "Мята", "stock": "10"}]})
     r2 = client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": mid,
-                                                            "city": "Туров", "price": "14", "cost": "8", "stock": "3"})
+                                                            "city": "Туров", "price": "14", "cost": "8",
+                                                            "variants": [{"flavor": "Мята", "stock": "3"}]})
     c("завоз на первую точку", (r1.get_json() or {}).get("ok"))
     c("завоз на вторую точку", (r2.get_json() or {}).get("ok"))
     p1, p2 = r1.get_json()["id"], r2.get_json()["id"]
@@ -62,7 +67,7 @@ def run():
     c("описание взято из модели", a["name"] == "Картридж XROS" and a["brand"] == "Vaporesso")
     c("характеристики тоже", a["specs"]["resistance"] == "0.8")
     c("цена у каждой точки своя", (a["price"], b["price"]) == (12.0, 14.0))
-    c("остаток у каждой точки свой", (a["stock"], b["stock"]) == (10, 3))
+    c("остаток у каждой точки свой (сумма вариантов)", (a["stock"], b["stock"]) == (10, 3))
     c("модель знает про свои товары", _models()[0]["products"] == 2)
 
     # --- Правка модели расходится по точкам ---
@@ -137,9 +142,26 @@ def run():
                                                            "city": "Нетакого", "price": "10"})
     c5("выдуманная точка отклонена", r.status_code == 400)
 
+    # Модель со вкусами — завоз без единого варианта раньше проходил молча
+    # (остаток 0, вкусов нет). Пустой variants[] и вовсе не отмеченный вкус —
+    # один и тот же случай для покупателя: платить нечем ни там, ни там.
+    r = client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": lid,
+                                                           "city": "Лунинец", "price": "15", "cost": "5",
+                                                           "variants": []})
+    c5("завоз без вариантов отклонён", r.status_code == 400 and r.get_json()["error"] == "no_variants")
+    c5("и товар не завёлся", not any(p["city"] == "Лунинец" for p in db.get_all_products()
+                                     if (p["model_id"] if "model_id" in p.keys() else None) == lid))
+    # То же для правки уже заведённого товара: обнулить варианты одним
+    # вызовом нельзя, остаток должен остаться как был.
+    было = {v["flavor"]: v["stock"] for v in db.get_variants(pid)}
+    r = client.post("/api/admin/product/variants", json={"initData": "x", "id": pid, "variants": []})
+    c5("обнулить вкусы товара нельзя", r.status_code == 400 and r.get_json()["error"] == "no_variants")
+    c5("остаток не тронут", {v["flavor"]: v["stock"] for v in db.get_variants(pid)} == было)
+
     # Перенос товара на точку, где эта модель уже стоит
     client.post("/api/admin/product/from-model", json={"initData": "x", "model_id": lid,
-                                                       "city": "Туров", "price": "17", "cost": "9"})
+                                                       "city": "Туров", "price": "17", "cost": "9",
+                                                       "variants": [{"flavor": "Мята", "stock": "5"}]})
     r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
                                                        "field": "city", "value": "Туров"})
     c5("перенос в точку с двойником отклонён",
