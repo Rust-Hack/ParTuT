@@ -9,6 +9,7 @@ let selPromo = "", promoOff = 0, promoErr = "";   // введённый код, 
 const deliveryCache = {};        // city -> способы получения (чтобы оформление открывалось мгновенно)
 const pointsCache = {};          // city -> точки самовывоза этого города
 const freeFromCache = {};        // city -> с какой суммы доставка бесплатна (0 = порога нет)
+const payMethodsCache = {};      // city -> какие способы оплаты сейчас включены владельцем
 let ordersDone = 0;              // сколько заказов магазин уже выдал (0 = показывать рано)
 let pickupPoints = [], selPoint = null;
 const deliveryPending = {};      // city -> запрос «в полёте» (чтобы не слать второй такой же)
@@ -25,6 +26,10 @@ function fetchDeliveryFor(c) {
       deliveryCache[c] = Array.isArray(d) ? d : (d.methods || []);
       pointsCache[c] = Array.isArray(d) ? [] : (d.points || []);
       freeFromCache[c] = Array.isArray(d) ? 0 : (d.free_from || 0);
+      // Владелец мог выключить способ оплаты. Умолчание — оба разрешены,
+      // как раньше: старый кэш-ответ (Array.isArray(d)) этого поля не знает.
+      payMethodsCache[c] = Array.isArray(d) ? { cash: true, card: true }
+        : { cash: d.pay_cash !== false, card: d.pay_card !== false };
       if (!Array.isArray(d)) ordersDone = d.orders_done || 0;
     } catch (e) { deliveryCache[c] = deliveryCache[c] || []; }
     finally { delete deliveryPending[c]; }
@@ -145,9 +150,15 @@ function renderDelivery() {
       extra += `<div class="dpickup">📍 ${esc(m.pickup_address)}</div>`;
     }
     if (m.needs_payment) {
-      extra += `<div class="dlabel">Оплата</div><div class="paypick">
-        <button class="opt ${selPayment === 'card' ? 'active' : ''}" data-pm="card">💳 Картой</button>
-        <button class="opt ${selPayment === 'cash' ? 'active' : ''}" data-pm="cash">💵 Наличными</button></div>`;
+      const pm = payMethodsCache[city] || { cash: true, card: true };
+      const пары = [pm.card && ["card", "💳 Картой"], pm.cash && ["cash", "💵 Наличными"]].filter(Boolean);
+      // Включён ровно один способ — выбирать нечего, подставляем его сам, как
+      // и с единственной точкой самовывоза выше: кнопка на один вариант не
+      // выбор, а лишний тычок.
+      if (пары.length === 1) selPayment = пары[0][0];
+      extra += `<div class="dlabel">Оплата</div><div class="paypick">`
+        + пары.map(([код, подпись]) => `<button class="opt ${selPayment === код ? 'active' : ''}" data-pm="${код}">${подпись}</button>`).join("")
+        + `</div>`;
     } else {
       extra += `<div class="dnote">Оплата не нужна — продавец свяжется с вами.</div>`;
     }

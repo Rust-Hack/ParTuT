@@ -113,6 +113,8 @@ def api_delivery():
                        for p in db.get_pickup_points(city)],
             "free_from": shopinfo._free_delivery_from(),   # с какой суммы доставка бесплатна
             "orders_done": shopinfo._orders_done(),         # доверие: сколько заказов уже выдано
+            "pay_cash": shopinfo._cash_on(),                 # какие способы оплаты сейчас включены
+            "pay_card": shopinfo._card_on(),
         }, 300)
     return jsonify(cached)
 

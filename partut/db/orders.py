@@ -74,9 +74,20 @@ def get_checkout_data(user_id, product_ids, method_id):
                         (method["city"],))
             points = [dict(r) for r in cur.fetchall()]
 
+    # Способы оплаты — тут же, а не отдельным кэшированным чтением: кэш
+    # спасает только тёплый случай, а первый заказ после старта процесса или
+    # сброса кэша всё равно добавил бы ПЯТОЕ подключение на самый горячий
+    # путь. Строка в settings крошечная, второй запрос той же связи ничего
+    # не стоит.
+    cur.execute(db._q("SELECT key, value FROM settings WHERE key IN (%s, %s)"),
+                ("pay_cash", "pay_card"))
+    способы = {r["key"]: r["value"] for r in cur.fetchall()}
+
     conn.close()
     return {"age_ok": age_ok, "coins": coins, "products": products,
-            "variants": variants, "method": method, "points": points}
+            "variants": variants, "method": method, "points": points,
+            "pay_cash": str(способы.get("pay_cash", "1")) != "0",
+            "pay_card": str(способы.get("pay_card", "1")) != "0"}
 
 
 class PromoGone(Exception):

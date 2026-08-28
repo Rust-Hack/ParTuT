@@ -63,6 +63,28 @@ def _free_delivery_from():
     return cached
 
 
+def _cash_on():
+    """Разрешена ли сейчас оплата наличными.
+
+    Не удаление способа — самих способов оплаты в базе нет, только эти два
+    флага. Выключенный владельцем способ пропадает с экрана оплаты у
+    покупателя, а сервер отказывает в заказе, если его всё же прислали в
+    обход экрана (тот же приём, что и у отрицательной цены: отказ дешевле
+    молчания)."""
+    cached = cache.get("settings:pay_cash")
+    if cached is None:
+        cached = cache.put("settings:pay_cash", str(db.get_setting("pay_cash", "1")) != "0", 300)
+    return cached
+
+
+def _card_on():
+    """Разрешена ли сейчас оплата картой. См. _cash_on()."""
+    cached = cache.get("settings:pay_card")
+    if cached is None:
+        cached = cache.put("settings:pay_card", str(db.get_setting("pay_card", "1")) != "0", 300)
+    return cached
+
+
 def _confirm_minutes():
     """Через сколько минут продавец подтверждает: из настроек, иначе — из config."""
     cached = cache.get("settings:confirm_minutes")

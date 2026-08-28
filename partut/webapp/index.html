@@ -563,6 +563,12 @@
     <div class="card-block form">
       <label>Реквизиты оплаты (видит клиент при оплате)</label>
       <textarea id="setPay" rows="4" placeholder="Карта: 0000 0000 0000 0000 (Имя)&#10;или по номеру: +375 ..."></textarea>
+
+      <label style="margin-top:14px">Способы оплаты</label>
+      <div class="chk"><input type="checkbox" id="setPayCash"><label style="margin:0">Наличными</label></div>
+      <div class="chk"><input type="checkbox" id="setPayCard"><label style="margin:0">Картой</label></div>
+      <div class="dnote" style="margin:6px 0 0">Выключенный способ пропадает с экрана оплаты у покупателя — заказ им оформить нельзя. Оба сразу выключить нельзя: платить будет нечем.</div>
+
       <label>Через сколько минут продавец подтверждает</label>
       <input id="setConfirm" inputmode="numeric" placeholder="15">
 

@@ -4,13 +4,15 @@
 На Neon каждое подключение — это поездка по сети, и раньше их было ~20 → кнопка «Оформить» висла.
 """
 import time
-from _common import db, client, Checker, as_user
+from _common import db, client, Checker, as_user, as_admin
 
 from partut.integrations import tgsend
+from partut import cache
 
 CLIENT = 6161
 COINS_CLIENT = 6162
 VAR_CLIENT = 6163
+PAY_CLIENT = 6164
 
 
 def _count_connects():
@@ -160,6 +162,60 @@ def run():
     return c.fails + c2.fails + c3.fails
 
 
+def run_способ_оплаты_можно_выключить():
+    """Владелец выключает наличные/карту — покупатель не может заказать этим способом."""
+    c = Checker("Выключенный способ оплаты сервер не принимает")
+    as_user(PAY_CLIENT, "paybuyer")
+    db.set_age_ok(PAY_CLIENT)
+    pid = db.add_product("paycity", "pods", "PayPod", 20, 5)
+    db.add_delivery_method("paycity", "Самовывоз", False, "", "ул. Тест", 0, True)
+    mid = db.get_delivery_methods("paycity")[-1]["id"]
+
+    try:
+        as_admin()
+        d = client.post("/api/admin/settings/update",
+                        json={"initData": "x", "pay_cash": False}).get_json()
+        c("владелец выключил наличные", d.get("applied", {}).get("pay_cash") is False)
+        настройки = client.post("/api/admin/settings", json={"initData": "x"}).get_json()["settings"]
+        c("в настройках это видно", настройки["pay_cash"] is False and настройки["pay_card"] is True)
+        # Способ выключен один раз — общий на весь магазин, кэш очищен полным
+        # сбросом на settings/update: город тут ни при чём, но всё равно бьём
+        # явно, чтобы тест не зависел от TTL кэша /api/delivery.
+        cache.bust()
+        доставка = client.get("/api/delivery?city=paycity").get_json()
+        c("покупатель видит это в /api/delivery", доставка.get("pay_cash") is False
+          and доставка.get("pay_card") is True)
+
+        as_user(PAY_CLIENT, "paybuyer")
+        r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                            "payment_method": "cash", "items": [{"id": pid, "qty": 1}]})
+        d2 = r.get_json() or {}
+        # Отказ, а не тихое переключение на карту: заказ наличными, присланный
+        # в обход экрана (старая кнопка, чужой клиент), не должен уехать
+        # продавцу, которому нечем его закрыть.
+        c("заказ наличными отбит сервером", r.status_code == 400 and d2.get("error") == "payment_off")
+        c("склад не тронут", db.get_product(pid)["stock"] == 5)
+
+        r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                            "payment_method": "card", "items": [{"id": pid, "qty": 1}]})
+        d3 = r.get_json() or {}
+        c("картой заказ проходит как раньше", d3.get("ok") is True)
+
+        as_admin()
+        d4 = client.post("/api/admin/settings/update",
+                         json={"initData": "x", "pay_card": False}).get_json()
+        c("оба способа сразу выключить нельзя", d4.get("ok") is True
+          and "pay" in (d4.get("failed") or {}))
+        настройки2 = client.post("/api/admin/settings", json={"initData": "x"}).get_json()["settings"]
+        c("карта осталась включённой", настройки2["pay_card"] is True)
+        return c.fails
+    finally:
+        as_admin()
+        client.post("/api/admin/settings/update",
+                    json={"initData": "x", "pay_cash": True, "pay_card": True})
+        cache.bust()
+
+
 if __name__ == "__main__":
     import sys
-    sys.exit(1 if run() else 0)
+    sys.exit(1 if (run() + run_способ_оплаты_можно_выключить()) else 0)

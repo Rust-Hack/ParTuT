@@ -174,14 +174,17 @@ def api_admin_settings():
     opts = db.get_settings(
         ["payment_info", "confirm_minutes", "free_delivery_from", "remind_after_days",
          "remind_daily_cap", "coins_per_byn", "wheel_step", "referral_bonus",
-         "compensation_max"],
+         "compensation_max", "pay_cash", "pay_card"],
         {"payment_info": PAYMENT_INFO, "confirm_minutes": CONFIRM_MINUTES,
          "free_delivery_from": 0, "remind_after_days": 21, "remind_daily_cap": 20,
          "coins_per_byn": 1, "wheel_step": db.WHEEL_STEP_DEFAULT,
          "referral_bonus": db.REFERRAL_BONUS,
-         "compensation_max": db.COMPENSATION_MAX_DEFAULT})
+         "compensation_max": db.COMPENSATION_MAX_DEFAULT,
+         "pay_cash": "1", "pay_card": "1"})
     return jsonify({"ok": True, "settings": {
         "payment_info": opts["payment_info"] or "",
+        "pay_cash": str(opts["pay_cash"]) != "0",
+        "pay_card": str(opts["pay_card"]) != "0",
         "confirm_minutes": inputs._num(opts["confirm_minutes"], CONFIRM_MINUTES, as_int=True),
         "free_delivery_from": inputs._num(opts["free_delivery_from"], 0),
         "remind_after_days": inputs._num(opts["remind_after_days"], 21, as_int=True),
@@ -245,13 +248,40 @@ def api_admin_settings_update():
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     применено = {}
+    отказы = {}
     if "payment_info" in data:
         # Потолок длины не придирка: эта строка уходит КАЖДОМУ покупателю в
         # ответе на оформление и в истории заказов. Двести тысяч знаков туда
         # однажды попадут не злым умыслом, а случайной вставкой из буфера.
         реквизиты = inputs._text(data.get("payment_info"), PAYMENT_INFO_MAX)
-        db.set_setting("payment_info", реквизиты)
-        применено["payment_info"] = реквизиты
+        if реквизиты:
+            db.set_setting("payment_info", реквизиты)
+            применено["payment_info"] = реквизиты
+        else:
+            # Пустое поле владелец сохранит НЕ нарочно — не успела дозагрузиться
+            # форма, случайно стёр перед вставкой нового номера. Реквизиты
+            # уходят каждому покупателю на экране оплаты: без них платить
+            # некуда, а «Сохранено ✅» на пустом поле сказало бы, что так и
+            # задумано. Отказ дешевле молчания — тот же приём, что и у цены.
+            отказы["payment_info"] = "Реквизиты не могут быть пустыми."
+
+    if "pay_cash" in data or "pay_card" in data:
+        # Оба сразу выключить нельзя: заказ, для которого нужна оплата,
+        # станет нечем платить — покупатель упрётся в пустой экран посреди
+        # оформления, а магазин перестанет принимать заказы этим способом
+        # получения вообще, и никто не скажет владельцу почему.
+        текущие = db.get_settings(["pay_cash", "pay_card"], {"pay_cash": "1", "pay_card": "1"})
+        cash_on = bool(data["pay_cash"]) if "pay_cash" in data else (str(текущие["pay_cash"]) != "0")
+        card_on = bool(data["pay_card"]) if "pay_card" in data else (str(текущие["pay_card"]) != "0")
+        if not cash_on and not card_on:
+            отказы["pay"] = "Нельзя выключить оба способа оплаты сразу — заказ станет нечем оплатить."
+        else:
+            if "pay_cash" in data:
+                db.set_setting("pay_cash", "1" if cash_on else "0")
+                применено["pay_cash"] = cash_on
+            if "pay_card" in data:
+                db.set_setting("pay_card", "1" if card_on else "0")
+                применено["pay_card"] = card_on
 
     # Границы стоят не «на всякий случай»: 100 монет = 1 Br, и лишний ноль в
     # кэшбэке превращает 1% в 10% на каждом заказе. Цену монеты
@@ -293,4 +323,7 @@ def api_admin_settings_update():
     # каждого заказа легко, а узнать об этом было неоткуда, кроме выручки через
     # неделю. Теперь приложение подставит в поля вернувшееся и скажет, что
     # именно поправлено.
-    return jsonify({"ok": True, "applied": применено})
+    ответ = {"ok": True, "applied": применено}
+    if отказы:
+        ответ["failed"] = отказы
+    return jsonify(ответ)
