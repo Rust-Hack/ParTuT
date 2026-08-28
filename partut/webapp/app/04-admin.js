@@ -6,6 +6,15 @@
 
 // ---------- Админка (только для админов) ----------
 
+// Промис двух справочников, которые нужны хабу не самому, а двум его
+// разделам («Цены и остатки» — товарам, «Бренды» — брендам). Раньше оба
+// похода в базу шли ПОДРЯД (await, потом await) и держали за собой сам
+// показ экрана: тап по «Управление» секундами ничего не показывал, хотя
+// хаб — это меню с бейджами, ни товары, ни бренды ему для отрисовки не
+// нужны. Теперь хаб виден сразу, а запросы идут параллельно; кому эти
+// данные действительно нужны — ждёт этот же промис, а не гонит свой поход.
+let _adminBoot = null;
+
 async function openAdmin() {
   if ($("mRequests")) $("mRequests").style.display = (me && me.is_super) ? "" : "none";
   // Раздавать доступ может только владелец: иначе продавец выпишет права сам себе.
@@ -14,14 +23,14 @@ async function openAdmin() {
   if ($("mDocs")) $("mDocs").style.display = (me && me.is_super) ? "" : "none";
   if ($("mLog")) $("mLog").style.display = (me && me.is_super) ? "" : "none";
   applyAdminScope();
+  $("adminView").classList.add("show");
   if (me && me.is_super) loadReqBadge();
   loadPendingReviews(true);          // счётчик отзывов — без открытия раздела
   loadOrdersBadge();                 // сколько заказов ждут продавца
   loadToday();                       // сводка дня — первое, что видно на входе
-  await fetchAdminProducts();        // со снятыми с витрины — витрина их не отдаёт
-  renderLowBadge();                  // сколько позиций надо завезти
-  await fetchBrands();               // нужно разделам «Товары» и «Бренды»
-  $("adminView").classList.add("show");
+  _adminBoot = Promise.all([fetchAdminProducts(), fetchBrands()]);
+  await _adminBoot;
+  renderLowBadge();                  // сколько позиций надо завезти — ждёт товары
 }
 
 // Продавец точки ведёт свою точку: товары, склад, заказы. Всё, что меняет
@@ -267,7 +276,7 @@ $("mdSave").onclick = async () => {
     if (orphans.length) {
       // Вкус убрали из модели, а на полке он есть — он и дальше продаётся.
       alertMsg(`Сохранено ✅ Обновлено товаров на точках: ${updated}\n\n`
-        + `На точках остались вкусы, которых больше нет в модели: `
+        + `На точках остались варианты, которых больше нет в модели: `
         + orphans.map(o => `${o.flavor} (${o.stock} шт)`).join(", ")
         + `.\nОни продолжают продаваться. Уберите их в «Товарах», если больше не возите.`);
     } else {
@@ -311,7 +320,7 @@ function renderModelList() {
          <button class="iconbtn danger" data-mddel="${m.id}">🗑</button>`;
       return `<div class="admrow">
         <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
-          <small>${where}${off}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small></div>
+          <small>${where}${off}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вариантов: ${m.flavors.length}` : ""}</small></div>
         ${own}</div>`;
     }).join("");
   }
@@ -377,7 +386,7 @@ $("stockInSave").onclick = async () => {
     body.variants = [...document.querySelectorAll("#stockInFlavors .admrow")]
       .filter(row => row.querySelector(".sifchk").checked)
       .map(row => ({ flavor: row.dataset.flavor, stock: row.querySelector(".sifst").value || "0" }));
-    if (!body.variants.length) { alertMsg("Отметьте хотя бы один вкус."); return; }
+    if (!body.variants.length) { alertMsg(`Отметьте хотя бы одно значение: ${catVariant(stockInModel.category)}.`); return; }
   } else {
     body.stock = $("stockInStock").value.trim() || "0";
   }
@@ -486,7 +495,11 @@ function renderAdmFilters() {
 }
 $("admSearch").oninput = () => { admSearch = $("admSearch").value; renderAdminList(); };
 
-function openProducts() {
+async function openProducts() {
+  // Список читает shelf() — тот самый adminProducts, который заводит
+  // openAdmin(). Тап сразу после открытия хаба мог обогнать этот запрос
+  // и показать пустоту или прошлый визит; ждём тот же промис, а не свой.
+  if (_adminBoot) await _adminBoot;
   renderAdmFilters();
   renderAdminList();
   $("productsView").classList.add("show");
@@ -674,6 +687,9 @@ function delSpec(id) {
 }
 
 async function openBrands() {
+  // Список читает brands — тот же справочник, что заводит openAdmin();
+  // сам этот раздел его не перечитывает. См. openProducts().
+  if (_adminBoot) await _adminBoot;
   // «Во всех категориях» — первым: бренд обычно делает не одно, а всё сразу.
   $("brCat").innerHTML = `<option value="">Во всех категориях</option>`
     + CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
@@ -1318,6 +1334,8 @@ async function openSettings() {
       $("setWheelStep").value = d.settings.wheel_step ?? "";
       $("setRefBonus").value = d.settings.referral_bonus ?? "";
       $("setCompMax").value = d.settings.compensation_max ?? "";
+      $("setPayCash").checked = d.settings.pay_cash !== false;
+      $("setPayCard").checked = d.settings.pay_card !== false;
       coinValue = d.settings.coin_value || 0.01;
       renderGenerosity();
     }
@@ -1356,11 +1374,22 @@ $("setSave").onclick = async () => {
                  remind_after_days: $("setRemindDays").value, remind_daily_cap: $("setRemindCap").value,
                  coins_per_byn: $("setCashback").value, wheel_step: $("setWheelStep").value,
                  referral_bonus: $("setRefBonus").value,
-                 compensation_max: $("setCompMax").value };
+                 compensation_max: $("setCompMax").value,
+                 pay_cash: $("setPayCash").checked, pay_card: $("setPayCard").checked };
   $("setSave").disabled = true; $("setSave").textContent = "Сохраняю…";
   try {
     const d = await админПост("/api/admin/settings/update", body, "сохранить настройки");
-    if (d) показатьСохранённое(body, d.applied || {});
+    if (d) {
+      if (d.failed && (d.failed.pay || d.failed.payment_info)) {
+        // Отклонили («оба способа сразу нельзя» или пустые реквизиты) — поле
+        // осталось в том виде, как его натыкал человек. Перечитываем
+        // настройки заново, чтобы показать то, что реально лежит в базе, а
+        // не несохранённое — иначе экран покажет пустые реквизиты как
+        // сохранённые, хотя старые всё ещё действуют.
+        await openSettings();
+      }
+      показатьСохранённое(body, d.applied || {}, d.failed || {});
+    }
   } finally { $("setSave").disabled = false; $("setSave").textContent = "Сохранить"; }
 };
 
@@ -1368,6 +1397,8 @@ $("setSave").onclick = async () => {
 // ЧТО именно поправилось, а не «сохранено» вообще.
 const ПОЛЯ_НАСТРОЕК = {
   payment_info: ["setPay", "Реквизиты"],
+  pay_cash: ["setPayCash", "Оплата наличными"],
+  pay_card: ["setPayCard", "Оплата картой"],
   confirm_minutes: ["setConfirm", "Время подтверждения"],
   free_delivery_from: ["setFreeFrom", "Бесплатная доставка от"],
   remind_after_days: ["setRemindDays", "Напоминать через (дней)"],
@@ -1378,7 +1409,7 @@ const ПОЛЯ_НАСТРОЕК = {
   compensation_max: ["setCompMax", "Потолок компенсации"],
 };
 
-function показатьСохранённое(отправили, легло) {
+function показатьСохранённое(отправили, легло, отказы) {
   // Сервер прижимает значения к границам — и раньше делал это молча. Владелец
   // вводил кэшбэк 9999, читал «Сохранено ✅» и уходил уверенный, что так и
   // есть, хотя в базе лежала десятка. Показываем расхождение сразу и в полях,
@@ -1387,17 +1418,25 @@ function показатьСохранённое(отправили, легло) 
   for (const ключ in легло) {
     const [id, имя] = ПОЛЯ_НАСТРОЕК[ключ] || [];
     if (!id) continue;
-    const стало = String(легло[ключ]);
-    const было = String(отправили[ключ] ?? "").trim().replace(",", ".");
+    const стало = легло[ключ];
+    // Галочки сравниваем как есть (true/false), остальные поля — строками,
+    // с учётом запятой вместо точки в дробных.
+    const строкой = typeof стало !== "boolean";
+    const было = строкой ? String(отправили[ключ] ?? "").trim().replace(",", ".") : !!отправили[ключ];
     // Сравниваем числами, где это числа: «10» и «10.0» — одно и то же, и
     // ругаться на такое значило бы кричать по любому сохранению.
-    const одно = было === стало ||
-      (было !== "" && !isNaN(+было) && !isNaN(+стало) && +было === +стало);
-    if (!одно) поправлено.push(`${имя}: ${было || "пусто"} → ${стало}`);
+    const одно = !строкой ? было === стало
+      : (было === String(стало) || (было !== "" && !isNaN(+было) && !isNaN(+стало) && +было === +стало));
+    if (!одно) поправлено.push(`${имя}: ${строкой ? (было || "пусто") : (было ? "да" : "нет")} → ${строкой ? стало : (стало ? "да" : "нет")}`);
     const поле = $(id);
-    if (поле) поле.value = стало;      // в поле — то, что действительно легло
+    if (поле && поле.type === "checkbox") поле.checked = !!стало;
+    else if (поле) поле.value = стало;      // в поле — то, что действительно легло
   }
-  alertMsg(поправлено.length
+  const отказано = Object.values(отказы || {});
+  alertMsg(отказано.length
+    ? "Не всё сохранилось:\n\n" + отказано.join("\n")
+      + (поправлено.length ? "\n\nПоправлено под допустимые границы:\n" + поправлено.join("\n") : "")
+    : поправлено.length
     ? "Сохранено, но часть значений поправлена под допустимые границы:\n\n"
       + поправлено.join("\n")
     : "Сохранено ✅");
@@ -1726,7 +1765,7 @@ $("logClose").onclick = () => $("logView").classList.remove("show");
 // «удалил товар», «настройки магазина».
 const LOG_NAMES = {
   "product/update": "изменил товар", "product/delete": "удалил товар с точки",
-  "product/variants": "изменил вкусы", "product/specs": "изменил характеристики",
+  "product/variants": "изменил варианты", "product/specs": "изменил характеристики",
   "product/from-model": "завёз на точку", "product": "добавил товар",
   "stock/move": "движение склада", "order/status": "статус заказа",
   "model": "изменил модель", "model/delete": "удалил модель",

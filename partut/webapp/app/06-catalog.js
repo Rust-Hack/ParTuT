@@ -42,8 +42,11 @@ $("brSave").onclick = async () => {
       return;
     }
     resetBrandForm();
-    await fetchBrands(); await fetchFlavors(); renderKnownFlavors();
-    await refreshAll();           // переименование бренда переносит и товары, и вкусы
+    // fetchFlavors() отдельно не зовём — refreshAll() его и так перечитывает
+    // (товары, категории, точки, вкусы разом); fetchBrands() он не трогает,
+    // поэтому идёт параллельно, а не третьим ожиданием подряд.
+    await Promise.all([fetchBrands(), refreshAll()]);   // переименование бренда переносит и товары, и вкусы
+    renderKnownFlavors();
     renderBrandList();
     alertMsg(d.moved ? `Бренд сохранён ✅ Товаров перенесено: ${d.moved}` : "Бренд сохранён ✅");
   } catch (e) { alertMsg(текстСбоя(e)); }
@@ -474,7 +477,7 @@ function renderStockPick() {
       : (стоит.length ? `<small>уже: ${стоит.map(p => esc(p.city)).join(", ")}</small>` : "");
     return `<div class="admrow" data-pick="${m.id}">
       <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
-        <small>${esc(catName(m.category))}${m.flavors.length ? ` · вкусов: ${m.flavors.length}` : ""}</small>${уже}</div>
+        <small>${esc(catName(m.category))}${m.flavors.length ? ` · вариантов: ${m.flavors.length}` : ""}</small>${уже}</div>
       <span style="color:var(--hint)">›</span></div>`;
   }).join("");
   $("stockPickList").querySelectorAll("[data-pick]").forEach(b => b.onclick = () => {
@@ -539,12 +542,13 @@ function renderAdminList() {
 }
 
 // ----- Редактор товара -----
-let editId = null, editVariants = [], editPhotoFile = null;
+let editId = null, editVariants = [], editPhotoFile = null, editCategory = null;
 $("editClose").onclick = () => $("editView").classList.remove("show");
 
 function openEdit(id) {
   const p = shelf().find(x => x.id === id); if (!p) return;
   editId = id;
+  editCategory = p.category;
   editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock }));
   editPhotoFile = null;
   // id > 0 — только дополнительные: главное фото меняется отдельным полем выше.
@@ -793,7 +797,7 @@ async function сделатьМоделью(p) {
     body: JSON.stringify({ initData, id: p.id }) });
   const d = await r.json().catch(() => ({}));
   if (!d.ok) { alertMsg(d.message || "Не удалось сделать моделью."); return; }
-  await refreshProducts(); await fetchModels();
+  await Promise.all([refreshProducts(), fetchModels()]);   // независимы — не ждём по очереди
   // Открываем карточку заново: теперь у товара есть модель, и в ней появится
   // блок точек. Показать это сразу важнее, чем сэкономить одну перерисовку.
   openEdit(p.id);
@@ -836,7 +840,7 @@ function renderEditPoints(p, md) {
           <div><label>Закупка (Br)</label><input class="pcost" inputmode="decimal" value="${p.cost || ""}"></div>
         </div>
         ${вкусы.length
-          ? `<label>Какие из вкусов есть на точке «${esc(имя)}»</label><div class="pflavors"></div>`
+          ? `<label>Какие варианты есть на точке «${esc(имя)}»</label><div class="pflavors"></div>`
           : `<label>Остаток (шт.)</label>${qtyHtml(0, 'class="pstock"')}`}
       </div></div>`;
   }).join("") || `<p style="color:var(--hint)">Точек продаж пока нет.</p>`;
@@ -903,7 +907,7 @@ function renderEditVariants() {
     ? editVariants.map((v, i) => `<div class="admrow"><div class="an">${esc(v.flavor)}</div>
         ${qtyHtml(v.stock, `class="edvst" data-i="${i}"`)}
         <button class="iconbtn danger" data-vdel="${i}">✕</button></div>`).join("")
-    : `<p style="color:var(--hint)">Нет вкусов — добавьте ниже.</p>`;
+    : `<p style="color:var(--hint)">Нет значений «${esc(catVariant(editCategory))}» — добавьте ниже.</p>`;
   $("edVarList").querySelectorAll(".edvst").forEach(inp => inp.oninput = () => { editVariants[+inp.dataset.i].stock = inp.value; });
   bindQty($("edVarList"));
   $("edVarList").querySelectorAll("[data-vdel]").forEach(b => b.onclick = () => { editVariants.splice(+b.dataset.vdel, 1); renderEditVariants(); });
@@ -930,7 +934,7 @@ async function применитьТочки(p, убрать) {
     // Закупку требуем так же, как на отдельном экране: незаполненная навсегда
     // выбрасывает товар из подсчёта прибыли, и отчёт занижает заработок молча.
     if (!т.cost) { беды.push(`${т.city}: не указана закупка (если её не было — поставьте 0)`); continue; }
-    if (т.variants && !т.variants.length) { беды.push(`${т.city}: не отмечен ни один вкус`); continue; }
+    if (т.variants && !т.variants.length) { беды.push(`${т.city}: не отмечено ни одно значение «${catVariant(p.category)}»`); continue; }
     const тело = { initData, model_id: p.model_id, city: т.city,
                    price: т.price, cost: т.cost, is_hit: 0 };
     if (т.variants) тело.variants = т.variants; else тело.stock = т.stock;
@@ -1047,8 +1051,8 @@ async function saveEdit(p) {
       upd("cost", $("edCost").value || 0, "закупка");
       if (isVar) {
         const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
-        if (!variants.length) { alertMsg("Оставьте хотя бы один вкус."); return; }
-        await послать("/api/admin/product/variants", { initData, id: editId, variants }, "вкусы");
+        if (!variants.length) { alertMsg(`Оставьте хотя бы одно значение: ${catVariant(p.category)}.`); return; }
+        await послать("/api/admin/product/variants", { initData, id: editId, variants }, catVariantMany(p.category).toLowerCase());
       } else {
         upd("stock", $("edStock").value, "остаток");
       }
@@ -1076,14 +1080,14 @@ async function saveEdit(p) {
     const specs = collectSpecs("edSpecs");
     if (isVar) {
       const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
-      if (!variants.length) { alertMsg("Оставьте хотя бы один вкус."); return; }
+      if (!variants.length) { alertMsg(`Оставьте хотя бы одно значение: ${catVariant(p.category)}.`); return; }
       // У одноразок число затяжек — часть названия модели («Elf Bar 6000»).
       const name = (p.category === "disposable" && specs.volume)
         ? [p.brand, specs.volume].filter(x => x && x !== "0").join(" ") : (p.brand || p.name);
       upd("price", $("edPrice").value, "цена");
       upd("cost", $("edCost").value || 0, "закупка");
       if (name) upd("name", name, "название");
-      await послать("/api/admin/product/variants", { initData, id: editId, variants }, "вкусы");
+      await послать("/api/admin/product/variants", { initData, id: editId, variants }, catVariantMany(p.category).toLowerCase());
     } else {
       const nm = $("edName").value.trim();
       if (!nm) { alertMsg("Введите название."); return; }
