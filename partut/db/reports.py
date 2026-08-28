@@ -17,6 +17,7 @@ import datetime
 import json
 
 from partut import db
+from partut import money
 
 
 def inc_stat(key, delta=1):
@@ -114,35 +115,20 @@ def get_business_stats(days=None):
     revenue_unknown = 0.0   # выручка там, где закупочная цена не заполнена
     for r in cur.fetchall():
         try:
-            items = json.loads(r["items"])
-            # Монеты и промокод — это НЕ подарок покупателю за наш счёт «где-то
-            # там», а прямой вычет из денег за этот заказ. Раньше прибыль
-            # считалась по ценникам, будто скидки не было: заказ на 25.77 при
-            # закупке 22 показывал прибыль 14 вместо 3.77 — и по таким числам
-            # принимались решения о закупке.
-            paid_for_goods = sum(float(i.get("price", 0) or 0) * int(i.get("qty", 0)) for i in items)
-            given = round(int(r["coins_used"] or 0) * db.COIN_VALUE + float(r["promo_discount"] or 0), 2)
-            given = min(given, paid_for_goods)
-            for it in items:
-                nm = it.get("name", "?")
-                q = int(it.get("qty", 0))
-                price = float(it.get("price", 0) or 0)
-                cost = float(it.get("cost", 0) or 0)
-                line = q * price
-                # Скидка ложится на позиции пропорционально их доле в заказе.
-                off = (line / paid_for_goods * given) if paid_for_goods else 0.0
-                qty_by_name[nm] = qty_by_name.get(nm, 0) + q
-                rev_by_name[nm] = rev_by_name.get(nm, 0) + line - off
-                # Нулевая закупочная цена — это «не заполнено», а не «досталось
-                # даром». Считать её прибылью значит рисовать себе доход,
-                # которого нет, поэтому такие позиции идут отдельной строкой.
-                if cost > 0:
-                    earned = line - off - q * cost
-                    profit += earned
-                    revenue_known += line - off
-                    profit_by_name[nm] = profit_by_name.get(nm, 0) + earned
+            # Как скидка ложится на позиции — правило одно на всех, оно в
+            # partut/money.py. Выгрузка в файл считает тем же кодом, иначе
+            # файл и экран однажды разойдутся в числах.
+            for стр in money.разложить_заказ(json.loads(r["items"]), r["coins_used"],
+                                             r["promo_discount"], db.COIN_VALUE):
+                nm = стр["name"]
+                qty_by_name[nm] = qty_by_name.get(nm, 0) + стр["qty"]
+                rev_by_name[nm] = rev_by_name.get(nm, 0) + стр["revenue"]
+                if стр["profit"] is None:
+                    revenue_unknown += стр["revenue"]
                 else:
-                    revenue_unknown += line - off
+                    profit += стр["profit"]
+                    revenue_known += стр["revenue"]
+                    profit_by_name[nm] = profit_by_name.get(nm, 0) + стр["profit"]
         except (TypeError, ValueError):
             pass
     top = [{"name": n, "qty": q, "revenue": round(rev_by_name.get(n, 0), 2),
@@ -269,3 +255,27 @@ def also_bought(top=5, scan=500, min_count=2):
         if best:
             out[a] = best
     return out
+
+
+def orders_for_export(days=None):
+    """Сырые заказы за период — для выгрузки в файл. days=None → всё время.
+
+    Отдаём ВСЕ заказы, а не только выданные, и статус кладём столбцом. Выгрузка
+    из одних выданных выглядела бы аккуратнее, но скрывала бы отказы — а это
+    ровно то, ради чего в файл и лезут: почему заказ не дошёл до выдачи.
+    Сумма по строкам «Выдан» при этом сходится с выручкой на экране.
+
+    Сортировка по дате, а не по id: в файле человек читает историю, а не
+    внутренние номера.
+    """
+    now = db.shop_now()
+    cutoff = (now - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00") if days else None
+    conn = db.connect()
+    cur = conn.cursor()
+    поля = ("id, created_at, city, status, username, user_id, items, total, "
+            "coins_used, promo_code, promo_discount, delivery_method, delivery_fee, payment_method")
+    if cutoff:
+        cur.execute(db._q(f"SELECT {поля} FROM orders WHERE created_at >= %s ORDER BY created_at, id"), (cutoff,))
+    else:
+        cur.execute(f"SELECT {поля} FROM orders ORDER BY created_at, id")
+    return [dict(r) for r in cur.fetchall()]

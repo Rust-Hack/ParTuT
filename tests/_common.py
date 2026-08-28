@@ -110,7 +110,20 @@ tgsend.tg.send_photo = _send_photo
 
 
 def _send_document(cid, *a, **kw):
+    # Файл кладём целиком: выгрузку проверяют по содержимому, а не по факту
+    # отправки. a[0] — файловый объект, каким его получает Telegram.
+    тело = a[0].read() if a and hasattr(a[0], "read") else b""
     SENT.append((cid, kw.get("caption", ""), kw.get("parse_mode")))
+    ДОКУМЕНТЫ.append((cid, getattr(a[0], "name", "") if a else "", тело))
+
+
+ДОКУМЕНТЫ = []       # (chat_id, имя файла, байты) — что ушло документом
+
+
+# Заглушка нужна ОБОИМ экземплярам бота. tgsend.tg — тот, через который шлёт
+# веб-сервер: без подмены выгрузка статистики в тестах ушла бы в настоящий
+# Telegram с боевым токеном из .env.
+tgsend.tg.send_document = _send_document
 
 
 # У бота СВОЙ экземпляр telebot, и заглушки tgsend.tg его не покрывают: без

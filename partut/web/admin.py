@@ -13,14 +13,18 @@ partut/web/admin.py — экран владельца: настройки маг
 Помощники берутся ЧЕРЕЗ модуль (auth.get_admin(), auth._super()).
 """
 
+import io
+
 from flask import Blueprint, jsonify, request
 
 from partut import cache
 from partut.web import auth
 from partut import db
+from partut import export
+from partut.integrations import tgsend
 from partut.web import shopinfo
 from partut import inputs
-from partut.config import CONFIRM_MINUTES, PAYMENT_INFO, is_super_admin
+from partut.config import CITIES, CONFIRM_MINUTES, PAYMENT_INFO, is_super_admin
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.
@@ -71,6 +75,60 @@ def api_admin_stats():
         print(f"Не удалось посчитать списания: {e}")
     cache.put(f"stats:{period}", stats, 60)
     return jsonify({"ok": True, "stats": stats})
+
+
+ПЕРИОД_СЛОВАМИ = {"today": "за сегодня", "7d": "за 7 дней", "30d": "за 30 дней", "all": "за всё время"}
+
+
+@bp.route("/api/admin/stats/export", methods=["POST"])
+def api_admin_stats_export():
+    """Выгрузка заказов в CSV. Файл приходит документом в чат с ботом.
+
+    Почему не ссылкой на скачивание: приложение живёт внутри Telegram, а это
+    браузер в браузере — скачивание там то работает, то молча не делает ничего,
+    и человек остаётся без файла и без объяснения. Документ в чате доходит
+    всегда и заодно сам себе история выгрузок.
+
+    Почему отправка НЕ в фоне, хотя всё остальное в этом магазине — в фоне.
+    Фон означает «ответим сразу, отправим потом», то есть кнопка обязана
+    сказать «готово» ещё до того, как что-то доставлено. Не примет Telegram
+    документ — человек прочитает «Готово ✅» и останется без файла, а искать
+    будет в чате. Здесь мы ждём настоящий ответ и говорим то, что случилось:
+    кнопку эту нажимают раз в месяц, лишняя секунда её не портит. Уведомления
+    о заказах — другое дело, там на другом конце покупатель и касса.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    period = inputs._text(data.get("period")) or "30d"
+    days = PERIOD_DAYS.get(period, 30)
+    orders = db.orders_for_export(days)
+    if not orders:
+        # Пустой файл выглядел бы как поломка выгрузки. Лучше сказать словами.
+        return jsonify({"ok": False, "error": "empty",
+                        "message": "За этот период заказов нет — выгружать нечего."}), 400
+
+    текст = export.csv_заказов(orders, shopinfo.COIN_VALUE, CITIES)
+    имя = f"partut-{period}-{db.shop_now().strftime('%Y-%m-%d')}.csv"
+    подпись = (f"📊 Заказы {ПЕРИОД_СЛОВАМИ.get(period, period)} — {len(orders)} шт.\n\n"
+               "Строка на каждую позицию. Чтобы получить выручку как на экране, "
+               "оставьте фильтром статус «Выдан» и сложите столбец «Выручка».\n"
+               "Прочерк в прибыли — не ноль, а «закупочная цена не заполнена».")
+    файл = io.BytesIO(export.в_файл(текст))
+    файл.name = имя
+    try:
+        tgsend.tg.send_document(int(admin["id"]), файл, caption=подпись)
+    except Exception as e:
+        print(f"Не смог отправить выгрузку админу {admin['id']}: {e}")
+        # Самая частая причина — бот не может писать первым тому, кто ни разу
+        # не открывал с ним чат. Совет «попробуйте ещё раз» тут не помогает
+        # никогда, поэтому говорим, что делать.
+        return jsonify({"ok": False, "error": "send_failed",
+                        "message": "Файл собран, но не ушёл в чат. Откройте чат с ботом, "
+                                   "напишите ему /start и повторите."}), 502
+    return jsonify({"ok": True, "rows": len(orders), "file": имя})
 
 
 @bp.route("/api/admin/stats/reset", methods=["POST"])

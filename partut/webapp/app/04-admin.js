@@ -814,9 +814,25 @@ async function loadStats() {
     <div class="statlist">${gamesRows(s.games || {})}</div>
     <div class="stathead">📦 Склад <span class="stathint">пополни, чтобы не терять продажи</span></div>
     <div class="statlist">${stockRows}</div>
+    <button class="closebtn" id="exportStats" style="margin-top:18px">📄 Выгрузить заказы в файл</button>
+    <div class="dnote" style="margin:6px 0 0">Придёт документом в чат с ботом — за выбранный период, строка на каждую позицию. Открывается в Excel.</div>
     ${(me && me.is_super) ? `<button class="closebtn" id="resetStats" style="color:var(--danger);margin-top:18px">🧹 Сбросить статистику (тестовые данные)</button>` : ""}`;
   bindPeriodBtns();
+  if ($("exportStats")) $("exportStats").onclick = exportStats;
   if ($("resetStats")) $("resetStats").onclick = resetStats;
+}
+// Файл уходит в чат, а не скачивается: внутри Telegram скачивание то работает,
+// то молча не делает ничего. Поэтому и текст кнопки обещает чат, а не «Скачать».
+async function exportStats() {
+  const b = $("exportStats");
+  b.disabled = true; b.textContent = "Готовлю файл…";
+  try {
+    const r = await fetch("/api/admin/stats/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, period: statsPeriod }) });
+    const d = await r.json();
+    if (d.ok) alertMsg(`Готово ✅ ${d.rows} ${plural(d.rows, "заказ", "заказа", "заказов")} — файл придёт в чат с ботом.`);
+    else alertMsg(d.message || "Не удалось выгрузить.");
+  } catch (e) { alertMsg(текстСбоя(e)); }
+  finally { b.disabled = false; b.textContent = "📄 Выгрузить заказы в файл"; }
 }
 function resetStats() {
   const go = async () => {

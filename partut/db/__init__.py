@@ -2508,6 +2508,7 @@ from partut.db.shop import (                                            # noqa: 
 # Выручка, прибыль, движение монет, «что берут вместе» — в partut/db/reports.py.
 from partut.db.reports import (                                         # noqa: E402
     inc_stat, reset_statistics, get_business_stats, coin_flow, also_bought,  # noqa: F401
+    orders_for_export,                                                   # noqa: F401
 )
 
 
