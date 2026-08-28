@@ -1166,7 +1166,10 @@ async function loadAllUsers() {
     const r = await fetch("/api/admin/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, search: q }) });
     const d = await r.json();
     if (!d.ok) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Не удалось загрузить.</div>`; return; }
-    $("allUsersCount").textContent = d.total;
+    // При поиске в скобках стояло общее число людей в базе: «Все пользователи (28)»
+    // над списком из трёх, а то и над «Ничего не найдено». Формально не враньё,
+    // но читается как «нашлось 28». Ищут — показываем сколько нашлось.
+    $("allUsersCount").textContent = q ? `${d.shown} из ${d.total}` : d.total;
     if (!d.users.length) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Ничего не найдено.</div>`; return; }
     _usersById = {};
     d.users.forEach(u => { _usersById[u.id] = u; });
