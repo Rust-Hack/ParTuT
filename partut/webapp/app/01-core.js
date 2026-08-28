@@ -737,6 +737,7 @@ async function notifyMe(id) {
     if (!d.ok) { alertMsg("Не получилось. Попробуйте позже."); return; }
     if (d.in_stock) { alertMsg("Товар уже в наличии — можно заказывать."); await loadProducts(); return; }
     stockAlerts.add(id);
+    updateAlertsBadge();
     renderGrid(); renderFavs();
     if (currentProductId === id) renderProduct();
     alertMsg("Сообщим, как только появится 🔔");
@@ -965,8 +966,13 @@ function renderProfile() {
   const letter = (name[0] || "Г").toUpperCase();
   const dark = currentTheme() === "dark";
   $("tab-profile").innerHTML = `<div class="prof">
+    <!-- ID кликабелен и копирует себя: раньше та же кнопка стояла ещё раз в
+         самом низу «Моих настроек» — тот же номер, два места. Нужен он
+         обычно в разговоре с продавцом по телефону, а не когда человек
+         зачем-то листает настройки; здесь он на виду с самого входа. -->
     <div class="profcard"><div class="avatar">${esc(letter)}</div>
-      <div><div class="pn">${esc(name)}</div><div class="pid">ID: ${(tgUser && tgUser.id) || "—"}</div></div>
+      <div><div class="pn">${esc(name)}</div>
+        <button class="pid" id="profIdCopy" style="border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer">ID: ${(tgUser && tgUser.id) || "—"} ⧉</button></div>
       <div class="coins"><b>${bonus.coins || 0}</b><small>VAPECOINS</small></div></div>
     <div class="plist">
       ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>` : ""}
@@ -976,6 +982,7 @@ function renderProfile() {
       <div class="prow"><span>${dark ? "🌙 Тёмная тема" : "☀️ Светлая тема"}</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
       <div class="prow" id="openMySettings"><span>⚙️ Мои настройки</span><span>›</span></div>
       <div class="prow" id="openMyOrders"><span>📦 Мои заказы</span><span>›</span></div>
+      <div class="prow" id="openMyAlerts"><span>🔔 Жду поступления <b id="alertsBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
       <div class="prow" id="openRules"><span>📖 Как всё устроено</span><span>›</span></div>
       <div class="prow" id="openSupport"><span>💬 Написать в поддержку</span><span>›</span></div>
     </div></div>`;
@@ -983,8 +990,16 @@ function renderProfile() {
   $("openMySettings").onclick = openMySettings;
   if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
   $("openMyOrders").onclick = openMyOrders;
+  $("openMyAlerts").onclick = openMyAlerts;
   $("openRules").onclick = openRules;
   $("openSupport").onclick = () => openSupport();
+  $("profIdCopy").onclick = copyMyId;
+  updateAlertsBadge();
+}
+
+function updateAlertsBadge() {
+  const b = $("alertsBadge"); if (!b) return;
+  b.textContent = stockAlerts.size; b.style.display = stockAlerts.size ? "" : "none";
 }
 // ----- Настройки покупателя -----
 // Точка, телефон и напоминания задаются один раз здесь и подставляются в
@@ -1267,8 +1282,6 @@ async function openMySettings() {
   $("myPhone").value = (me && me.prefill && me.prefill.phone) || "";
   $("myRemind").classList.toggle("on", remindersOn);
   $("myPoints").innerHTML = `<p style="color:var(--hint);font-size:13px;margin:0">Загрузка…</p>`;
-  $("myIdVal").textContent = (tgUser && tgUser.id) || "—";
-  renderMyAlerts();
   renderMyCities();
   try {
     const r = await fetch("/api/my-points");
@@ -1277,13 +1290,19 @@ async function openMySettings() {
   renderMyPoints();
 }
 
-$("myIdCopy").onclick = async () => {
+async function copyMyId() {
   const id = (tgUser && tgUser.id) || "";
   if (!id) return;
   const ok = await copyText(id);
   haptic("impact", "light");
   if (ok) toast("ID скопирован ✓");
-};
+}
+
+$("myAlertsClose").onclick = () => $("myAlertsView").classList.remove("show");
+function openMyAlerts() {
+  $("myAlertsView").classList.add("show");
+  renderMyAlerts();
+}
 
 // Список «жду поступления». Названия берём с витрины; если товар с неё убрали,
 // показываем номер — отписаться человек должен уметь в любом случае.
@@ -1310,6 +1329,7 @@ async function stopWaiting(id) {
     const d = await r.json();
     if (!d.ok) { alertMsg("Не удалось отписаться."); return; }
     stockAlerts.delete(id);
+    updateAlertsBadge();
     renderMyAlerts();
     renderGrid();          // на витрине кнопка снова станет «сообщить о поступлении»
     toast("Больше не ждём ✓");

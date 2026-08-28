@@ -217,6 +217,9 @@ html[data-theme="dark"] .ucard { border: 1px solid rgba(95,242,242,.20); box-sha
 .avatar { width: 60px; height: 60px; border-radius: 50%; background: #b06fe6; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 700; }
 .profcard .pn { font-weight: 800; font-size: 17px; }
 .profcard .pid { color: var(--hint); font-size: 13px; margin-top: 2px; }
+/* ID теперь и кнопка копирования: сброс браузерного вида кнопки, размер и
+   цвет остаются от .pid выше — тут только то, что отличает button от div. */
+.profcard button.pid { border: 0; background: none; padding: 0; font-family: inherit; cursor: pointer; }
 .coins { margin-left: auto; text-align: center; background: var(--surface-2); border-radius: 14px; padding: 10px 14px; }
 .coins b { font-size: 18px; } .coins small { color: var(--hint); font-size: 11px; display: block; }
 .plist { margin-top: 12px; }

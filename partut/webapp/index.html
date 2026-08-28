@@ -260,6 +260,9 @@
     <div class="prow" id="mLocations"><span>📍 Локации (точки продаж)</span><span>›</span></div>
     <div class="prow" id="mSettings"><span>💳 Настройки магазина</span><span>›</span></div>
     <div class="prow" id="mDocs" style="display:none"><span>📄 Оферта и обработка данных</span><span>›</span></div>
+
+    <!-- Отдельно от «как устроен магазин»: это «кто и что делал», не настройка. -->
+    <div class="mgroup" id="gAccess">Доступ и журнал</div>
     <div class="prow" id="mStaff" style="display:none"><span>🔑 Доступ продавцов</span><span>›</span></div>
     <div class="prow" id="mLog" style="display:none"><span>🧾 Журнал действий</span><span>›</span></div>
   </div>
@@ -342,17 +345,6 @@
            Без черты это читалось как часть формы выше. -->
       <div style="border-top:1px solid var(--line);margin:24px 0 0"></div>
 
-      <!-- Подписка «сообщите, когда появится» ставилась одним нажатием, а снять
-           её было негде: единственным способом отказаться было заблокировать бота. -->
-      <label style="margin-top:18px">Жду поступления</label>
-      <div id="myAlerts"></div>
-
-      <label style="margin-top:22px">Ваш ID</label>
-      <button class="creq" id="myIdCopy" style="margin:0"><span class="cl"><b id="myIdVal">—</b></span><span class="ci">⧉</span></button>
-      <div class="dnote" style="margin:6px 0 0">Назовите его продавцу, если нужно найти вас или ваш заказ.</div>
-
-      <div style="border-top:1px solid var(--line);margin:24px 0 0"></div>
-
       <!-- Что магазин о человеке знает — простыми словами и рядом с полями,
            которые он только что заполнил. Это не заменяет политику обработки
            данных, но отвечает на вопрос тогда, когда он возникает. -->
@@ -364,6 +356,18 @@
       <button class="creq" id="myDocs" style="margin:14px 0 0">
         <span class="cl">📄 Оферта и обработка данных</span><span class="ci">›</span></button>
     </div>
+  </div>
+
+  <!-- Раздел: жду поступления.
+       Раньше жил внутри «Моих настроек», ниже телефона и напоминаний — не
+       настройка, а живой список с действием («не ждать»), и туда никто не
+       проматывал специально. Своя строка в профиле с бейджем-счётчиком —
+       как «Мои заказы»: видно сразу, что чего-то ждут, а не узнают об этом
+       случайно при следующей покупке. -->
+  <div class="view" id="myAlertsView">
+    <div class="viewhead"><h2>🔔 Жду поступления</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="myAlertsClose">‹ Назад</button></div>
+    <div class="card-block"><div id="myAlerts"></div></div>
   </div>
 
   <!-- Раздел: документы магазина.

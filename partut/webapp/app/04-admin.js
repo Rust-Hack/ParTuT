@@ -48,7 +48,7 @@ function applyAdminScope() {
   // Ассортимент продавцу нужен: оттуда он завозит модель на свою точку.
   // Заводить и править модели там он не сможет — это прячется внутри.
   ["mBrands", "mCats", "gShop", "mStats", "mReferrals", "mPromos", "mRaffle",
-   "gSetup", "mLocations", "mSettings"].forEach(id => {
+   "gSetup", "mLocations", "mSettings", "gAccess"].forEach(id => {
     const el = $(id); if (el) el.style.display = shopWide ? "" : "none";
   });
   const head = document.querySelector("#adminView .viewhead h2");
