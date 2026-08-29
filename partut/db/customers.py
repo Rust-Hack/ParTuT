@@ -221,15 +221,20 @@ def add_ref_earned(user_id, n):
     conn.close()
 
 
-def reward_referrer_for_order(buyer_id, order_total):
+def reward_referrer_for_order(buyer_id, subtotal):
     """Начисляет пригласившему % от заказа + фикс за первый заказ друга.
+
+    subtotal — стоимость ТОЛЬКО товаров, без доставки: та же база, что у
+    кэшбэка (coins_per_byn) и прогресса колеса, чтобы процент рефералу не
+    считался щедрее из-за доставки, за которую магазин ничего не заработал.
+
     Возвращает dict {referrer, percent, pct_coins, first, bonus, earned} или None."""
     row = get_user_row(buyer_id)
     if not row or not row["referred_by"]:
         return None
     ref = row["referred_by"]
     percent = ref_percent(count_active_referrals(ref))
-    pct_coins = round((order_total or 0) * percent)   # X Br * p% = X*p монет (1 Br = 100 монет)
+    pct_coins = round((subtotal or 0) * percent)   # X Br * p% = X*p монет (1 Br = 100 монет)
     first = not row["ref_activated"]
     earned = 0
     if pct_coins > 0:

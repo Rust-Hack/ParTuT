@@ -480,9 +480,14 @@ def _client_order_summary(order_id):
     return "\n".join(lines)
 
 
-def _reward_referrer(buyer_id, order_total):
-    """Начислить пригласившему % от заказа + бонус за первый заказ, уведомить его."""
-    rr = db.reward_referrer_for_order(buyer_id, order_total)
+def _reward_referrer(buyer_id, subtotal):
+    """Начислить пригласившему % от заказа + бонус за первый заказ, уведомить его.
+
+    subtotal — стоимость ТОЛЬКО товаров, без доставки (та же база, что у
+    кэшбэка и прогресса колеса): раньше здесь брали полный order["total"]
+    (с доставкой), и процент выходил выше, чем везде остальном в магазине,
+    без единой причины для этого отличия."""
+    rr = db.reward_referrer_for_order(buyer_id, subtotal)
     if rr and rr["earned"] > 0:
         extra = f" (+{rr['bonus']} 🪙 за первый заказ друга)" if rr["first"] else ""
         tgsend.notify_client(rr["referrer"], f"🎉 Ваш реферал сделал заказ! +{rr['earned']} 🪙{extra}")
@@ -646,7 +651,7 @@ def api_admin_order_status():
         # Прогресс колеса — от потраченного на ТОВАРЫ (без доставки), как и кэшбэк:
         # платить призами за дорогу магазину незачем.
         db.add_wheel_progress(client_id, _order_subtotal(order))
-        _reward_referrer(client_id, order["total"])   # % и бонус пригласившему
+        _reward_referrer(client_id, _order_subtotal(order))   # % и бонус пригласившему — та же база, что у кэшбэка
         tgsend.bg(tgsend.notify_client, client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
         if not db.cancel_order(oid, OPEN):          # атомарно: canceled + возврат склада/монет

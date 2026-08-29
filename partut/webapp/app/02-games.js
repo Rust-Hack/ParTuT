@@ -436,7 +436,10 @@ function referralHtml() {
     ? `<button class="bigbtn" id="refShare">Пригласить друга</button>
        <button class="closebtn" id="refCopy">Скопировать ссылку</button>`
     : `<p style="color:var(--hint)">Ссылка появится чуть позже.</p>`;
-  const tierBar = [2, 3, 4, 5].map(t => `<div class="rtier ${(bonus.ref_percent || 2) >= t ? 'on' : ''}">${t}%</div>`).join("");
+  // Проценты — с сервера (bonus.ref_tiers), а не свои числа в JS: сервер уже
+  // отдаёт их и для экрана правил, здесь раньше был свой дубль [2,3,4,5].
+  const tierBar = (bonus.ref_tiers || []).map(t => t.percent)
+    .map(t => `<div class="rtier ${(bonus.ref_percent || 2) >= t ? 'on' : ''}">${t}%</div>`).join("");
   const nextLine = bonus.next_need
     ? `Ещё <b>${bonus.next_need}</b> ${plural(bonus.next_need, "активный реферал", "активных реферала", "активных рефералов")} — и вы будете получать <b>${bonus.next_percent}%</b>`
     : "Максимальный процент достигнут 🎉";

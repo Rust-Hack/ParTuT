@@ -58,6 +58,9 @@ def api_bonus():
                     "next_percent": next_pct,
                     "referrals_list": st["referrals_list"],
                     "ref_link": link,
+                    # Ступени процента — с сервера, а не дублировать числа в JS:
+                    # поменяются REFERRAL_TIERS в коде, полоска на экране не отстанет.
+                    "ref_tiers": [{"from": м, "percent": п} for м, п in sorted(db.REFERRAL_TIERS)],
                     "referral_bonus": db.referral_bonus(),
                     "coin_value": shopinfo.COIN_VALUE})
 
