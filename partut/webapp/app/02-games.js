@@ -264,12 +264,22 @@ async function spinSlot() {
   const stage = document.querySelector(".slot3"); if (stage) stage.classList.remove("win");
   [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) [...s.children].forEach(ch => ch.classList.remove("hit")); });
   haptic("impact", "medium");
-  // 1) Сначала результат (быстрый запрос), затем — единый плавный прокрут.
+  // Крутим СРАЗУ, не дожидаясь сети: колесо (spinWheel) уже так делает, а слот
+  // раньше стоял неподвижным барабаном, пока ответ шёл до Render и обратно —
+  // на живой сети это заметная пауза, и тап ощущался как «не сработал».
+  [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) s.classList.add("blur", "spinning"); });
+  // 1) Параллельно с этим — результат (быстрый запрос).
   let res;
   try {
     const r = await fetch("/api/slot/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, bet: slotBet }) });
     res = await r.json();
-  } catch (e) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(текстСбоя(e)); return; }
+  } catch (e) {
+    slotSpinning = false; $("slotBtn").disabled = false;
+    [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) s.classList.remove("spinning"); });
+    alertMsg(текстСбоя(e)); return;
+  }
+  // Плейсхолдер-прокрут снят — дальше барабаны ведёт настоящий результат.
+  [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) s.classList.remove("spinning"); });
   if (!res.ok) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
   bonus.coins = res.balance;
   const isWin = !!res.win;
@@ -351,8 +361,13 @@ function renderRaffle() {
     // лично, остальные участники иначе не узнают ничего.
     if (raffleDone) {
       const d = raffleDone;
+      // Своя картинка у места, а не общая на весь розыгрыш: победитель видит
+      // ровно то, что выиграл.
       const wins = (d.winners || []).length
-        ? d.winners.map(w => `<div class="statrow"><span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${esc(w.who)}</span><b>${esc(w.prize)}</b></div>`).join("")
+        ? d.winners.map(w => `<div class="statrow"><span style="display:flex;align-items:center;gap:8px">
+            ${w.photo ? `<img src="/api/photo?file_id=${encodeURIComponent(w.photo)}" alt=""
+                              style="width:32px;height:32px;border-radius:8px;object-fit:cover;flex:none">` : ""}
+            ${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${esc(w.who)}</span><b>${esc(w.prize)}</b></div>`).join("")
         : `<p style="color:var(--hint);font-size:14px;margin:0">Участников не набралось.</p>`;
       // Участники — наравне с победителями: розыгрыш, где видно только
       // троих счастливчиков, выглядит как розыгрыш без свидетелей.
@@ -361,11 +376,7 @@ function renderRaffle() {
              <div style="font-weight:800;margin-bottom:6px">👥 Участвовали · ${d.participants_count}</div>
              <div class="fltchips">${d.participants.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div></div>`
         : "";
-      const фото = d.photo
-        ? `<img src="/api/photo?file_id=${encodeURIComponent(d.photo)}" alt="приз"
-                style="width:100%;border-radius:14px;margin-bottom:12px">` : "";
       $("raffleWrap").innerHTML = `<div class="card-block" style="text-align:left">
-        ${фото}
         <div style="font-weight:800;font-size:17px;margin-bottom:4px">🏁 ${esc(d.title)} — итоги</div>
         <div style="color:var(--hint);font-size:13px;margin-bottom:12px">Розыгрыш завершён ${whenRu(d.finished_at)}</div>
         ${wins}
@@ -376,9 +387,16 @@ function renderRaffle() {
     return;
   }
   const r = raffle;
+  // Своя картинка у каждого места: 1-2 обычно вещь, 3-е чаще монеты, но и оно
+  // бывает вещью — общая картинка на весь розыгрыш подписывала бы любое место
+  // одной и той же вещью.
   const prizeRows = [
-    ["🥇 1 место", r.prize1 || "—"], ["🥈 2 место", r.prize2 || "—"], ["🥉 3 место", `${r.prize3_coins} монет`],
-  ].map(x => `<div class="statrow"><span>${x[0]}</span><b>${esc(x[1])}</b></div>`).join("");
+    [1, "🥇 1 место", r.prize1 || "—", r.photo1], [2, "🥈 2 место", r.prize2 || "—", r.photo2],
+    [3, "🥉 3 место", `${r.prize3_coins} монет`, r.photo3],
+  ].map(([place, метка, приз, фото]) => `<div class="statrow"><span style="display:flex;align-items:center;gap:8px">
+      ${фото ? `<img src="/api/photo?file_id=${encodeURIComponent(фото)}" alt=""
+                     style="width:32px;height:32px;border-radius:8px;object-fit:cover;flex:none">` : ""}
+      ${метка}</span><b>${esc(приз)}</b></div>`).join("");
   let cta;
   if (r.entered) cta = `<div class="rbanner" style="border-color:#2e9e4f;color:#2e9e4f">✅ Вы участвуете! Ждём итогов.</div>`;
   else if (r.eligible) cta = `<button class="bigbtn" id="raffleJoin">Участвовать</button>`;
@@ -390,12 +408,8 @@ function renderRaffle() {
   const wins = (r.last_winners || []).length
     ? r.last_winners.map(w => `<div class="statrow"><span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${maskId(w.user_id)}</span><b>${esc(w.prize)}</b></div>`).join("")
     : "";
-  const фотоПриза = r.photo
-    ? `<img src="/api/photo?file_id=${encodeURIComponent(r.photo)}" alt="приз"
-            style="width:100%;border-radius:14px;margin-bottom:12px">` : "";
   $("raffleWrap").innerHTML = `
     <div class="card-block" style="text-align:left">
-      ${фотоПриза}
       <div style="font-weight:800;font-size:17px;margin-bottom:4px">🏆 ${esc(r.title)}</div>
       <div style="color:var(--hint);font-size:13px;margin-bottom:12px">Участников: <b>${r.participants}</b> · до конца: <b>${raffleTimeLeft(r.ends_at)}</b></div>
       ${prizeRows}

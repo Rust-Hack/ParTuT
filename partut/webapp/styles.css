@@ -473,6 +473,14 @@ html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shad
           mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent); }
 .reel-strip { will-change: transform; }
 .reel-strip.blur { filter: blur(1px); }                 /* размытие во время быстрого движения */
+/* Прокрут-заглушка на время ответа сервера: барабан крутится сразу по тапу,
+   ещё не зная результата, — реальный прокрут (JS, runReel) подхватывает его,
+   как только ответ пришёл. */
+.reel-strip.spinning { animation: reelPlaceholder .22s linear infinite; }
+@keyframes reelPlaceholder {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-33.333%); }
+}
 .reel-col.antic { animation: reelAntic .42s ease-in-out infinite; }   /* предвкушение на 3-м барабане */
 @keyframes reelAntic {
   0%,100% { box-shadow: 0 0 12px var(--brand-glow), var(--reel-inset); }

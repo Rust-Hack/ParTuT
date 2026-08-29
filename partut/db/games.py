@@ -111,9 +111,37 @@ def use_spin(user_id):
     return True
 
 
+def _bump_stats(cur, pairs):
+    """Несколько счётчиков игры ОДНИМ подключением (то же UPSERT, что и в
+    db.inc_stat, но без своего connect/commit на каждый ключ)."""
+    for key, delta in pairs:
+        if not delta:
+            continue
+        if db.USE_PG:
+            cur.execute("""INSERT INTO game_stats (key, n) VALUES (%s, %s)
+                           ON CONFLICT (key) DO UPDATE SET n = game_stats.n + EXCLUDED.n""",
+                        (key, int(delta)))
+        else:
+            cur.execute("INSERT INTO game_stats (key, n) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET n = n + ?",
+                        (key, int(delta), int(delta)))
+
+
+def _log_coin(cur, user_id, delta, reason):
+    """Строка летописи монет тем же подключением — без отдельного db.log_coins."""
+    if not delta:
+        return
+    cur.execute(db._q("INSERT INTO coin_log (user_id, delta, reason, created_at) VALUES (%s, %s, %s, %s)"),
+                (user_id, int(delta), reason, db._now_str()))
+
+
 def do_wheel_spin(user_id, prize_coins):
-    """Атомарно за ОДИН запрос: если есть прокрут — списать 1 и начислить приз.
-    Возвращает (coins, spins) или None, если прокрутов нет."""
+    """Атомарно за ОДНО подключение: списать прокрут, начислить приз, записать
+    в летопись монет и счётчики игры.
+
+    Раньше это были четыре отдельных подключения подряд (списание+приз,
+    летопись, два счётчика) — на Render+Neon каждое лишний поход по сети, и
+    тап по «Крутить» ощутимо повисал до ответа, хотя вся анимация уже ждала
+    только его. Здесь — один connect на весь прокрут."""
     conn = db.connect()
     cur = conn.cursor()
     if db.USE_PG:
@@ -121,10 +149,11 @@ def do_wheel_spin(user_id, prize_coins):
                        WHERE user_id = %s AND COALESCE(wheel_spins,0) > 0
                        RETURNING COALESCE(coins,0) AS coins, wheel_spins""", (prize_coins, user_id))
         row = cur.fetchone()
+        if row:
+            _log_coin(cur, user_id, prize_coins, "wheel")
+            _bump_stats(cur, (("wheel_spins", 1), ("wheel_paid", prize_coins)))
         conn.commit()
         conn.close()
-        if row:
-            db.log_coins(user_id, prize_coins, "wheel")
         return (row["coins"], row["wheel_spins"]) if row else None
     # SQLite. Условие — В САМОМ UPDATE, как и в ветке Postgres: раньше здесь
     # сначала читали остаток прокрутов, потом писали, и пять одновременных
@@ -137,17 +166,21 @@ def do_wheel_spin(user_id, prize_coins):
         conn.commit()
         conn.close()
         return None
+    _log_coin(cur, user_id, prize_coins, "wheel")
+    _bump_stats(cur, (("wheel_spins", 1), ("wheel_paid", prize_coins)))
     conn.commit()
     cur.execute("SELECT COALESCE(coins,0) AS c, COALESCE(wheel_spins,0) AS s FROM users WHERE user_id = ?", (user_id,))
     r = cur.fetchone()
     conn.close()
-    db.log_coins(user_id, prize_coins, "wheel")
     return (r["c"], r["s"]) if r else None
 
 
 def do_slot_spin(user_id, cost, prize_coins):
-    """Атомарно за ОДИН запрос: если хватает монет — списать cost и начислить приз.
-    Возвращает новый баланс или None, если монет мало."""
+    """Атомарно за ОДНО подключение: списать cost, начислить приз, записать
+    обе операции в летопись монет и три счётчика игры.
+
+    Раньше — до шести отдельных подключений на один прокрут (см. do_wheel_spin
+    выше про ту же болезнь). Возвращает новый баланс или None, если монет мало."""
     conn = db.connect()
     cur = conn.cursor()
     if db.USE_PG:
@@ -155,11 +188,12 @@ def do_slot_spin(user_id, cost, prize_coins):
                        WHERE user_id = %s AND COALESCE(coins,0) >= %s
                        RETURNING COALESCE(coins,0) AS coins""", (cost, prize_coins, user_id, cost))
         row = cur.fetchone()
+        if row:
+            _log_coin(cur, user_id, -cost, "slot")
+            _log_coin(cur, user_id, prize_coins, "slot")
+            _bump_stats(cur, (("slot_spins", 1), ("slot_bet", cost), ("slot_paid", prize_coins)))
         conn.commit()
         conn.close()
-        if row:
-            db.log_coins(user_id, -cost, "slot")
-            db.log_coins(user_id, prize_coins, "slot")
         return row["coins"] if row else None
     # Та же история, что и у колеса: проверка баланса живёт внутри UPDATE,
     # иначе одновременные ставки списываются с устаревшего остатка.
@@ -170,12 +204,13 @@ def do_slot_spin(user_id, cost, prize_coins):
         conn.commit()
         conn.close()
         return None
+    _log_coin(cur, user_id, -cost, "slot")
+    _log_coin(cur, user_id, prize_coins, "slot")
+    _bump_stats(cur, (("slot_spins", 1), ("slot_bet", cost), ("slot_paid", prize_coins)))
     conn.commit()
     cur.execute("SELECT COALESCE(coins,0) AS c FROM users WHERE user_id = ?", (user_id,))
     r = cur.fetchone()
     conn.close()
-    db.log_coins(user_id, -cost, "slot")
-    db.log_coins(user_id, prize_coins, "slot")
     return r["c"] if r else None
 
 
