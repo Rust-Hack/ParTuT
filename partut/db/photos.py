@@ -87,8 +87,12 @@ def is_shop_photo(file_id):
                     (file_id, file_id))
         found = cur.fetchone() is not None
     if not found:
-        # Фото приза в розыгрыше — тоже витрина: его смотрят все.
-        cur.execute(db._q("SELECT 1 AS x FROM raffles WHERE photo = %s LIMIT 1"), (file_id,))
+        # Фото приза в розыгрыше — тоже витрина: его смотрят все. Своя картинка
+        # у каждого места (photo1/2/3); старая общая колонка (photo) проверяется
+        # заодно — на случай записи, которую миграция ещё не перенесла.
+        cur.execute(db._q("SELECT 1 AS x FROM raffles "
+                          "WHERE photo = %s OR photo1 = %s OR photo2 = %s OR photo3 = %s LIMIT 1"),
+                    (file_id, file_id, file_id, file_id))
         found = cur.fetchone() is not None
     conn.close()
     return found
@@ -218,6 +222,9 @@ def purge_orphan_photos(limit=200):
                AND file_id NOT IN (SELECT file_id FROM product_photos WHERE file_id IS NOT NULL)
                AND file_id NOT IN (SELECT thumb_id FROM product_photos WHERE thumb_id IS NOT NULL)
                AND file_id NOT IN (SELECT photo FROM raffles WHERE photo IS NOT NULL)
+               AND file_id NOT IN (SELECT photo1 FROM raffles WHERE photo1 IS NOT NULL)
+               AND file_id NOT IN (SELECT photo2 FROM raffles WHERE photo2 IS NOT NULL)
+               AND file_id NOT IN (SELECT photo3 FROM raffles WHERE photo3 IS NOT NULL)
              LIMIT %s)
     """), (cutoff, limit))
     gone = cur.rowcount

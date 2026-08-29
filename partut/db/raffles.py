@@ -33,6 +33,20 @@ def _ensure_raffle_columns():
         # Фото разыгрываемого товара: «Одноразка» словами и она же на картинке —
         # разные по силе обещания.
         cur.execute("ALTER TABLE raffles ADD COLUMN photo TEXT")
+    # Своё фото на каждое место: 1-2 место обычно вещь (одноразка, жидкость),
+    # 3-е чаще монеты — но и оно бывает вещью, а общее фото на весь розыгрыш
+    # молча подписывало любое место одной и той же картинкой.
+    добавлен_photo1 = "photo1" not in cols
+    if добавлен_photo1:
+        cur.execute("ALTER TABLE raffles ADD COLUMN photo1 TEXT")
+    if "photo2" not in cols:
+        cur.execute("ALTER TABLE raffles ADD COLUMN photo2 TEXT")
+    if "photo3" not in cols:
+        cur.execute("ALTER TABLE raffles ADD COLUMN photo3 TEXT")
+    if добавлен_photo1:
+        # Старое общее фото всегда было фото ГЛАВНОГО приза — переносим в 1 место,
+        # чтобы уже загруженная картинка не потерялась при обновлении.
+        cur.execute("UPDATE raffles SET photo1 = photo WHERE photo IS NOT NULL AND photo1 IS NULL")
     conn.commit()
     conn.close()
 
@@ -127,7 +141,8 @@ def create_raffle(title="Розыгрыш месяца", prize1="Однораз�
     return rid
 
 
-_RAFFLE_EDITABLE = {"title", "prize1", "prize2", "prize3_coins", "threshold", "ends_at", "photo"}
+_RAFFLE_EDITABLE = {"title", "prize1", "prize2", "prize3_coins", "threshold", "ends_at",
+                    "photo", "photo1", "photo2", "photo3"}
 
 
 def update_raffle_field(raffle_id, field, value):

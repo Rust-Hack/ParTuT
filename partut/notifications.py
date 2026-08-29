@@ -141,20 +141,26 @@ def draw_raffle(bot, raffle):
     # Тем же криптостойким жребием, что и колесо (см. games.py): здесь
     # разыгрывают настоящие вещи, и «случайно» обязано значить случайно.
     secrets.SystemRandom().shuffle(uids)
-    places = [(1, raffle["prize1"] or "Приз за 1 место", 0),
-             (2, raffle["prize2"] or "Приз за 2 место", 0),
-             (3, f"{raffle['prize3_coins']} монет", raffle["prize3_coins"])]
+    places = [(1, raffle["prize1"] or "Приз за 1 место", 0, raffle["photo1"]),
+             (2, raffle["prize2"] or "Приз за 2 место", 0, raffle["photo2"]),
+             (3, f"{raffle['prize3_coins']} монет", raffle["prize3_coins"], raffle["photo3"])]
     winners = []
-    for i, (place, prize, coins) in enumerate(places):
+    for i, (place, prize, coins, photo) in enumerate(places):
         if i >= len(uids):
             break
         wid = uids[i]
         winners.append({"place": place, "user_id": wid, "prize": prize})
         if coins:
             db.add_coins(wid, coins, "raffle")
+        текст = (f"🏆 Вы заняли {place} место в розыгрыше! Приз: {prize}. "
+                + ("Монеты начислены." if coins else "Продавец свяжется с вами."))
         try:
-            bot.send_message(wid, f"🏆 Вы заняли {place} место в розыгрыше! Приз: {prize}. "
-                                  + ("Монеты начислены." if coins else "Продавец свяжется с вами."))
+            # Фото своё у места — если продавец его загрузил, победитель видит
+            # ровно то, что выиграл, а не общую картинку розыгрыша.
+            if photo:
+                bot.send_photo(wid, photo, caption=текст)
+            else:
+                bot.send_message(wid, текст)
         except Exception as e:
             print(f"Не смог поздравить победителя {wid}: {e}")
     db.set_raffle_winners(raffle["id"], winners)

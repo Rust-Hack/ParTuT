@@ -658,9 +658,10 @@ $("specFlavors").onchange = async () => {
 $("specVarLabel").onchange = async () => {
   const слово = $("specVarLabel").value.trim();
   if (!слово) { $("specVarLabel").value = "Вкус"; }
-  await catApi("/api/admin/category/update", { code: specsCat, variant_label: $("specVarLabel").value.trim() || "Вкус" });
+  const d = await catApi("/api/admin/category/update", { code: specsCat, variant_label: $("specVarLabel").value.trim() || "Вкус" });
   await afterCatsChanged();
   renderSpecList();
+  if (!d.ok) { alertMsg("Не удалось сохранить."); return; }
   toast("Сохранено ✓");
 };
 $("specAdd").onclick = async () => {
@@ -902,11 +903,17 @@ async function openRaffleAdmin() {
     $("raPrize3").value = ra ? (ra.prize3_coins || 500) : 500;
     $("raThreshold").value = ra ? (ra.threshold || 25) : 25;
     $("raDays").value = 30;
-    $("raPhotoRow").style.display = raffleRunning ? "" : "none";
-    const прев = $("raPhotoPrev");
-    if (raffleRunning && ra.photo) { прев.src = `/api/photo?file_id=${encodeURIComponent(ra.photo)}`; прев.style.display = ""; }
-    else { прев.style.display = "none"; }
-    $("raPhoto").value = "";
+    // Своё фото на каждое место — обходим все три ряда разом, а не по id:
+    // трёх одинаковых id всё равно не бывает.
+    document.querySelectorAll(".raPhotoRow").forEach(row => {
+      row.style.display = raffleRunning ? "" : "none";
+      const фото = ra ? ra[`photo${row.dataset.place}`] : "";
+      const прев = row.querySelector(".raPhotoPrev");
+      if (raffleRunning && фото) { прев.src = `/api/photo?file_id=${encodeURIComponent(фото)}`; прев.style.display = ""; }
+      else { прев.style.display = "none"; }
+      row.querySelector(".raPhotoInput").value = "";
+    });
+    if ($("raPhotoNote")) $("raPhotoNote").style.display = raffleRunning ? "" : "none";
     $("raSave").style.display = raffleRunning ? "" : "none";
     $("raDraw").style.display = raffleRunning ? "" : "none";
     $("raStart").style.display = raffleRunning ? "none" : "";
@@ -923,24 +930,28 @@ $("raSave").onclick = async () => {
   try {
     const r = await fetch("/api/admin/raffle/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json();
-    alertMsg(d.ok ? "Сохранено ✅" : "Не удалось сохранить.");
+    alertMsg(d.ok ? "Сохранено ✅" : (d.message || "Не удалось сохранить."));
   } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("raSave").disabled = false; $("raSave").textContent = "Сохранить"; }
 };
-$("raPhoto").onchange = async () => {
-  const f = $("raPhoto").files[0];
-  if (!f) return;
-  const прев = $("raPhotoPrev");
-  прев.src = URL.createObjectURL(f); прев.style.display = "";
-  const fd = new FormData();
-  fd.append("initData", initData); fd.append("file", f);
-  try {
-    const r = await fetch("/api/admin/raffle/photo", { method: "POST", body: fd });
-    const d = await r.json();
-    alertMsg(d.ok ? "Фото приза сохранено ✅"
-                  : (d.error === "no_raffle" ? "Сначала начните розыгрыш." : "Не удалось загрузить."));
-  } catch (e) { alertMsg(текстСбоя(e)); }
-};
+document.querySelectorAll(".raPhotoInput").forEach(inp => {
+  inp.onchange = async () => {
+    const f = inp.files[0];
+    if (!f) return;
+    const row = inp.closest(".raPhotoRow");
+    const place = row.dataset.place;
+    const прев = row.querySelector(".raPhotoPrev");
+    прев.src = URL.createObjectURL(f); прев.style.display = "";
+    const fd = new FormData();
+    fd.append("initData", initData); fd.append("place", place); fd.append("file", f);
+    try {
+      const r = await fetch("/api/admin/raffle/photo", { method: "POST", body: fd });
+      const d = await r.json();
+      alertMsg(d.ok ? "Фото приза сохранено ✅"
+                    : (d.error === "no_raffle" ? "Сначала начните розыгрыш." : (d.message || "Не удалось загрузить.")));
+    } catch (e) { alertMsg(текстСбоя(e)); }
+  };
+});
 $("raStart").onclick = async () => {
   const body = { initData, title: $("raTitle").value, prize1: $("raPrize1").value,
     prize2: $("raPrize2").value, prize3_coins: $("raPrize3").value,

@@ -82,11 +82,11 @@ def api_wheel_spin():
     weights = [s["weight"] for s in WHEEL_SECTORS]
     idx = жребий.choices(range(len(WHEEL_SECTORS)), weights=weights, k=1)[0]
     prize = WHEEL_SECTORS[idx]
-    res = db.do_wheel_spin(uid, prize["coins"])     # списание+начисление за 1 запрос
+    # Списание, начисление, летопись монет и счётчики — одним подключением.
+    res = db.do_wheel_spin(uid, prize["coins"])
     if res is None:
         return jsonify({"ok": False, "error": "no_spins"}), 400
     coins, spins = res
-    db.inc_stat("wheel_spins", 1); db.inc_stat("wheel_paid", prize["coins"])
     return jsonify({"ok": True, "index": idx, "coins": prize["coins"], "label": prize["label"],
                     "balance": coins, "spins": spins})
 
@@ -199,10 +199,10 @@ def api_slot_spin():
             win = s
             break
     prize_coins = bet * win["mult"] if win else 0     # приз = ставка × множитель
-    balance = db.do_slot_spin(uid, bet, prize_coins)   # списание+приз за 1 запрос
+    # Списание, приз, летопись монет и счётчики — одним подключением.
+    balance = db.do_slot_spin(uid, bet, prize_coins)
     if balance is None:
         return jsonify({"ok": False, "error": "no_coins"}), 400
-    db.inc_stat("slot_spins", 1); db.inc_stat("slot_bet", bet); db.inc_stat("slot_paid", prize_coins)
 
     # Сетка 3×3. Выигрыш выкладывается по случайной линии (ряд или диагональ).
     if win:
@@ -244,11 +244,15 @@ def _raffle_results(raffle):
         winners = []
     winner_ids = {int(w.get("user_id") or 0) for w in winners}
     entrants = [int(u) for u in db.get_raffle_user_ids(raffle["id"])]
+    # Фото своё у каждого места — берём из самого розыгрыша (колонки живут и
+    # после завершения), а не из записи победителя: место разыграно, а картинка
+    # приза к нему привязана всегда, даже если это место никто не занял.
+    photos_by_place = {1: raffle["photo1"] or "", 2: raffle["photo2"] or "", 3: raffle["photo3"] or ""}
     return {"title": raffle["title"] or "Розыгрыш",
             "finished_at": raffle["finished_at"] or raffle["ends_at"],
-            "photo": raffle["photo"] or "",
             "winners": [{"place": w.get("place"), "who": _mask_id(w.get("user_id")),
-                         "prize": w.get("prize") or ""} for w in winners],
+                         "prize": w.get("prize") or "",
+                         "photo": photos_by_place.get(w.get("place"), "")} for w in winners],
             # Победители уже названы выше — в списке участников их не повторяем.
             "participants": [_mask_id(u) for u in entrants if u not in winner_ids],
             "participants_count": len(entrants)}
@@ -266,7 +270,7 @@ def _raffle_public_from_state(st):
         "id": r["id"], "title": r["title"] or "Розыгрыш месяца",
         "prize1": r["prize1"] or "", "prize2": r["prize2"] or "", "prize3_coins": r["prize3_coins"],
         "ends_at": r["ends_at"], "threshold": threshold,
-        "photo": r["photo"] or "",
+        "photo1": r["photo1"] or "", "photo2": r["photo2"] or "", "photo3": r["photo3"] or "",
         "participants": st["participants"],
         "spent": spent, "remaining": round(max(0, threshold - spent), 2),
         "eligible": spent >= threshold, "entered": st["entered"],
@@ -325,7 +329,7 @@ def api_admin_raffle():
     if not r:
         return jsonify({"ok": True, "raffle": None})
     return jsonify({"ok": True, "raffle": {
-        "photo": r["photo"] or "",
+        "photo1": r["photo1"] or "", "photo2": r["photo2"] or "", "photo3": r["photo3"] or "",
         "id": r["id"], "title": r["title"] or "", "prize1": r["prize1"] or "", "prize2": r["prize2"] or "",
         "prize3_coins": r["prize3_coins"], "threshold": round(r["threshold"] or 0, 2),
         "ends_at": r["ends_at"], "participants": db.count_entries(r["id"]),
@@ -341,9 +345,20 @@ def api_admin_raffle_update():
     r = db.get_active_raffle()
     if not r:
         return jsonify({"ok": False, "error": "no_raffle"}), 404
+    # Пустое поле — не «оставить как было», а промах: название и призы уходят
+    # прямо на витрину. «Сохранено ✅» на стёртом призе значило бы, что так и
+    # задумано. Проверяем ВСЕ поля до записи — иначе первое пустое стёрлось бы,
+    # а второе с ошибкой откатило бы запрос, оставив розыгрыш наполовину правленным.
+    правки = {}
     for field in ("title", "prize1", "prize2"):
         if field in data:
-            db.update_raffle_field(r["id"], field, str(data[field]).strip())
+            value = inputs._text(data[field], 100)
+            if not value:
+                return jsonify({"ok": False, "error": "empty",
+                                "message": "Название и призы не могут быть пустыми."}), 400
+            правки[field] = value
+    for field, value in правки.items():
+        db.update_raffle_field(r["id"], field, value)
     if "prize3_coins" in data:
         try:
             db.update_raffle_field(r["id"], "prize3_coins", max(0, int(data["prize3_coins"])))
@@ -389,7 +404,11 @@ def api_admin_raffle_start():
 
 @bp.route("/api/admin/raffle/photo", methods=["POST"])
 def api_admin_raffle_photo():
-    """Фото разыгрываемого товара.
+    """Фото приза за конкретное место (1/2/3).
+
+    Своя картинка у каждого места: 1-2 место обычно вещь (одноразка, жидкость),
+    3-е чаще монеты — но точка продажи разыгрывает и им вещь, и общее фото на
+    весь розыгрыш подписывало бы любое место одной и той же картинкой.
 
     Картинка получает file_id тем же способом, что и фото товара: отправляем её
     в чат владельцу тихо и забираем идентификатор. Второго способа хранить
@@ -400,6 +419,12 @@ def api_admin_raffle_photo():
     r = db.get_active_raffle()
     if not r:
         return jsonify({"ok": False, "error": "no_raffle"}), 404
+    try:
+        place = int(request.form.get("place"))
+    except (TypeError, ValueError):
+        place = None
+    if place not in (1, 2, 3):
+        return jsonify({"ok": False, "error": "bad_place"}), 400
     file = request.files.get("file")
     if not file:
         return jsonify({"ok": False, "error": "no_file"}), 400
@@ -408,14 +433,14 @@ def api_admin_raffle_photo():
                         "message": "Это не изображение. Нужен файл jpg, png или webp."}), 400
     try:
         msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
-                            caption="🖼 Фото приза сохранено", disable_notification=True)
+                            caption=f"🖼 Фото приза за {place} место сохранено", disable_notification=True)
         file_id, _thumb = photos._pick_photo_sizes(msg.photo)
     except Exception as e:
         print(f"Не смог обработать фото приза: {e}")
         return jsonify({"ok": False, "error": "send_failed",
                         "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
-    db.update_raffle_field(r["id"], "photo", file_id)
-    return jsonify({"ok": True, "photo": file_id})
+    db.update_raffle_field(r["id"], f"photo{place}", file_id)
+    return jsonify({"ok": True, "place": place, "photo": file_id})
 
 
 @bp.route("/api/admin/raffle/draw", methods=["POST"])

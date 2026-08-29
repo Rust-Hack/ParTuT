@@ -245,6 +245,22 @@ def run():
     настройки = client.post("/api/admin/raffle", json={"initData": "x"}).get_json()["raffle"]
     c6("отрицательный приз не принимается", настройки["prize3_coins"] >= 0)
 
+    # Пустое название/приз — это промах, а не «убрать»: они уходят прямо на
+    # витрину, и «Сохранено ✅» на стёртом призе было бы той же ложью, что
+    # раньше была у реквизитов оплаты (payment_info).
+    r = client.post("/api/admin/raffle/update", json={"initData": "x", "title": "  "})
+    c6("пустой заголовок отклонён", r.get_json().get("ok") is False and r.status_code == 400)
+    настройки = client.post("/api/admin/raffle", json={"initData": "x"}).get_json()["raffle"]
+    c6("старый заголовок остался", настройки["title"] == "Августовский")
+    r = client.post("/api/admin/raffle/update", json={"initData": "x", "prize1": ""})
+    c6("пустой приз тоже отклонён", r.get_json().get("ok") is False)
+    r = client.post("/api/admin/raffle/update",
+                    json={"initData": "x", "title": "Годный", "prize2": "  "})
+    c6("если хоть одно поле пустое — не пишем ни одного",
+       r.get_json().get("ok") is False)
+    настройки = client.post("/api/admin/raffle", json={"initData": "x"}).get_json()["raffle"]
+    c6("годное поле в той же паре тоже не записалось", настройки["title"] == "Августовский")
+
     c7 = Checker("Розыгрыш начинает и завершает владелец")
     client.post("/api/admin/raffle/draw", json={"initData": "x"})    # закрываем тот, что правили
     r = client.post("/api/admin/raffle/start", json={
@@ -278,15 +294,21 @@ def run():
 
     # --- Фото приза ---
     # «Одноразка» словами и она же на картинке — разные по силе обещания.
-    c9 = Checker("Фото разыгрываемого товара")
+    # Своя картинка у каждого места: 1-2 обычно вещь, 3-е чаще монеты, но и
+    # оно бывает вещью — потому фото не одно на розыгрыш, а по месту.
+    c9 = Checker("Фото приза — своё на каждое место")
     client.post("/api/admin/raffle/start", json={"initData": "x", "days": 30})
     активный = db.get_active_raffle()
-    db.update_raffle_field(активный["id"], "photo", "фото_приза_id")
+    db.update_raffle_field(активный["id"], "photo1", "фото_приза_id")
+    db.update_raffle_field(активный["id"], "photo3", "фото_третьего_id")
     as_user(UIDS[0], "смотрит")
     st = client.post("/api/raffle", json={"initData": "x"}).get_json()["raffle"]
-    c9("покупатель видит фото приза", st.get("photo") == "фото_приза_id")
+    c9("покупатель видит фото приза за 1 место", st.get("photo1") == "фото_приза_id")
+    c9("и за 3 место — своё, другое", st.get("photo3") == "фото_третьего_id")
+    c9("а за 2 место фото нет — не загружали", not st.get("photo2"))
     c9("картинка приза считается витриной, а не чеком",
        db.is_shop_photo("фото_приза_id") is True)
+    c9("и вторая картинка тоже", db.is_shop_photo("фото_третьего_id") is True)
     # Ночная уборка не должна принять её за сироту: товара у неё нет.
     db.save_photo_blob("фото_приза_id", "image/jpeg", b"x" * 10)
     conn = db.connect(); cur = conn.cursor()
@@ -303,9 +325,14 @@ def run():
 
     as_admin()
     client.post("/api/admin/raffle/draw", json={"initData": "x"})
+    # Фото читается прямо из строки розыгрыша (она остаётся и после завершения),
+    # а не из записи победителя — картинка привязана к месту, а не к тому, кто
+    # его занял.
+    финиш = db.get_last_finished_raffle()
+    c9("в итогах фото за 1 место остаётся", финиш["photo1"] == "фото_приза_id")
+    c9("и за 3 место тоже", финиш["photo3"] == "фото_третьего_id")
     as_user(UIDS[0], "смотрит")
-    d = client.post("/api/raffle", json={"initData": "x"}).get_json()
-    c9("в итогах фото остаётся", (d.get("finished") or {}).get("photo") == "фото_приза_id")
+    client.post("/api/raffle", json={"initData": "x"})
     as_admin()
 
     # --- Продавец не распоряжается розыгрышем ---
