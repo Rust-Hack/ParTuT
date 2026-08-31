@@ -209,7 +209,7 @@ _WRITE_PATHS = {
     "/api/admin/photo": _ТОВАРЫ, "/api/admin/photo/add": _ТОВАРЫ, "/api/admin/photo/delete": _ТОВАРЫ,
     # Оценка живёт в карточке товара, поэтому её публикация обновляет витрину.
     "/api/admin/review/decide": _ТОВАРЫ, "/api/admin/review/delete": _ТОВАРЫ,
-    "/api/admin/location": (), "/api/admin/location/delete": (),
+    "/api/admin/location": (), "/api/admin/location/delete": (), "/api/admin/location/rename": (),
     "/api/admin/category": _СПРАВОЧНИКИ, "/api/admin/category/update": _СПРАВОЧНИКИ,
     "/api/admin/category/delete": _СПРАВОЧНИКИ, "/api/admin/category/restore": _СПРАВОЧНИКИ,
     "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),

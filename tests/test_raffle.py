@@ -261,6 +261,19 @@ def run():
     настройки = client.post("/api/admin/raffle", json={"initData": "x"}).get_json()["raffle"]
     c6("годное поле в той же паре тоже не записалось", настройки["title"] == "Августовский")
 
+    # Мусор в prize3_coins/threshold раньше молча пропускался (except: pass),
+    # форма говорила «Сохранено ✅», а число оставалось прежним — то же самое
+    # враньё, что уже чинили для title/prize1/prize2 выше.
+    client.post("/api/admin/raffle/update", json={"initData": "x", "prize3_coins": 300, "threshold": 40})
+    r = client.post("/api/admin/raffle/update", json={"initData": "x", "prize3_coins": "не число"})
+    c6("мусор в призе за 3 место — отказ, а не молчание", r.get_json().get("ok") is False)
+    настройки = client.post("/api/admin/raffle", json={"initData": "x"}).get_json()["raffle"]
+    c6("старое значение приза не тронуто", настройки["prize3_coins"] == 300)
+    r = client.post("/api/admin/raffle/update", json={"initData": "x", "threshold": "много"})
+    c6("мусор в пороге участия — тоже отказ", r.get_json().get("ok") is False)
+    настройки = client.post("/api/admin/raffle", json={"initData": "x"}).get_json()["raffle"]
+    c6("старый порог не тронут", float(настройки["threshold"]) == 40.0)
+
     c7 = Checker("Розыгрыш начинает и завершает владелец")
     client.post("/api/admin/raffle/draw", json={"initData": "x"})    # закрываем тот, что правили
     r = client.post("/api/admin/raffle/start", json={

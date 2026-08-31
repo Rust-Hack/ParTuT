@@ -115,7 +115,11 @@ def run():
         c3("список пользователей не увидит", _code("/api/admin/users") == 403)
         c3("реферала не отвяжет", _code("/api/admin/referral/unlink", user_id=BUYER) == 403)
         c3("выручку магазина не увидит", _code("/api/admin/stats") == 403)
-        c3("журнал ему закрыт", _code("/api/admin/log") == 403)
+        # Журнал продавцу открыт, но только на СВОИ действия — не весь магазин.
+        r = _post("/api/admin/log")
+        c3("журнал доступен, но не весь", r.get_json().get("ok"))
+        c3("в нём только свои записи, не чужие",
+          all(int(x["admin_id"]) == ROAMER for x in r.get_json()["log"]))
         c3("доступ другим не выдаст", _code("/api/admin/staff/add", user_id=999, city="") == 403)
         c3("фото модели не тронет", _code("/api/admin/photo/delete", photo_id=1) == 403)
         c3("точку продаж не создаст", _code("/api/admin/location", name="Своя") == 403)

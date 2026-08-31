@@ -321,3 +321,25 @@ def api_admin_location_delete():
         return jsonify({"ok": False, "error": "has_orders", "count": len(open_orders)}), 400
     db.delete_location(lid)
     return jsonify({"ok": True})
+
+
+@bp.route("/api/admin/location/rename", methods=["POST"])
+def api_admin_location_rename():
+    """Переименовать локацию — вместо удалить (заблокировано при товарах) и
+    завести заново вручную со всеми товарами, продавцами и доставкой."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not auth.get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    lid = inputs.целое(data.get("id"))
+    if lid is None:
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    name = inputs._text(data.get("name"))
+    if not name:
+        return jsonify({"ok": False, "error": "bad_name",
+                        "message": "Название точки не может быть пустым."}), 400
+    ok, error = db.rename_location(lid, name)
+    if not ok:
+        message = {"not_found": "Точка не найдена.",
+                   "exists": "Точка с таким названием уже есть."}.get(error, "Не удалось переименовать.")
+        return jsonify({"ok": False, "error": error, "message": message}), 400
+    return jsonify({"ok": True})

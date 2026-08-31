@@ -209,6 +209,7 @@ SCHEMA_MIGRATIONS = [
     ("0004-админы-из-окружения-в-базу", "staff_seeded"),
     ("0005-деньги-в-двойную-точность", None),
     ("0006-адрес-самовывоза-стал-точкой", None),
+    ("0007-бренды-без-дублей", None),
 ]
 
 
@@ -689,6 +690,11 @@ def init_db():
     # После засева: на чистой базе способы появляются именно здесь, и перенос
     # должен увидеть их, а не пустую таблицу.
     _migrate("0006-адрес-самовывоза-стал-точкой", _pickup_addresses_to_points)
+    # merge_duplicate_brands существовал и был покрыт тестом, но нигде не
+    # вызывался — дубли брендов, оставшиеся от прежней схемы (бренд заводился
+    # внутри категории), сливать было некому и нечем: ни этой миграции, ни
+    # кнопки в админке. Прогоняем один раз, как и остальные разовые переносы.
+    _migrate("0007-бренды-без-дублей", merge_duplicate_brands)
 
     # Одна строка в логе при старте. Смотрят на неё ровно тогда, когда магазин
     # ведёт себя странно или копию только что развернули в пустую базу: первый
@@ -2515,6 +2521,7 @@ from partut.db.shop import (                                            # noqa: 
     set_order_delivery, delivery_prefill,                                   # noqa: F401
     seed_locations, get_locations, location_names, get_location,            # noqa: F401
     add_location, delete_location, count_products_in_location,              # noqa: F401
+    rename_location,                                                        # noqa: F401
     get_pickup_points, all_pickup_points, add_pickup_point,                 # noqa: F401
     update_pickup_point, delete_pickup_point,                               # noqa: F401
     _category_code, seed_categories, seed_category_specs,                   # noqa: F401

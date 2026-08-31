@@ -21,7 +21,15 @@ async function openAdmin() {
   if ($("mStaff")) $("mStaff").style.display = (me && me.is_super) ? "" : "none";
   // Документы магазина — только владельцу: это не настройка смены.
   if ($("mDocs")) $("mDocs").style.display = (me && me.is_super) ? "" : "none";
-  if ($("mLog")) $("mLog").style.display = (me && me.is_super) ? "" : "none";
+  // Журнал открыт любому админу — продавцу сервер отдаёт только ЕГО
+  // собственные действия (admin_id=свой), владельцу — весь журнал магазина.
+  // Раньше был закрыт продавцу целиком: свериться, что правка цены точно
+  // ушла, было неоткуда, кроме как спросить владельца.
+  if ($("mLog")) {
+    $("mLog").style.display = (me && me.is_admin) ? "" : "none";
+    const подпись = $("mLog").querySelector("span");
+    if (подпись) подпись.textContent = (me && me.is_super) ? "🧾 Журнал действий" : "🧾 Мои действия";
+  }
   applyAdminScope();
   $("adminView").classList.add("show");
   if (me && me.is_super) loadReqBadge();
@@ -1578,7 +1586,7 @@ $("stockSave").onclick = async () => {
   try {
     const r = await fetch("/api/admin/stock/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json();
-    if (!d.ok) { alertMsg("Не удалось записать движение."); return; }
+    if (!d.ok) { alertMsg(d.message || "Не удалось записать движение."); return; }
     await refreshProducts();
     stockProduct = shelf().find(p => p.id === stockProduct.id) || stockProduct;
     $("stockNow").textContent = `${stockProduct.city} · сейчас ${d.stock} шт`;
@@ -1847,6 +1855,16 @@ function logLine(x) {
 
 async function openLog() {
   $("logView").classList.add("show");
+  // Продавцу — «Мои действия» и объяснение, что видит он только себя;
+  // владельцу — как было, весь журнал магазина.
+  const $h = $("logView").querySelector("h2"), $note = $("logView").querySelector(".card-block > p");
+  if (me && !me.is_super) {
+    if ($h) $h.textContent = "🧾 Мои действия";
+    if ($note) $note.textContent = "Ваши правки цен, остатков и заказов. Владельцу видно всех продавцов, вам — только себя.";
+  } else {
+    if ($h) $h.textContent = "🧾 Журнал";
+    if ($note) $note.textContent = "Кто и что менял: цену, остаток, товар, настройки. Остаток и раньше писался в журнал движений у каждого товара — здесь всё остальное, что прежде менялось бесследно.";
+  }
   $("logList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
   try {
     const r = await fetch("/api/admin/log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });

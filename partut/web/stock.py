@@ -21,6 +21,13 @@ from partut import inputs
 # НЕ импортирует server, и граф зависимостей остаётся деревом.
 # Подключает его фабрика в server.py.
 bp = Blueprint("stock", __name__)
+
+# Разумный потолок на одно движение склада. Денежные настройки в admin.py уже
+# зажаты границами на сервере — здесь того же не было: случайный лишний ноль
+# в приходе (10 000 вместо 1 000) проходил без единого предупреждения.
+_MAX_STOCK_MOVE = 100_000
+
+
 def _сколько_числится(товар, flavor):
     """Остаток той полки, о которой идёт речь: у товара со вкусами — по вкусу.
 
@@ -50,6 +57,11 @@ def api_admin_stock_move():
         return jsonify({"ok": False, "error": "bad_number"}), 400
     if qty < 0:
         return jsonify({"ok": False, "error": "bad_number"}), 400
+    if qty > _MAX_STOCK_MOVE:
+        return jsonify({"ok": False, "error": "too_large",
+                        "message": f"Больше {_MAX_STOCK_MOVE:,} шт.".replace(",", " ")
+                                   + " за одно движение — похоже на опечатку. Если это "
+                                     "правда так много, запишите движение в несколько приёмов."}), 400
     reason = data.get("reason")
     if reason not in db.STOCK_REASONS:
         return jsonify({"ok": False, "error": "bad_reason"}), 400

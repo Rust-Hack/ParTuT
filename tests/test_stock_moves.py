@@ -158,6 +158,15 @@ def run_recount():
     c("Вишня не тронута", вкусы["Вишня"] == 4)
     c("общий остаток пересобран", db.get_product(vid)["stock"] == 6)
 
+    # Случайный лишний ноль в количестве — раньше проходил без единого
+    # предупреждения, теперь отказ с понятным сообщением.
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 500000, "reason": "in"})
+    c("огромный приход отклонён", r.status_code == 400 and r.get_json()["error"] == "too_large")
+    c("сообщение человеческое", "опечатку" in (r.get_json().get("message") or ""))
+    c("остаток не изменился", db.get_product(pid)["stock"] == 0)
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 100000, "reason": "in"})
+    c("ровно на границе — ещё можно", r.get_json().get("ok") is True)
+
     _clean()
     return c.fails
 

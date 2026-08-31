@@ -164,11 +164,18 @@ def api_admin_stats_reset():
 @bp.route("/api/admin/log", methods=["POST"])
 def api_admin_log():
     """Кто и что менял. Остаток всегда писался в журнал движений, а цена,
-    удаление товара и правка настроек не оставляли следа вовсе."""
+    удаление товара и правка настроек не оставляли следа вовсе.
+
+    Весь журнал (все точки, все продавцы) — дело супер-админа. Продавцу
+    открыт тот же маршрут, но видит он только СВОИ действия (admin_id=свой) —
+    раньше журнал был закрыт ему целиком, и свериться, что правка цены
+    точно ушла, было неоткуда, кроме как спросить владельца."""
     data = request.get_json(force=True, silent=True) or {}
-    if not auth._super(data):
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    rows = db.list_admin_log(limit=150)
+    own_only = not auth._super(data)
+    rows = db.list_admin_log(limit=150, admin_id=(int(admin["id"]) if own_only else None))
     return jsonify({"ok": True, "log": [{
         "who": r["admin_name"] or str(r["admin_id"] or ""),
         "admin_id": r["admin_id"],

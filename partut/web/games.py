@@ -385,18 +385,24 @@ def api_admin_raffle_update():
                 return jsonify({"ok": False, "error": "empty",
                                 "message": "Название и призы не могут быть пустыми."}), 400
             правки[field] = value
-    for field, value in правки.items():
-        db.update_raffle_field(r["id"], field, value)
+    # prize3_coins/threshold раньше при плохом вводе тихо пропускались (except:
+    # pass) — форма говорила «Сохранено ✅», а число оставалось прежним. Тот же
+    # принцип «отказ дешевле молчания», что и у title/prize1/prize2 выше:
+    # проверяем ДО записи, отказом с сообщением, а не молчаливым no-op.
     if "prize3_coins" in data:
         try:
-            db.update_raffle_field(r["id"], "prize3_coins", max(0, int(data["prize3_coins"])))
+            правки["prize3_coins"] = max(0, int(data["prize3_coins"]))
         except (TypeError, ValueError):
-            pass
+            return jsonify({"ok": False, "error": "bad_input",
+                            "message": "Монеты за 3 место — целым числом."}), 400
     if "threshold" in data:
         try:
-            db.update_raffle_field(r["id"], "threshold", max(0.0, float(str(data["threshold"]).replace(",", "."))))
+            правки["threshold"] = max(0.0, float(str(data["threshold"]).replace(",", ".")))
         except (TypeError, ValueError):
-            pass
+            return jsonify({"ok": False, "error": "bad_input",
+                            "message": "Порог участия — числом."}), 400
+    for field, value in правки.items():
+        db.update_raffle_field(r["id"], field, value)
     return jsonify({"ok": True})
 
 

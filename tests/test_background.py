@@ -192,6 +192,50 @@ def run():
     return c.fails + c2.fails + c3.fails + c35.fails + c36.fails + c4.fails + c5.fails
 
 
+def run_вечный_цикл_переживает_падение():
+    """Сам вечный цикл (_reminder_loop) не должен падать насмерть.
+
+    Каждый шаг внутри _background_tick уже под своим try/except — это
+    проверяет run() выше. Но упавшее ВНЕ шагов (например сам обход списка
+    или db.вернуть_забытые в finally) раньше убивало поток целиком: тихо
+    останавливались разом все фоновые дела — сводки, обе копии базы,
+    авто-отмена, ночная уборка, — и ни одного сообщения об этом не было.
+    29 августа 2026, найдено при ревизии — починено вотчдогом вокруг всего
+    тела цикла, тем же приёмом, что и у опроса Телеграма в run.py.
+    """
+    from partut import errors
+
+    c = Checker("Фоновый цикл переживает падение целиком")
+    падений = {"tick": 0, "sleep": 0}
+    real_tick, real_sleep, real_report = botmod._background_tick, botmod.time.sleep, errors.report
+
+    def падающий_тик():
+        падений["tick"] += 1
+        raise RuntimeError("упал целиком, не в отдельном шаге")
+
+    def короткий_сон(_сек):
+        падений["sleep"] += 1
+        if падений["sleep"] >= 2:
+            raise StopIteration("проверка увидела достаточно — выходим из вечного цикла")
+
+    сообщено = []
+    botmod._background_tick = падающий_тик
+    botmod.time.sleep = короткий_сон
+    errors.report = lambda bot, where, e: сообщено.append(where)
+    try:
+        try:
+            botmod._reminder_loop()
+        except StopIteration:
+            pass
+        c("после первого падения цикл не умер — тикнул снова", падений["tick"] >= 2)
+        c("о падении сообщили владельцу", any("фоновый цикл" in w for w in сообщено))
+    finally:
+        botmod._background_tick = real_tick
+        botmod.time.sleep = real_sleep
+        errors.report = real_report
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)

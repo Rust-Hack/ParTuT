@@ -340,13 +340,23 @@ def api_admin_add():
     variants = data.get("variants")
     if isinstance(variants, list) and variants:
         vol = str(data.get("puffs") or data.get("volume") or "").strip()
+        # Свод дублей («Grape»/«grape» — один вкус) — тот же _свести_вкусы,
+        # что и у редактора вариантов. Раньше нормализация была только там:
+        # при ЗАВОЗЕ дубль писаний уходил в базу двумя строками, и покупатель
+        # видел один вкус дважды, пока кто-то не отредактирует товар вручную.
+        известные_бренда = []
+        найденный_бренд = db.find_brand_by_name(brand) if brand else None
+        if найденный_бренд:
+            try:
+                известные_бренда = json.loads(найденный_бренд["flavors"] or "[]")
+            except (TypeError, ValueError):
+                известные_бренда = []
+        свод = _свести_вкусы(variants, известные_бренда)
         pid = db.add_product(city, category, name, price, 0, is_hit, desc,
                              brand=brand, flavor="", strength=strength, volume=vol, cost=cost)
-        for v in variants:
-            fl = str(v.get("flavor", "")).strip()
-            st = inputs.целое(v.get("stock", 0), 0)
-            if fl:
-                db.add_variant(pid, fl, max(0, st))
+        for v in свод:
+            if v["flavor"]:
+                db.add_variant(pid, v["flavor"], max(0, v["stock"]))
         db.recalc_product_stock(pid)
         _save_specs(pid, category, data.get("specs"))
         return jsonify({"ok": True, "id": pid})

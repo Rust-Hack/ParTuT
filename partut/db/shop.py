@@ -547,6 +547,48 @@ def delete_location(location_id):
     conn.close()
 
 
+def rename_location(location_id, new_name):
+    """Переименовывает точку и переносит все её товары/заказы/точки самовывоза
+    на новое имя. Раньше опечатку в названии города можно было поправить
+    только удалением (заблокировано при наличии товаров) и заведением заново
+    вручную — со всеми товарами, продавцами и способами доставки.
+
+    city хранится СТРОКОЙ в нескольких таблицах (products.city — как и
+    products.brand у бренда), а не внешним ключом на locations — тот же
+    приём, что и rename_brand_in_products: не перекатить хотя бы одну из них
+    значило бы оставить точке-призраку старое имя, по которому фильтры и
+    продавец точки перестанут находить свои же данные."""
+    new_name = (new_name or "").strip()
+    if not new_name:
+        return False, "empty"
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("SELECT id, name FROM locations WHERE id = %s"), (location_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return False, "not_found"
+    old_name = row["name"]
+    if old_name == new_name:
+        conn.close()
+        return True, None
+    cur.execute(db._q("SELECT id FROM locations WHERE name = %s AND id != %s"), (new_name, location_id))
+    if cur.fetchone():
+        conn.close()
+        return False, "exists"
+    try:
+        cur.execute(db._q("UPDATE locations SET name = %s WHERE id = %s"), (new_name, location_id))
+        for table in ("products", "orders", "delivery_methods", "pickup_points", "staff"):
+            cur.execute(db._q(f"UPDATE {table} SET city = %s WHERE city = %s"), (new_name, old_name))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return True, None
+
+
 def count_products_in_location(name):
     """Сколько товаров в этой локации — чтобы не удалить локацию с товарами."""
     conn = db.connect()

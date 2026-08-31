@@ -238,8 +238,9 @@ function renderLocList() {
         </details>`;
     }).join("") || `<p style="color:var(--hint);font-size:13px;margin:4px 0">Способов ещё нет.</p>`;
     return `<div class="card-block">
-      <div class="admrow" style="padding:0;background:none;box-shadow:none">
-        <div class="an" style="font-weight:800;font-size:15px">${esc(l.name)}</div>
+      <div class="admrow" style="padding:0;background:none;box-shadow:none" data-locrow="${l.id}">
+        <div class="an" style="font-weight:800;font-size:15px" data-locname="${l.id}">${esc(l.name)}</div>
+        <button class="iconbtn" data-locedit="${l.id}">✏️</button>
         <button class="iconbtn danger" data-locdel="${l.id}">🗑</button></div>
       <div class="dlabel" style="margin:10px 0 6px">📍 Куда клиент может приехать</div>
       ${(pointsByCity[l.name] || []).map(p => `
@@ -268,6 +269,7 @@ function renderLocList() {
     </div>`;
   }).join("");
   $("locList").querySelectorAll("[data-locdel]").forEach(b => b.onclick = () => delLocation(+b.dataset.locdel));
+  $("locList").querySelectorAll("[data-locedit]").forEach(b => b.onclick = () => editLocation(+b.dataset.locedit));
   $("locList").querySelectorAll("[data-dmdel]").forEach(b => b.onclick = e => {
     // Кнопка живёт внутри summary: без этого нажатие заодно раскрывало бы
     // форму правки под вопросом «удалить?».
@@ -352,6 +354,33 @@ async function doDelLocation(id) {
       return;
     }
     await refreshAll();          // города пропали из фильтров и форм
+  } catch (e) { alertMsg(текстСбоя(e)); }
+}
+
+// Переименование вместо удалить+создать: раньше опечатку в названии города
+// правили только так — а удаление заблокировано, пока в точке есть товары.
+function editLocation(id) {
+  const row = document.querySelector(`[data-locrow="${id}"]`);
+  const nameEl = document.querySelector(`[data-locname="${id}"]`);
+  if (!row || !nameEl) return;
+  const было = nameEl.textContent;
+  nameEl.outerHTML = `<div class="an" style="font-weight:800;font-size:15px;flex:1">
+    <input data-locinput="${id}" value="${esc(было)}" style="width:100%"></div>`;
+  row.querySelector(`[data-locedit="${id}"]`).outerHTML =
+    `<button class="iconbtn" data-locok="${id}">✓</button>`;
+  const inp = row.querySelector(`[data-locinput="${id}"]`);
+  inp.focus(); inp.select();
+  const save = () => doRenameLocation(id, inp.value.trim());
+  row.querySelector(`[data-locok="${id}"]`).onclick = save;
+  inp.onkeydown = e => { if (e.key === "Enter") save(); if (e.key === "Escape") renderLocList(); };
+}
+async function doRenameLocation(id, name) {
+  if (!name) { alertMsg("Название не может быть пустым."); return; }
+  try {
+    const r = await fetch("/api/admin/location/rename", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, name }) });
+    const d = await r.json();
+    if (!d.ok) { alertMsg(d.message || "Не удалось переименовать."); return; }
+    await refreshAll();
   } catch (e) { alertMsg(текстСбоя(e)); }
 }
 

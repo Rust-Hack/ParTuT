@@ -178,3 +178,32 @@ def run_case_duplicates():
 
     _чисто()
     return c.fails
+
+
+def run_дубли_при_создании_напрямую():
+    """То же самое, но при ЗАВОЗЕ через /api/admin/product (без model_id) —
+    старый прямой путь создания товара, у которого нормализации не было
+    вовсе: дубль писаний уходил в базу двумя строками и оставался там, пока
+    кто-то не отредактирует товар вручную через /api/admin/product/variants
+    (у него нормализация уже была)."""
+    c = Checker("Дубли вкусов при прямом создании товара")
+    _чисто(); as_admin()
+    conn = db.connect(); conn.cursor().execute("DELETE FROM brands"); conn.commit(); conn.close()
+
+    db.add_brand("PULSE", "disposable", ["Grape B - POP"])
+    r = client.post("/api/admin/product", json={
+        "initData": "x", "city": "Минск", "category": "disposable", "name": "PULSE 15000",
+        "price": "30", "cost": "18", "brand": "PULSE", "puffs": "15000",
+        "variants": [{"flavor": "Grape B - POP", "stock": 2},
+                     {"flavor": "grape b - pop", "stock": 3},
+                     {"flavor": "  GRAPE B - POP  ", "stock": 1}]})
+    d = r.get_json() or {}
+    c("товар создан", d.get("ok") is True)
+    вар = db.get_variants(d.get("id"))
+    c(f"вкус один, не три: {[v['flavor'] for v in вар]}", len(вар) == 1)
+    c(f"остатки сложились: {вар[0]['stock'] if вар else None}", вар and вар[0]["stock"] == 6)
+    c("написание взято из бренда", вар and вар[0]["flavor"] == "Grape B - POP")
+
+    conn = db.connect(); conn.cursor().execute("DELETE FROM brands"); conn.commit(); conn.close()
+    _чисто()
+    return c.fails
