@@ -344,8 +344,23 @@ def run():
     c8("и розыгрыш он не завёл", _states().get("active", 0) == 0)
     as_admin()
 
+    # --- Архив розыгрышей: раньше был виден только последний ---
+    c10 = Checker("Архив розыгрышей")
     _clean()
-    return c.fails + c2.fails + c3.fails + c31.fails + c4.fails + c5.fails + c6.fails + c7.fails + c8.fails + c9.fails
+    as_admin()
+    client.post("/api/admin/raffle/start", json={"initData": "x", "title": "Архив-Один", "days": 30})
+    client.post("/api/admin/raffle/draw", json={"initData": "x"})
+    client.post("/api/admin/raffle/start", json={"initData": "x", "title": "Архив-Два", "days": 30})
+    client.post("/api/admin/raffle/draw", json={"initData": "x"})
+    as_user(UIDS[0], "смотрит")
+    hist = client.post("/api/raffle/history", json={"initData": "x"}).get_json()
+    c10("оба розыгрыша в архиве, а не только последний", len(hist.get("history") or []) == 2)
+    titles = [h["title"] for h in hist["history"]]
+    c10("новые сверху", titles == ["Архив-Два", "Архив-Один"])
+
+    _clean()
+    return (c.fails + c2.fails + c3.fails + c31.fails + c4.fails + c5.fails + c6.fails
+            + c7.fails + c8.fails + c9.fails + c10.fails)
 
 
 if __name__ == "__main__":

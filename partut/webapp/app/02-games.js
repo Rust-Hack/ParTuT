@@ -354,6 +354,28 @@ async function fetchRaffle() {
     raffleReady = true;
   } catch (e) { raffle = null; }
 }
+// Архив прошлых розыгрышей: без него виден только последний завершённый —
+// как только стартует следующий, итоги предыдущего пропадают безвозвратно.
+async function openRaffleHistory() {
+  showInfo("🏆 История розыгрышей", `<p style="color:var(--hint)">Загрузка…</p>`);
+  try {
+    const r = await fetch("/api/raffle/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+    const d = await r.json();
+    if (!d.ok) { $("infoBody").innerHTML = `<p style="color:var(--hint)">Не удалось загрузить.</p>`; return; }
+    const list = d.history || [];
+    if (!list.length) { $("infoBody").innerHTML = `<p style="color:var(--hint)">Пока не было ни одного розыгрыша.</p>`; return; }
+    $("infoBody").innerHTML = list.map(rf => {
+      const wins = (rf.winners || []).length
+        ? rf.winners.map(w => `<div class="statrow" style="font-size:14px">
+            <span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${esc(w.who)}</span><b>${esc(w.prize)}</b></div>`).join("")
+        : `<p style="color:var(--hint);font-size:13px;margin:4px 0">Участников не набралось.</p>`;
+      return `<div class="card-block" style="text-align:left;margin-bottom:10px">
+        <div style="font-weight:800;margin-bottom:2px">${esc(rf.title)}</div>
+        <div style="color:var(--hint);font-size:12px;margin-bottom:8px">${whenRu(rf.finished_at)} · участников: ${rf.participants_count}</div>
+        ${wins}</div>`;
+    }).join("");
+  } catch (e) { $("infoBody").innerHTML = `<p style="color:var(--hint)">${текстСбоя(e)}</p>`; }
+}
 function renderRaffle() {
   if (!raffle) {
     if (!$("raffleWrap")) return;
@@ -525,25 +547,38 @@ function renderWheelHist() {
 // Кирпичная стена (как на сплеше) — база каждого сектора.
 const WHEEL_BRICK = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='60'%3E%3Cpath d='M0 30H120M0 60H120M0 0V30M60 0V30M120 0V30M30 30V60M90 30V60' stroke='%23081419' stroke-width='2' fill='none'/%3E%3Cpath d='M0 2H120M0 32H120' stroke='%23163039' stroke-width='1' fill='none'/%3E%3C/svg%3E")`;
 let wheelDeg = 0, spinning = false;
+// Границы секторов — поровну, не по весу. Пробовали рисовать по весу (шансы
+// разнятся в 26 раз), но узкие дольки для редких призов слипались в кашу из
+// цифр — некрасиво важнее математической точности здесь. Честность про
+// шансы — текстом в правилах (см. wheelInfo ниже), а не искажением колеса.
+function wheelBounds(sectors) {
+  const seg = 360 / (sectors.length || 1);
+  return sectors.map((_, i) => ({ start: i * seg, end: (i + 1) * seg }));
+}
+function sectorIndexAt(angle, bounds) {
+  const a = ((angle % 360) + 360) % 360;
+  for (let i = 0; i < bounds.length; i++) if (a >= bounds[i].start && a < bounds[i].end) return i;
+  return bounds.length - 1;
+}
 function renderWheel() {
   const sectors = wheel.sectors || [];
-  const n = sectors.length || 1;
-  const seg = 360 / n;
-  // Сектора: кирпич + лёгкая неоновая подсветка (SUPER — розовый), между ними — неоновые лучи.
+  const bounds = wheelBounds(sectors);
+  // Сектора: кирпич + лёгкая неоновая подсветка (SUPER — розовый), у начала
+  // каждого сектора — неоновая черта-разделитель (сама и есть «луч»).
   // Цвета — переменными, а не значениями: колесо собирается один раз, но при
   // смене темы перекрашивается само, без перерисовки.
   const tint = sectors.map((s, i) => {
     const c = s.label === "SUPER" ? "var(--wheel-super)" : (i % 2 ? "var(--wheel-sec-b)" : "var(--wheel-sec-a)");
-    return `${c} ${i * seg}deg ${(i + 1) * seg}deg`;
+    const { start, end } = bounds[i];
+    const rayEnd = Math.min(start + 1.1, end);
+    return `var(--wheel-ray) ${start}deg ${rayEnd}deg, ${c} ${rayEnd}deg ${end}deg`;
   }).join(",");
-  const rays = `repeating-conic-gradient(from 0deg, var(--wheel-ray) 0 1.1deg, transparent 1.1deg ${seg}deg)`;
-  const wheelBgImage = `${rays}, conic-gradient(${tint}), var(--wheel-brick)`;   // ставим из JS (кавычки в url ломают inline style)
-  // Огоньки на внешних углах секторов (крутятся вместе с колесом).
-  // луч-разделитель имеет ширину 1.1° → его центр смещён на 0.55°; ставим огонёк ровно на центр линии
+  const wheelBgImage = `conic-gradient(${tint}), var(--wheel-brick)`;   // ставим из JS (кавычки в url ломают inline style)
+  // Огоньки на границах секторов (крутятся вместе с колесом), в самом центре черты.
   const cornerLamps = sectors.map((_, i) =>
-    `<div class="clamp" style="transform:rotate(${i * seg + 0.55}deg)"><i></i></div>`).join("");
+    `<div class="clamp" style="transform:rotate(${bounds[i].start + 0.55}deg)"><i></i></div>`).join("");
   const labels = sectors.map((s, i) => {
-    const a = (i + 0.5) * seg;
+    const a = (bounds[i].start + bounds[i].end) / 2;
     const inner = s.label === "SUPER" ? `<b class="lstar">★</b>` : `${esc(s.label)}<b class="lcoin">🪙</b>`;
     return `<div class="wlabel ${s.label === 'SUPER' ? 'lsuper' : ''}" style="transform:rotate(${a}deg)"><span>${inner}</span></div>`;
   }).join("");
@@ -568,7 +603,7 @@ function renderWheel() {
       <div class="wheel-hint" id="wheelHint" style="margin-bottom:0">${canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} ${CUR} покупок до прокрута`}</div>
     </div>
     <button class="bigbtn" id="spinBtn" ${canSpin ? "" : "disabled"}>${canSpin ? "Крутить 🎡" : "Накопите покупок для прокрута"}</button>
-    ${(me && me.is_admin) ? `<button class="closebtn" id="grantSpin" style="margin-top:8px">🔧 +3 прокрута (тест)</button>` : ""}`;
+    ${(me && me.is_super) ? `<button class="closebtn" id="grantSpin" style="color:var(--danger);margin-top:8px">🔧 +3 прокрута (тест)</button>` : ""}`;
   const we = $("wheelEl");                                 // фон задаём из JS (url с кавычками)
   we.style.backgroundImage = wheelBgImage;
   we.style.backgroundSize = "auto, auto, 88px 44px";
@@ -582,7 +617,7 @@ function renderWheel() {
     <p>Крутите колесо и выигрывайте монеты 🪙.</p>
     <ul style="margin:8px 0;padding-left:18px;color:var(--text)">
       <li><b>1 прокрут</b> — за каждые <b>${wheel.step} ${CUR}</b> покупок (считается после выдачи заказа).</li>
-      <li>Призы: от <b>100</b> до <b>1000</b> монет, сектор <b>SUPER</b> — 2000.</li>
+      <li>Призы: от <b>100</b> до <b>1000</b> монет, сектор <b>SUPER</b> — 2000. Сектора нарисованы поровну, а по-настоящему малые призы выпадают заметно чаще: 100 монет — самый частый исход, SUPER — самый редкий.</li>
       <li>Монеты тратятся скидкой в корзине (100 монет = 1 Br) и на слот «Облако Монет».</li>
     </ul>`);
   if ($("grantSpin")) $("grantSpin").onclick = async () => {
@@ -629,17 +664,21 @@ async function spinWheel() {
   el.querySelectorAll(".wlabel.win").forEach(l => l.classList.remove("win"));
   el.style.transition = "none";
 
-  const n = (wheel.sectors || []).length, seg = 360 / n;
+  const n = (wheel.sectors || []).length;
+  const bounds = wheelBounds(wheel.sectors || []);
   const v0 = 0.9;                                  // °/мс — постоянная скорость раскрутки
-  let angle = wheelDeg, lastBucket = Math.floor(angle / seg);
+  let angle = wheelDeg, lastBucket = sectorIndexAt(angle, bounds);
   let phase = 1, running = true, prevT = performance.now();
   let decelStart = 0, decelDur = 0, startAngle = 0, dist = 0, res = null;
   // Пройден сектор → тик трещотки.
-  const tickCross = () => { const b = Math.floor(angle / seg); if (b !== lastBucket) { ratchetTick(); lastBucket = b; } };
+  const tickCross = () => { const b = sectorIndexAt(angle, bounds); if (b !== lastBucket) { ratchetTick(); lastBucket = b; } };
   // Флажок: резкий толчок по ходу вращения сразу после штырька, плавно к нулю.
   const flickPointer = () => {
     if (!ptr) return;
-    const frac = (((angle % seg) + seg) % seg) / seg;      // 0..1 — позиция внутри сектора
+    const am = ((angle % 360) + 360) % 360;
+    const b = bounds[sectorIndexAt(am, bounds)];
+    const width = b.end - b.start;
+    const frac = width > 0 ? (am - b.start) / width : 0;   // 0..1 — позиция внутри сектора
     const defl = -11 * Math.exp(-frac * 7);                // толчок после штырька, затухает
     ptr.style.transform = `translateX(-50%) rotate(${defl.toFixed(2)}deg)`;
   };
@@ -689,11 +728,18 @@ async function spinWheel() {
     const r = await fetch("/api/wheel/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     res = await r.json();
   } catch (e) { running = false; spinning = false; $("spinBtn").disabled = false; if ($("wheelResult")) $("wheelResult").textContent = "Сеть недоступна."; return; }
-  if (!res.ok) { running = false; spinning = false; refreshWheelInfo(); return; }
+  if (!res.ok) {
+    running = false; spinning = false;
+    el.style.transition = "transform .3s ease"; el.style.transform = `rotate(${wheelDeg}deg)`;   // вернуть на место, не оставлять колесо замершим на полпути
+    refreshWheelInfo();
+    alertMsg(res.error === "no_spins" ? "Прокруты закончились — попробуйте обновить страницу." : "Не удалось прокрутить, попробуйте ещё раз.");
+    return;
+  }
 
   // Переход в торможение: стартуем ровно с текущей скорости v0 (без скачка).
   const curMod = ((angle % 360) + 360) % 360;
-  const desiredMod = ((360 - (res.index + 0.5) * seg) % 360 + 360) % 360;
+  const targetMid = (bounds[res.index].start + bounds[res.index].end) / 2;
+  const desiredMod = ((360 - targetMid) % 360 + 360) % 360;
   const delta = (desiredMod - curMod + 360) % 360;
   // «Почти джекпот»: если выпал SUPER или соседний сектор — тормозим дольше и на оборот больше.
   const superIdx = (wheel.sectors || []).findIndex(s => s.label === "SUPER");

@@ -79,6 +79,12 @@ def api_admin_stats():
 
 ПЕРИОД_СЛОВАМИ = {"today": "за сегодня", "7d": "за 7 дней", "30d": "за 30 дней", "all": "за всё время"}
 
+# Заказов на один файл. При period=all магазин с историей в тысячи заказов
+# раньше отдавал один файл разом — здесь режем на части: и Excel открывает
+# такой файл без раздумий, и в чат он доходит без риска упереться в лимит
+# Telegram на вложение.
+_EXPORT_CHUNK = 3000
+
 
 @bp.route("/api/admin/stats/export", methods=["POST"])
 def api_admin_stats_export():
@@ -104,31 +110,44 @@ def api_admin_stats_export():
 
     period = inputs._text(data.get("period")) or "30d"
     days = PERIOD_DAYS.get(period, 30)
-    orders = db.orders_for_export(days)
+    # Выгрузка целиком — дело владельца (см. _OWNER_ONLY в auth.py, продавцу
+    # точки сюда хода нет вовсе). Но и владельцу не всегда нужны все точки
+    # разом — city сужает файл до одной, если он её указал.
+    city = inputs._text(data.get("city")) or None
+    orders = db.orders_for_export(days, city=city)
     if not orders:
         # Пустой файл выглядел бы как поломка выгрузки. Лучше сказать словами.
         return jsonify({"ok": False, "error": "empty",
                         "message": "За этот период заказов нет — выгружать нечего."}), 400
 
-    текст = export.csv_заказов(orders, shopinfo.COIN_VALUE, CITIES)
-    имя = f"partut-{period}-{db.shop_now().strftime('%Y-%m-%d')}.csv"
-    подпись = (f"📊 Заказы {ПЕРИОД_СЛОВАМИ.get(period, period)} — {len(orders)} шт.\n\n"
-               "Строка на каждую позицию. Чтобы получить выручку как на экране, "
-               "оставьте фильтром статус «Выдан» и сложите столбец «Выручка».\n"
-               "Прочерк в прибыли — не ноль, а «закупочная цена не заполнена».")
-    файл = io.BytesIO(export.в_файл(текст))
-    файл.name = имя
-    try:
-        tgsend.tg.send_document(int(admin["id"]), файл, caption=подпись)
-    except Exception as e:
-        print(f"Не смог отправить выгрузку админу {admin['id']}: {e}")
-        # Самая частая причина — бот не может писать первым тому, кто ни разу
-        # не открывал с ним чат. Совет «попробуйте ещё раз» тут не помогает
-        # никогда, поэтому говорим, что делать.
-        return jsonify({"ok": False, "error": "send_failed",
-                        "message": "Файл собран, но не ушёл в чат. Откройте чат с ботом, "
-                                   "напишите ему /start и повторите."}), 502
-    return jsonify({"ok": True, "rows": len(orders), "file": имя})
+    chunks = [orders[i:i + _EXPORT_CHUNK] for i in range(0, len(orders), _EXPORT_CHUNK)]
+    where = f"-{city}" if city else ""
+    sent = 0
+    for i, chunk in enumerate(chunks, 1):
+        текст = export.csv_заказов(chunk, shopinfo.COIN_VALUE, CITIES)
+        часть = f"-часть{i}" if len(chunks) > 1 else ""
+        имя = f"partut-{period}{where}{часть}-{db.shop_now().strftime('%Y-%m-%d')}.csv"
+        подпись = (f"📊 Заказы {ПЕРИОД_СЛОВАМИ.get(period, period)}"
+                   f"{f' · {CITIES.get(city, city)}' if city else ''} — {len(orders)} шт."
+                   + (f"\nЧасть {i} из {len(chunks)}." if len(chunks) > 1 else "") + "\n\n"
+                   "Строка на каждую позицию. Чтобы получить выручку как на экране, "
+                   "оставьте фильтром статус «Выдан» и сложите столбец «Выручка».\n"
+                   "Прочерк в прибыли — не ноль, а «закупочная цена не заполнена».")
+        файл = io.BytesIO(export.в_файл(текст))
+        файл.name = имя
+        try:
+            tgsend.tg.send_document(int(admin["id"]), файл, caption=подпись)
+            sent += 1
+        except Exception as e:
+            print(f"Не смог отправить выгрузку админу {admin['id']} (файл {i}/{len(chunks)}): {e}")
+            # Самая частая причина — бот не может писать первым тому, кто ни разу
+            # не открывал с ним чат. Совет «попробуйте ещё раз» тут не помогает
+            # никогда, поэтому говорим, что делать — и честно, сколько уже дошло.
+            return jsonify({"ok": False, "error": "send_failed", "sent": sent, "of": len(chunks),
+                            "message": (f"Дошло {sent} из {len(chunks)} файлов, дальше не пустило. "
+                                        if sent else "Файл собран, но не ушёл в чат. ")
+                                       + "Откройте чат с ботом, напишите ему /start и повторите."}), 502
+    return jsonify({"ok": True, "rows": len(orders), "files": len(chunks)})
 
 
 @bp.route("/api/admin/stats/reset", methods=["POST"])

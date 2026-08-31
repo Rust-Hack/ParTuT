@@ -114,6 +114,20 @@ def get_last_finished_raffle():
     return row
 
 
+def finished_raffles(limit=15):
+    """Архив прошлых розыгрышей, новые сверху.
+
+    Раньше был виден только САМЫЙ последний (get_last_finished_raffle,
+    LIMIT 1) — как только стартовал следующий розыгрыш, итоги предыдущего
+    пропадали безвозвратно, и для покупателя, и для владельца в приложении."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("SELECT * FROM raffles WHERE status = 'finished' ORDER BY id DESC LIMIT %s"), (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def create_raffle(title="Розыгрыш месяца", prize1="Одноразка", prize2="Жидкость",
                   prize3_coins=500, threshold=25, days=30):
     now = db.shop_now()

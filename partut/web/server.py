@@ -346,6 +346,24 @@ def api_notify_me():
     return jsonify({"ok": True, "in_stock": False})
 
 
+@app.route("/api/favorite", methods=["POST"])
+def api_favorite():
+    """Сердечко на карточке. Раньше избранное жило только в localStorage
+    браузера — пропадало при смене устройства, а владелец не видел спрос."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = auth.get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "no_user"}), 403
+    pid = inputs.целое(data.get("product_id"))
+    if pid is None:
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    if data.get("off"):
+        db.remove_favorite(pid, int(user["id"]))
+    else:
+        db.add_favorite(pid, int(user["id"]))
+    return jsonify({"ok": True})
+
+
 @app.before_request
 def _start_timer():
     request._t0 = time.time()
@@ -562,7 +580,7 @@ def api_me():
     except Exception as e:
         print(f"Не удалось собрать данные покупателя {uid}: {e}")
         me = {"age_ok": False, "reminders_on": True, "my_point": None,
-              "alerts": [], "prefill": {"phone": "", "addresses": {}}, "raffle_on": False}
+              "alerts": [], "favorites": [], "prefill": {"phone": "", "addresses": {}}, "raffle_on": False}
     # Запоминаем, как человека зовут. Telegram присылает имя при каждом открытии
     # приложения, а мы его нигде не сохраняли: в списке покупателей все, кто ещё
     # не сделал заказ, выглядели голым числом.
@@ -580,6 +598,7 @@ def api_me():
 
     return jsonify({"ok": True, "age_ok": me["age_ok"], "is_admin": is_admin(uid),
                     "is_super": is_super_admin(uid), "alerts": me["alerts"],
+                    "favorites": me["favorites"],
                     # Роль и точка: приложение прячет по ним то, что сервер всё
                     # равно вернёт с 403. Пустой город у продавца — все точки.
                     "role": admin_role(uid),

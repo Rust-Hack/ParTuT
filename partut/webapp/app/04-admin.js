@@ -831,8 +831,12 @@ async function loadStats() {
     <div class="statlist">${gamesRows(s.games || {})}</div>
     <div class="stathead">📦 Склад <span class="stathint">пополни, чтобы не терять продажи</span></div>
     <div class="statlist">${stockRows}</div>
-    <button class="closebtn" id="exportStats" style="margin-top:18px">📄 Выгрузить заказы в файл</button>
-    <div class="dnote" style="margin:6px 0 0">Придёт документом в чат с ботом — за выбранный период, строка на каждую позицию. Открывается в Excel.</div>
+    <select id="exportCity" style="margin-top:18px;width:100%">
+      <option value="">Все точки</option>
+      ${(cityList || []).map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}
+    </select>
+    <button class="closebtn" id="exportStats" style="margin-top:8px">📄 Выгрузить заказы в файл</button>
+    <div class="dnote" style="margin:6px 0 0">Придёт документом в чат с ботом — за выбранный период и точку, строка на каждую позицию. Открывается в Excel.</div>
     ${(me && me.is_super) ? `<button class="closebtn" id="resetStats" style="color:var(--danger);margin-top:18px">🧹 Сбросить статистику (тестовые данные)</button>` : ""}`;
   bindPeriodBtns();
   if ($("exportStats")) $("exportStats").onclick = exportStats;
@@ -844,9 +848,11 @@ async function exportStats() {
   const b = $("exportStats");
   b.disabled = true; b.textContent = "Готовлю файл…";
   try {
-    const r = await fetch("/api/admin/stats/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, period: statsPeriod }) });
+    const city = ($("exportCity") && $("exportCity").value) || "";
+    const r = await fetch("/api/admin/stats/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, period: statsPeriod, city }) });
     const d = await r.json();
-    if (d.ok) alertMsg(`Готово ✅ ${d.rows} ${plural(d.rows, "заказ", "заказа", "заказов")} — файл придёт в чат с ботом.`);
+    if (d.ok) alertMsg(`Готово ✅ ${d.rows} ${plural(d.rows, "заказ", "заказа", "заказов")}`
+      + (d.files > 1 ? ` — ${d.files} файлами придут в чат с ботом.` : " — файл придёт в чат с ботом."));
     else alertMsg(d.message || "Не удалось выгрузить.");
   } catch (e) { alertMsg(текстСбоя(e)); }
   finally { b.disabled = false; b.textContent = "📄 Выгрузить заказы в файл"; }

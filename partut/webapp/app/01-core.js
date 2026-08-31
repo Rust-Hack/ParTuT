@@ -147,7 +147,10 @@ const withUnit = (val, unit) => {
 let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilters = [], flavorFilters = [], sortMode = "default";
 const cart = {};
 let useCoins = false;   // списывать ли монеты при оформлении
-let favs = JSON.parse(localStorage.getItem("favs") || "[]");
+// Избранное живёт на сервере (таблица favorites) — приходит в /api/me,
+// пополняется по нажатию сердечка. Раньше жило только в localStorage:
+// пропадало при смене устройства, а владелец не видел спрос вовсе.
+let favs = new Set();
 let currentOrder = null, me = null, activeTab = "catalog";
 
 const $ = (id) => document.getElementById(id);
@@ -385,6 +388,24 @@ async function start() {
     stockAlerts = new Set(me.alerts || []);   // о чём уже просили сообщить
     remindersOn = me.reminders_on !== false;
     raffleOn = me.raffle_on === true;         // нет розыгрыша — нет и вкладки
+    favs = new Set(me.favorites || []);
+    // Разовый перенос: у покупателя, который уже отмечал избранное ДО переезда
+    // на сервер, список лежит в localStorage этого браузера. Если на сервере
+    // ещё пусто, а тут что-то есть — переносим один раз и снимаем метку только
+    // после того, как всё реально ушло (а не заранее — иначе обрыв сети
+    // потерял бы список безвозвратно, не долетев до сервера).
+    if (!favs.size) {
+      const legacy = JSON.parse(localStorage.getItem("favs") || "[]");
+      if (legacy.length) {
+        try {
+          await Promise.all(legacy.map(id => fetch("/api/favorite", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ initData, product_id: id }) })));
+          legacy.forEach(id => favs.add(id));
+          localStorage.removeItem("favs");
+        } catch (e) { /* перенесём при следующем заходе */ }
+      }
+    }
     renderNav();
     // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
     if (me.age_ok) loadCatalog().then(prefetchBonuses).then(openDeepLink); else $("ageView").classList.add("show");
@@ -738,7 +759,7 @@ async function notifyMe(id) {
     if (d.in_stock) { alertMsg("Товар уже в наличии — можно заказывать."); await loadProducts(); return; }
     stockAlerts.add(id);
     updateAlertsBadge();
-    renderGrid(); renderFavs();
+    renderGrid(); if (activeTab === "fav") renderFav();
     if (currentProductId === id) renderProduct();
     alertMsg("Сообщим, как только появится 🔔");
   } catch (e) { alertMsg(текстСбоя(e)); }
@@ -754,7 +775,7 @@ function gridRating(p) {
 }
 function cardHtml(p) {
   const photo = p.photo_url ? `<img src="${thumbOf(p)}" alt="" loading="lazy" decoding="async" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
-  const isFav = favs.includes(p.id);
+  const isFav = favs.has(p.id);
   const sub = subtitleFor(p);
   let ctrl;
   if (p.stock <= 0) {
@@ -803,10 +824,22 @@ function changeQty(id, delta, flavor = null) {
   else cart[key] = { product_id: id, flavor: flavor || null, qty: Math.min(next, max) };
   renderGrid(); renderNav(); if (activeTab === "cart") renderCart();
 }
-function toggleFav(id) {
-  const i = favs.indexOf(id); if (i >= 0) favs.splice(i, 1); else favs.push(id);
-  localStorage.setItem("favs", JSON.stringify(favs));
+async function toggleFav(id) {
+  const on = !favs.has(id);
+  if (on) favs.add(id); else favs.delete(id);   // мгновенно на экране, не дожидаясь ответа
   renderGrid(); if (activeTab === "fav") renderFav();
+  if (currentProductId === id) renderProduct();
+  try {
+    const r = await fetch("/api/favorite", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData, product_id: id, off: !on }) });
+    const d = await r.json();
+    if (!d.ok) throw new Error("not_ok");
+  } catch (e) {
+    // Не долетело — откатываем, чтобы сердечко не врало о том, чего на сервере нет.
+    if (on) favs.delete(id); else favs.add(id);
+    renderGrid(); if (activeTab === "fav") renderFav();
+    if (currentProductId === id) renderProduct();
+  }
 }
 let searchTimer = 0;
 $("searchInput").oninput = (e) => {
@@ -955,7 +988,7 @@ function ucard(p) {
 }
 
 function renderFav() {
-  const list = allProducts.filter(p => favs.includes(p.id));
+  const list = allProducts.filter(p => favs.has(p.id));
   if (!list.length) { $("tab-fav").innerHTML = `<div class="empty"><div class="circ">♡</div><h3>Нет избранных товаров</h3><p>Добавьте товары, нажав на сердечко.</p></div>`; return; }
   $("tab-fav").innerHTML = `<div class="grid">${list.map(cardHtml).join("")}</div>`;
   bindCardButtons($("tab-fav"));
@@ -1490,7 +1523,11 @@ async function renderBonus() {
     <button data-bt="ref" class="${bonusTab === 'ref' ? 'on' : ''}">👥 Рефералы</button></div>`;
   let body;
   if (bonusTab === "raffle") {
-    body = `<div id="raffleWrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
+    // Виден только последний завершённый розыгрыш (raffleWrap) — раньше итоги
+    // прошлых пропадали безвозвратно, как только стартовал следующий.
+    body = `<div style="text-align:right;margin-bottom:8px">
+        <button class="soundtgl" id="raffleHistBtn" style="width:auto;padding:0 12px">🏆 История</button></div>
+      <div id="raffleWrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
   } else if (bonusTab === "ref") {
     body = referralHtml();
   } else {
@@ -1506,6 +1543,6 @@ async function renderBonus() {
     if (gameMode === "slot") renderSlot();
     else { $("gameWrap").innerHTML = `<div id="wheelWrap"></div>`; renderWheel(); }
   } else if (bonusTab === "ref") bindReferral();
-  else if (bonusTab === "raffle") renderRaffle();
+  else if (bonusTab === "raffle") { renderRaffle(); if ($("raffleHistBtn")) $("raffleHistBtn").onclick = openRaffleHistory; }
 }
 

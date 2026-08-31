@@ -73,7 +73,7 @@ def run():
     d = r.get_json() or {}
     c("выгрузка принята", d.get("ok") is True)
     c("сказано, сколько заказов", d.get("rows") == 1)
-    c("имя файла с датой и расширением", str(d.get("file", "")).endswith(".csv"))
+    c("один файл — без деления на части", d.get("files") == 1)
 
     tgsend.дождаться_фона(5)
     c("файл ушёл документом в чат", len(ДОКУМЕНТЫ) == 1)
@@ -141,6 +141,24 @@ def run():
     c("и сказано человеческими словами", "нет" in ((r.get_json() or {}).get("message") or ""))
     c("файл при этом не отправлен", len(ДОКУМЕНТЫ) == 0)
 
+    # --- Выгрузка по одной точке ---
+    _clean()
+    _order([{"id": 8, "name": "МинскийТовар", "price": 10.0, "qty": 1}], 10.0)
+    db.add_location("Туров")
+    oid_turov = db.create_order(BUYER, "buyer", "Туров",
+                                [{"id": 9, "name": "ТуровскийТовар", "price": 5.0, "qty": 1}], 5.0, "")
+    conn = db.connect(); conn.cursor().execute(
+        db._q("UPDATE orders SET status = 'issued' WHERE id = %s"), (oid_turov,)); conn.commit(); conn.close()
+    cache.bust()
+    r = client.post("/api/admin/stats/export", json={"initData": "x", "period": "all", "city": "Минск"})
+    d = r.get_json() or {}
+    c("город сужает выгрузку", d.get("rows") == 1)
+    tgsend.дождаться_фона(5)
+    строки = _таблица(ДОКУМЕНТЫ[-1][2].decode("utf-8-sig"))
+    c("в файле только минский товар", _столбец(строки[1:], строки[0], "Товар") == ["МинскийТовар"])
+    r = client.post("/api/admin/stats/export", json={"initData": "x", "period": "all"})
+    c("без города — оба заказа", (r.get_json() or {}).get("rows") == 2)
+
     return c.fails
 
 
@@ -185,6 +203,40 @@ def run_отказ_телеграма():
     c("код говорит о сбое доставки", r.status_code == 502)
     c("сказано, ЧТО делать, а не «попробуйте ещё раз»", "/start" in (d.get("message") or ""))
     c("файл действительно не ушёл", len(ДОКУМЕНТЫ) == 0)
+    return c.fails
+
+
+def run_частями():
+    """Большая выгрузка режется на несколько файлов, а не уходит одним разом.
+
+    _EXPORT_CHUNK — 3000 заказов в бою, для теста подменяем на 2, чтобы не
+    заводить настоящие тысячи строк ради одной проверки деления.
+    """
+    from partut.web import admin as admin_mod
+
+    c = Checker("Выгрузка: большая история — несколькими файлами")
+    _clean()
+    as_admin()
+    for i in range(5):
+        _order([{"id": 100 + i, "name": f"Товар{i}", "price": 10.0, "qty": 1}], 10.0)
+
+    было = admin_mod._EXPORT_CHUNK
+    admin_mod._EXPORT_CHUNK = 2
+    try:
+        r = client.post("/api/admin/stats/export", json={"initData": "x", "period": "all"})
+        d = r.get_json() or {}
+        c("все пять заказов учтены", d.get("rows") == 5)
+        c("файлов три — по 2, 2 и 1 заказу", d.get("files") == 3)
+        tgsend.дождаться_фона(5)
+        c("документов отправлено тоже три", len(ДОКУМЕНТЫ) == 3)
+        всего_строк = 0
+        for _, _имя, байты in ДОКУМЕНТЫ:
+            строки = _таблица(байты.decode("utf-8-sig"))
+            всего_строк += len(строки) - 1     # минус шляпка
+        c("построчно ничего не потерялось между файлами", всего_строк == 5)
+        c("имя файла показывает номер части", "часть1" in ДОКУМЕНТЫ[0][1] and "часть3" in ДОКУМЕНТЫ[2][1])
+    finally:
+        admin_mod._EXPORT_CHUNK = было
     return c.fails
 
 

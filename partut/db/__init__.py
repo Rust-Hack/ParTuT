@@ -530,6 +530,20 @@ def init_db():
     """)
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_alerts ON stock_alerts (product_id, user_id)")
 
+    # Избранное. Раньше жило только в localStorage браузера — пропадало при
+    # смене устройства/переустановке Telegram, а владелец не видел вовсе,
+    # что покупатели откладывают (в отличие от stock_alerts, где спрос виден).
+    # Пара (товар, покупатель) уникальна — повторный тап не плодит дубли.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS favorites (
+            id         {ID_COL},
+            product_id INTEGER NOT NULL,
+            user_id    BIGINT  NOT NULL,
+            created_at TEXT
+        )
+    """)
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_favorites ON favorites (product_id, user_id)")
+
     # Админы и продавцы, добавленные из приложения (супер-админом).
     # Те, кто прописан в переменных окружения на хостинге, живут отдельно и
     # отсюда НЕ удаляются — это защита от потери доступа: даже если из
@@ -729,6 +743,7 @@ _ИНДЕКСЫ = (
     # У подписок уже есть уникальный (product_id, user_id), но он не помогает
     # искать ПО ПОКУПАТЕЛЮ: по второй колонке индекс не ищет.
     ("ix_stock_alerts_user", "stock_alerts (user_id)"),
+    ("ix_favorites_user", "favorites (user_id)"),
     # Летопись монет и движения склада: обе только растут, обе читаются
     # выборочно — по человеку и по товару.
     ("ix_coin_log_user", "coin_log (user_id)"),
@@ -1313,6 +1328,9 @@ def get_me_bundle(user_id, limit=20):
     cur.execute(_q("SELECT product_id FROM stock_alerts WHERE user_id = %s"), (user_id,))
     alerts = [int(r["product_id"]) for r in cur.fetchall()]
 
+    cur.execute(_q("SELECT product_id FROM favorites WHERE user_id = %s"), (user_id,))
+    favorites = [int(r["product_id"]) for r in cur.fetchall()]
+
     cur.execute(_q("""SELECT delivery_method, delivery_address, phone
                       FROM orders WHERE user_id = %s ORDER BY id DESC LIMIT %s"""),
                 (user_id, limit))
@@ -1341,6 +1359,7 @@ def get_me_bundle(user_id, limit=20):
         "reminders_on": not bool(u and u["no_reminders"]),
         "my_point": (int(u["pickup_point_id"]) if u and u["pickup_point_id"] else None),
         "alerts": alerts,
+        "favorites": favorites,
         "prefill": {"phone": phone, "addresses": addresses},
         "raffle_on": raffle_on,
     }
@@ -2440,6 +2459,10 @@ from partut.db.stock import (                                          # noqa: E
 
 # --- Промокоды ---
 # Код занимается одной транзакцией с заказом — см. partut/db/promos.py.
+from partut.db.favorites import (                                      # noqa: E402
+    add_favorite, remove_favorite, favorites_for_user, favorite_counts,   # noqa: F401
+)
+
 from partut.db.promos import (                                         # noqa: E402
     _promo_row, check_promo, consume_promo, release_promo,              # noqa: F401
     list_promos, add_promo, set_promo_active,                           # noqa: F401
@@ -2477,6 +2500,7 @@ from partut.db.games import (                                          # noqa: E
 from partut.db.raffles import (                                        # noqa: E402
     _RAFFLE_EDITABLE, _ensure_raffle_columns, _ensure_raffle_uniques,       # noqa: F401
     get_active_raffle, get_last_finished_raffle, recent_finished_raffle,    # noqa: F401
+    finished_raffles,                                                      # noqa: F401
     create_raffle, update_raffle_field, claim_raffle_draw,                  # noqa: F401
     set_raffle_winners, finish_raffle, add_raffle_entry, is_entered,        # noqa: F401
     count_entries, get_raffle_user_ids, spent_since, get_raffle_state,      # noqa: F401

@@ -427,7 +427,17 @@ def update_order_items(order_id, quantities, coin_value):
     conn = db.connect()
     cur = conn.cursor()
     try:
-        cur.execute(db._q("SELECT * FROM orders WHERE id = %s"), (order_id,))
+        # Блокировка строки заказа — тот же приём, что и у промокода
+        # (_reserve_promo): на Postgres SELECT ... FOR UPDATE, на SQLite её роль
+        # играет запись. Без неё два продавца, правящих состав ОДНОГО заказа
+        # одновременно, оба читают старые items, и чей коммит позже — тот и
+        # выигрывает: правки первого просто исчезают, включая уже списанный
+        # остаток склада.
+        if db.USE_PG:
+            cur.execute("SELECT * FROM orders WHERE id = %s FOR UPDATE", (order_id,))
+        else:
+            cur.execute("UPDATE orders SET id = id WHERE id = ?", (order_id,))
+            cur.execute(db._q("SELECT * FROM orders WHERE id = %s"), (order_id,))
         o = cur.fetchone()
         if not o:
             return None, "not_found"

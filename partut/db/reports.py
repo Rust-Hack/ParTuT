@@ -257,8 +257,10 @@ def also_bought(top=5, scan=500, min_count=2):
     return out
 
 
-def orders_for_export(days=None):
+def orders_for_export(days=None, city=None):
     """Сырые заказы за период — для выгрузки в файл. days=None → всё время.
+    city сужает выгрузку до одной точки — продавцу нужны только свои заказы,
+    а не весь магазин.
 
     Отдаём ВСЕ заказы, а не только выданные, и статус кладём столбцом. Выгрузка
     из одних выданных выглядела бы аккуратнее, но скрывала бы отказы — а это
@@ -274,8 +276,11 @@ def orders_for_export(days=None):
     cur = conn.cursor()
     поля = ("id, created_at, city, status, username, user_id, items, total, "
             "coins_used, promo_code, promo_discount, delivery_method, delivery_fee, payment_method")
+    условия, параметры = [], []
     if cutoff:
-        cur.execute(db._q(f"SELECT {поля} FROM orders WHERE created_at >= %s ORDER BY created_at, id"), (cutoff,))
-    else:
-        cur.execute(f"SELECT {поля} FROM orders ORDER BY created_at, id")
+        условия.append("created_at >= %s"); параметры.append(cutoff)
+    if city:
+        условия.append("city = %s"); параметры.append(city)
+    where = f" WHERE {' AND '.join(условия)}" if условия else ""
+    cur.execute(db._q(f"SELECT {поля} FROM orders{where} ORDER BY created_at, id"), tuple(параметры))
     return [dict(r) for r in cur.fetchall()]

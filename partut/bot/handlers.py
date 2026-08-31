@@ -442,10 +442,17 @@ def handle_admin_callback(call, chat_id, user_id, data):
         if not product:
             bot.send_message(chat_id, "Товар уже не найден.")
             return
+        # Та же проверка, что и в приложении (partut/web/catalog.py:api_admin_delete):
+        # незакрытые заказы по товару — повод спросить ещё раз, а не удалить молча.
+        живых = db.open_orders_with_product(product_id)
+        предупреждение = ""
+        if живых:
+            слово = "заказ" if живых == 1 else ("заказа" if живых < 5 else "заказов")
+            предупреждение = f"\n\n⚠️ По товару есть {живых} незакрытых {слово} — выдавать будет нечего."
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🗑 Да, удалить", callback_data=f"admdelyes:{product_id}"))
         kb.add(types.InlineKeyboardButton("Отмена", callback_data=f"admcard:{product_id}"))
-        bot.send_message(chat_id, f"Точно удалить «{product['name']}»?", reply_markup=kb)
+        bot.send_message(chat_id, f"Точно удалить «{product['name']}»?{предупреждение}", reply_markup=kb)
         return
 
     if data.startswith("admdelyes:"):
@@ -454,6 +461,10 @@ def handle_admin_callback(call, chat_id, user_id, data):
         if not product:
             bot.answer_callback_query(call.id, "Товар другой точки", show_alert=True)
             return
+        # Вариантов (вкус/сопротивление/цвет) без этого удаления товар не
+        # чистит — раньше они оставались мусором в product_variants, потому
+        # что чат удалял только сам товар (в отличие от api_admin_delete).
+        db.delete_variants(product_id)
         db.delete_product(product_id)
         _log_bot(user_id, "product/delete", f"id={product_id} · name={product['name']}")
         name = product["name"]
@@ -907,9 +918,26 @@ def _reminder_loop():
     доело квоту (см. keep_warm в run.py — та же болезнь, была ещё грубее).
     Все дела здесь суточные или с запасом в часы (авто-отмена, напоминания,
     ночная уборка) — 15 минут вместо одной погоды не делают, а окну для сна
-    базы между тиками достаточно, чтобы Neon успевал заснуть по-настоящему."""
+    базы между тиками достаточно, чтобы Neon успевал заснуть по-настоящему.
+
+    Сам цикл обёрнут в try/except (29 августа 2026, найдено при ревизии):
+    каждый шаг внутри _background_tick уже защищён своим try, но упавшее
+    ВНЕ шагов (например сам обход списка или вернуть_забытые) раньше убивало
+    поток насмерть — и тогда молча останавливались сразу все фоновые дела:
+    сводки, обе копии базы, авто-отмена, ночная уборка. Ни одного сообщения
+    об этом не было бы — errors.report просто никогда не вызывался бы. Теперь
+    падение цикла само по себе тоже ошибка, о которой узнаёт владелец, а
+    поток поднимается заново, как и опрос Телеграма в run.py."""
+    пауза = 15
     while True:
-        _background_tick()
+        try:
+            _background_tick()
+            пауза = 15                 # оборот прошёл чисто — сбрасываем нарастание
+        except Exception as e:
+            errors.report(bot, "фоновый цикл упал целиком", e)
+            time.sleep(пауза)
+            пауза = min(пауза * 2, 600)
+            continue
         time.sleep(_TICK_SECONDS)
 
 

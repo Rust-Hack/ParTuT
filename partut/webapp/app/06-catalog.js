@@ -514,8 +514,9 @@ function renderAdminList() {
     const out = st === "out" ? `<span class="tagbadge out">нет</span>`
               : st === "low" ? `<span class="tagbadge warn">осталось ${p.stock}</span>` : "";
     const wait = p.waiting ? `<span class="tagbadge warn">ждут ${p.waiting}</span>` : "";
+    const fav = p.favored ? `<span class="tagbadge">♥ ${p.favored}</span>` : "";
     const off = p.hidden ? `<span class="tagbadge">снят с витрины</span>` : "";
-    const marks = (out || wait || off) ? `<div class="admmarks">${out}${wait}${off}</div>` : "";
+    const marks = (out || wait || fav || off) ? `<div class="admmarks">${out}${wait}${fav}${off}</div>` : "";
     // «Больше не продаём» и «этого не было» — разные вещи. Снятый товар
     // сохраняет остаток, историю и отзывы, удалённый уносит их с собой.
     const tail = `<button class="iconbtn" data-move="${p.id}" title="Приход или списание">📦</button>

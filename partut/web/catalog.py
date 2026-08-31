@@ -45,6 +45,11 @@ def _all_products_payload():
         waiting = {}                      # счётчик — не повод ронять витрину
         print(f"Не удалось посчитать ожидающих: {e}")
     try:
+        favored = db.favorite_counts()
+    except Exception as e:
+        favored = {}                      # счётчик — не повод ронять витрину
+        print(f"Не удалось посчитать избранное: {e}")
+    try:
         ratings = db.product_ratings()
     except Exception as e:
         ratings = {}                      # без оценок витрина живёт
@@ -90,6 +95,9 @@ def _all_products_payload():
             "hidden": bool(p["hidden"]) if "hidden" in p.keys() else False,
             # Сколько человек ждут поступления — админу видно, что завозить.
             "waiting": waiting.get(p["id"], 0),
+            # Сколько раз товар в избранном — раньше это видел только браузер
+            # покупателя (localStorage), владелец не видел спрос вовсе.
+            "favored": favored.get(p["id"], 0),
             "photo_url": (f"/api/photo?file_id={p['photo']}" if p["photo"] else None),
             # Для сетки каталога — копия поменьше. У старых товаров её нет, тогда
             # отдаём полноразмерную: витрина в любом случае что-то покажет.
@@ -120,7 +128,7 @@ def _public_product(p):
     return {k: v for k, v in p.items() if k not in _ADMIN_ONLY_FIELDS}
 
 
-_ADMIN_ONLY_FIELDS = ("cost", "waiting", "hidden")
+_ADMIN_ONLY_FIELDS = ("cost", "waiting", "favored", "hidden")
 
 
 @bp.route("/api/admin/category", methods=["POST"])

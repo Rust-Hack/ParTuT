@@ -299,6 +299,20 @@ def api_raffle():
     return jsonify({"ok": True, "raffle": _raffle_public_from_state(st)})
 
 
+@bp.route("/api/raffle/history", methods=["POST"])
+def api_raffle_history():
+    """Архив прошлых розыгрышей — не только последний.
+
+    _raffle_results уже маскирует id участников, поэтому один и тот же ответ
+    годится и покупателю, и владельцу — разбивать на публичный/админский
+    маршрут незачем."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = auth.get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    return jsonify({"ok": True, "history": [_raffle_results(r) for r in db.finished_raffles(15)]})
+
+
 @bp.route("/api/raffle/join", methods=["POST"])
 def api_raffle_join():
     data = request.get_json(force=True, silent=True) or {}
