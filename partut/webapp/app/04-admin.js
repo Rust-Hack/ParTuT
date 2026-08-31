@@ -892,6 +892,10 @@ function gamesRows(g) {
 let raffleRunning = false, raffleУчастников = 0;
 $("mRaffle").onclick = openRaffleAdmin;
 $("raffleAdminClose").onclick = () => $("raffleAdminView").classList.remove("show");
+// Тот же архив, что видит покупатель (openRaffleHistory, 02-games.js) — админу
+// сервер сам подмешивает контакты победителей (for_admin в _raffle_results),
+// заводить второй экран под то же самое незачем.
+$("raHistory").onclick = openRaffleHistory;
 async function openRaffleAdmin() {
   $("raffleAdminView").classList.add("show");
   try {

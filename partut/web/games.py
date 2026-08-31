@@ -233,11 +233,15 @@ def _close_expired_raffle():
     return notifications.close_expired_raffle(tgsend.tg)
 
 
-def _raffle_results(raffle):
+def _raffle_results(raffle, for_admin=False):
     """Итоги завершённого розыгрыша: кто выиграл и кто вообще участвовал.
 
     Участники показываются наравне с победителями. Розыгрыш, в котором видно
-    только троих счастливчиков, выглядит как розыгрыш без свидетелей."""
+    только троих счастливчиков, выглядит как розыгрыш без свидетелей.
+
+    for_admin добавляет к победителю user_id и username — владельцу нужно
+    понимать, с кем связаться за призом, а не только порадоваться за него
+    вместе с покупателями."""
     try:
         winners = json.loads(raffle["winners"]) if raffle["winners"] else []
     except (TypeError, ValueError):
@@ -248,11 +252,18 @@ def _raffle_results(raffle):
     # после завершения), а не из записи победителя: место разыграно, а картинка
     # приза к нему привязана всегда, даже если это место никто не занял.
     photos_by_place = {1: raffle["photo1"] or "", 2: raffle["photo2"] or "", 3: raffle["photo3"] or ""}
+    winners_out = []
+    for w in winners:
+        entry = {"place": w.get("place"), "who": _winner_name(w.get("user_id")),
+                 "prize": w.get("prize") or "", "photo": photos_by_place.get(w.get("place"), "")}
+        if for_admin:
+            u = db.get_user_row(w.get("user_id"))
+            entry["user_id"] = w.get("user_id")
+            entry["username"] = (u["username"] or "") if (u and "username" in u.keys()) else ""
+        winners_out.append(entry)
     return {"title": raffle["title"] or "Розыгрыш",
             "finished_at": raffle["finished_at"] or raffle["ends_at"],
-            "winners": [{"place": w.get("place"), "who": _mask_id(w.get("user_id")),
-                         "prize": w.get("prize") or "",
-                         "photo": photos_by_place.get(w.get("place"), "")} for w in winners],
+            "winners": winners_out,
             # Победители уже названы выше — в списке участников их не повторяем.
             "participants": [_mask_id(u) for u in entrants if u not in winner_ids],
             "participants_count": len(entrants)}
@@ -293,8 +304,9 @@ def api_raffle():
         # о розыгрыше вообще ничего.
         finished_raffle = db.recent_finished_raffle()
         if finished_raffle:
+            for_admin = bool(auth.get_admin(data.get("initData", "")))
             return jsonify({"ok": True, "raffle": None,
-                            "finished": _raffle_results(finished_raffle)})
+                            "finished": _raffle_results(finished_raffle, for_admin)})
         return jsonify({"ok": False, "error": "no_raffle"}), 404
     return jsonify({"ok": True, "raffle": _raffle_public_from_state(st)})
 
@@ -303,14 +315,16 @@ def api_raffle():
 def api_raffle_history():
     """Архив прошлых розыгрышей — не только последний.
 
-    _raffle_results уже маскирует id участников, поэтому один и тот же ответ
-    годится и покупателю, и владельцу — разбивать на публичный/админский
-    маршрут незачем."""
+    Один маршрут на покупателя и владельца: и тому, и другому нужен один и
+    тот же список, разница только в том, что админ вдобавок видит контакты
+    победителей (user_id/username) — с кем связаться за призом. Заводить
+    отдельный /api/admin/... ради одного доп. поля незачем."""
     data = request.get_json(force=True, silent=True) or {}
     user = auth.get_user(data.get("initData", ""))
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
-    return jsonify({"ok": True, "history": [_raffle_results(r) for r in db.finished_raffles(15)]})
+    for_admin = bool(auth.get_admin(data.get("initData", "")))
+    return jsonify({"ok": True, "history": [_raffle_results(r, for_admin) for r in db.finished_raffles(15)]})
 
 
 @bp.route("/api/raffle/join", methods=["POST"])
@@ -477,6 +491,21 @@ def _mask_id(uid):
     """Кто это был — не называя человека. Показывать полный id участникам
     незачем: по нему пишут в личку."""
     return "•••" + str(uid)[-3:]
+
+
+def _winner_name(uid):
+    """Имя победителя для витрины: из Telegram, а не обезличенный id.
+
+    Победа в розыгрыше — повод для гордости, не утечка данных: имя и так
+    видно любому в общих чатах Telegram. Участников (не победивших) это не
+    касается — тех по-прежнему маскируем _mask_id, у победителей другая
+    роль на экране."""
+    u = db.get_user_row(uid)
+    first_name = (u["first_name"] or "").strip() if (u and "first_name" in u.keys()) else ""
+    if first_name:
+        return first_name
+    username = (u["username"] or "").strip() if (u and "username" in u.keys()) else ""
+    return ("@" + username) if username else _mask_id(uid)
 
 
 @bp.route("/api/admin/wheel/grant", methods=["POST"])

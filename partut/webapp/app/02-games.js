@@ -338,6 +338,14 @@ async function spinSlot() {
 // ----- Розыгрыши -----
 let raffle = null, raffleDone = null, raffleReady = false;
 const maskId = (id) => "•••" + ("" + id).slice(-3);
+// Контакт под именем победителя — приходит только админу (для_admin на сервере):
+// покупателю сервер эти поля вообще не присылает, так что для него функция
+// молчит сама собой, ничего проверять на клиенте не нужно.
+function contactLine(w) {
+  if (!w.user_id) return "";
+  const кого = w.username ? `<a href="https://t.me/${esc(w.username)}" target="_blank" rel="noopener">@${esc(w.username)}</a>` : `id ${w.user_id}`;
+  return `<div style="font-size:12px;color:var(--hint);margin-top:2px">✉️ ${кого}</div>`;
+}
 function raffleTimeLeft(ends) {
   if (!ends) return "—";
   const ms = new Date(ends.replace(" ", "T")) - new Date();
@@ -366,8 +374,8 @@ async function openRaffleHistory() {
     if (!list.length) { $("infoBody").innerHTML = `<p style="color:var(--hint)">Пока не было ни одного розыгрыша.</p>`; return; }
     $("infoBody").innerHTML = list.map(rf => {
       const wins = (rf.winners || []).length
-        ? rf.winners.map(w => `<div class="statrow" style="font-size:14px">
-            <span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${esc(w.who)}</span><b>${esc(w.prize)}</b></div>`).join("")
+        ? rf.winners.map(w => `<div class="statrow" style="font-size:14px;align-items:flex-start">
+            <span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${esc(w.who)}${contactLine(w)}</span><b>${esc(w.prize)}</b></div>`).join("")
         : `<p style="color:var(--hint);font-size:13px;margin:4px 0">Участников не набралось.</p>`;
       return `<div class="card-block" style="text-align:left;margin-bottom:10px">
         <div style="font-weight:800;margin-bottom:2px">${esc(rf.title)}</div>
@@ -389,7 +397,7 @@ function renderRaffle() {
         ? d.winners.map(w => `<div class="statrow"><span style="display:flex;align-items:center;gap:8px">
             ${w.photo ? `<img src="/api/photo?file_id=${encodeURIComponent(w.photo)}" alt=""
                               style="width:32px;height:32px;border-radius:8px;object-fit:cover;flex:none">` : ""}
-            ${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${esc(w.who)}</span><b>${esc(w.prize)}</b></div>`).join("")
+            <span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${esc(w.who)}${contactLine(w)}</span></span><b>${esc(w.prize)}</b></div>`).join("")
         : `<p style="color:var(--hint);font-size:14px;margin:0">Участников не набралось.</p>`;
       // Участники — наравне с победителями: розыгрыш, где видно только
       // троих счастливчиков, выглядит как розыгрыш без свидетелей.

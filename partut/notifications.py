@@ -13,7 +13,7 @@ import json
 from telebot import types
 
 from partut import db
-from partut.config import CITIES, WEBAPP_URL, admins_for_city
+from partut.config import CITIES, WEBAPP_URL, admins_for_city, SUPER_ADMIN_IDS
 
 
 def _orders_kb():
@@ -164,7 +164,50 @@ def draw_raffle(bot, raffle):
         except Exception as e:
             print(f"Не смог поздравить победителя {wid}: {e}")
     db.set_raffle_winners(raffle["id"], winners)
+    _notify_owner_raffle_winners(bot, raffle, winners)
     return True
+
+
+def _winner_contact(uid):
+    """(имя для строки, @username или пусто) — по учётной записи покупателя."""
+    u = db.get_user_row(uid)
+    username = (u["username"] or "").strip() if (u and "username" in u.keys()) else ""
+    first_name = (u["first_name"] or "").strip() if (u and "first_name" in u.keys()) else ""
+    return (first_name or (("@" + username) if username else f"id {uid}")), username
+
+
+def _notify_owner_raffle_winners(bot, raffle, winners):
+    """Владельцу — кто выиграл и с кем связаться. Без этого сообщения
+    обещание «продавец свяжется с вами», отправленное победителю выше,
+    выполнять было буквально некому: узнать о победителях можно было только
+    прочитав таблицу raffles руками."""
+    title = raffle["title"] or "Розыгрыш"
+    if not winners:
+        text = f"🏁 «{title}» завершён — участников не набралось, разыгрывать было некого."
+        kb = None
+    else:
+        метка = {1: "🥇", 2: "🥈", 3: "🥉"}
+        строки, кнопки = [], []
+        for w in winners:
+            имя, username = _winner_contact(w["user_id"])
+            хвост = f" (@{username})" if username and имя != "@" + username else ""
+            строки.append(f"{метка.get(w['place'], '')} {имя}{хвост} — {w['prize']}")
+            if username:
+                кнопки.append(types.InlineKeyboardButton(
+                    f"✉️ Написать за {w['place']} место", url=f"https://t.me/{username}"))
+        text = (f"🏁 «{title}» завершён.\n\n" + "\n".join(строки)
+                + "\n\nМонеты (3 место) уже начислены сами. За остальными призами — написать первым: "
+                  "победитель не может написать боту сам, пока сам не откроет с ним чат.")
+        kb = None
+        if кнопки:
+            kb = types.InlineKeyboardMarkup()
+            for b in кнопки:
+                kb.add(b)
+    for admin_id in SUPER_ADMIN_IDS:
+        try:
+            bot.send_message(admin_id, text, reply_markup=kb)
+        except Exception as e:
+            print(f"Не смог сообщить владельцу {admin_id} итоги розыгрыша: {e}")
 
 
 def close_expired_raffle(bot):

@@ -358,9 +358,54 @@ def run():
     titles = [h["title"] for h in hist["history"]]
     c10("новые сверху", titles == ["Архив-Два", "Архив-Один"])
 
+    # --- Победитель: имя вместо id, контакты — только владельцу ---
+    c11 = Checker("Победители: имя вместо id, контакты владельцу")
+    _clean()
+    as_admin()
+    client.post("/api/admin/raffle/start", json={
+        "initData": "x", "title": "ИмённойРозыгрыш", "prize1": "Под",
+        "prize2": "Жижа", "prize3_coins": 300, "threshold": 10, "days": 30})
+    ПОБЕДИТЕЛЬ = 8950
+    as_user(ПОБЕДИТЕЛЬ, username="win_user", first_name="Алексей")
+    db.set_age_ok(ПОБЕДИТЕЛЬ)
+    # as_user лишь подменяет проверку initData — имя в базу кладёт /api/me
+    # (remember_user_name), а в тесте до него дело не доходит. Кладём напрямую.
+    db.remember_user_name(ПОБЕДИТЕЛЬ, "win_user", "Алексей")
+    _spend(ПОБЕДИТЕЛЬ, 10.0)
+    r = client.post("/api/raffle/join", json={"initData": "x"})
+    c11("билет получен", r.get_json().get("entered") is True)
+
+    as_admin()
+    reset_sent()
+    client.post("/api/admin/raffle/draw", json={"initData": "x"})
+
+    # Покупателю (не админу) — только имя, без контактов.
+    deny_admin()      # as_admin() выше подменяет проверку НАВСЕГДА, снимаем её явно
+    as_user(9999, "прохожий")
+    d = client.post("/api/raffle", json={"initData": "x"}).get_json()
+    итоги = d.get("finished") or {}
+    победитель_рядовому = next((w for w in итоги.get("winners", []) if w["prize"] == "Под"), None)
+    c11("покупатель видит имя, не id", победитель_рядовому and победитель_рядовому["who"] == "Алексей")
+    c11("покупателю контакт не присылают", победитель_рядовому and "username" not in победитель_рядовому)
+
+    # Владельцу — то же самое плюс контакт (username/user_id).
+    as_admin()
+    d = client.post("/api/raffle", json={"initData": "x"}).get_json()
+    итоги = d.get("finished") or {}
+    победитель_админу = next((w for w in итоги.get("winners", []) if w["prize"] == "Под"), None)
+    c11("админу тоже имя", победитель_админу and победитель_админу["who"] == "Алексей")
+    c11("и username для связи", победитель_админу and победитель_админу.get("username") == "win_user")
+    c11("и сам id", победитель_админу and победитель_админу.get("user_id") == ПОБЕДИТЕЛЬ)
+
+    # Владелец получил личное уведомление, а не только победитель.
+    от_бота_владельцу = [t for chat, t, _ in SENT if chat == 716030279]
+    c11("владельцу пришло сообщение об итогах", any("ИмённойРозыгрыш" in t for t in от_бота_владельцу))
+    c11("в нём есть имя победителя", any("Алексей" in t for t in от_бота_владельцу))
+    c11("и что делать с монетами (3 место) — сказано", any("начислены сами" in t for t in от_бота_владельцу))
+
     _clean()
     return (c.fails + c2.fails + c3.fails + c31.fails + c4.fails + c5.fails + c6.fails
-            + c7.fails + c8.fails + c9.fails + c10.fails)
+            + c7.fails + c8.fails + c9.fails + c10.fails + c11.fails)
 
 
 if __name__ == "__main__":
