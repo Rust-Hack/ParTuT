@@ -505,6 +505,7 @@ function referralHtml() {
       <div class="rtiers">${tierBar}</div>
       <div style="color:var(--hint);font-size:13px;margin-top:10px">${nextLine}</div>
       <div class="rbanner">🎁 +${bonus.referral_bonus} монет за первый заказ каждого реферала</div>
+      <button class="closebtn" id="refHistBtn" style="margin-top:10px">🧾 История начислений</button>
     </div>
     <div class="card-block" style="text-align:left">
       <div style="font-weight:800;margin-bottom:6px">👥 Мои рефералы</div>${list}
@@ -520,6 +521,21 @@ function bindReferral() {
     navigator.clipboard && navigator.clipboard.writeText(bonus.ref_link);
     alertMsg("Ссылка скопирована ✅");
   };
+  if ($("refHistBtn")) $("refHistBtn").onclick = openReferralHistory;
+}
+// Раньше был виден только итог (ref_earned) — за какого именно друга
+// пришли монеты, было не восстановить. related_id в coin_log это чинит.
+async function openReferralHistory() {
+  showInfo("🧾 История начислений", `<p style="color:var(--hint)">Загрузка…</p>`);
+  try {
+    const r = await fetch("/api/referral/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+    const d = await r.json();
+    const rows = (d.ok && d.history) || [];
+    if (!rows.length) { $("infoBody").innerHTML = `<p style="color:var(--hint)">Пока ничего не начислено — поделитесь ссылкой выше.</p>`; return; }
+    $("infoBody").innerHTML = rows.map(x => `<div class="statrow" style="font-size:14px">
+        <span>${esc(x.friend)}<small style="display:block;color:var(--hint)">${esc(whenRu(x.at))}</small></span>
+        <b style="color:#2e9e4f">+${x.delta} 🪙</b></div>`).join("");
+  } catch (e) { $("infoBody").innerHTML = `<p style="color:var(--hint)">${текстСбоя(e)}</p>`; }
 }
 
 // ----- Колесо фортуны -----

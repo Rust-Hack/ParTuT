@@ -171,6 +171,50 @@ def run_recount():
     return c.fails
 
 
+def run_пачкой():
+    """Приход сразу по нескольким товарам одним запросом — крупный завоз
+    раньше требовал отдельного вызова на каждую позицию."""
+    c = Checker("Приход пачкой")
+    _clean()
+    as_admin(uid=555)
+
+    a = db.add_product("Минск", "pods", "ПачкаА", 20.0, 5, cost=10.0)
+    b = db.add_product("Минск", "pods", "ПачкаБ", 25.0, 3, cost=12.0)
+    чужой = db.add_product("Туров", "pods", "Чужой", 30.0, 1, cost=15.0)
+
+    r = client.post("/api/admin/stock/move/batch", json={
+        "initData": "x", "reason": "in",
+        "items": [{"id": a, "qty": 10}, {"id": b, "qty": 20, "cost": "13,5"}]})
+    d = r.get_json()
+    c("пачка принята", d.get("ok") is True)
+    c("обе позиции записаны", len(d.get("done") or []) == 2)
+    c("ничего не провалилось", not d.get("failed"))
+    c("остаток А вырос", db.get_product(a)["stock"] == 15)
+    c("остаток Б вырос", db.get_product(b)["stock"] == 23)
+    c("закупка Б обновилась", abs(float(db.get_product(b)["cost"]) - 13.5) < 0.01)
+
+    # Одна плохая позиция не должна топить остальные.
+    as_admin(uid=555, role="seller", city="Минск")
+    r = client.post("/api/admin/stock/move/batch", json={
+        "initData": "x", "reason": "in",
+        "items": [{"id": a, "qty": 5}, {"id": чужой, "qty": 5}, {"id": 999999, "qty": 1}]})
+    d = r.get_json()
+    c("своя позиция всё равно записана", any(x["id"] == a for x in d.get("done") or []))
+    c("чужая точка отклонена, но не роняет пачку", str(чужой) in (d.get("failed") or {}))
+    c("несуществующий товар тоже отклонён отдельной строкой", "999999" in (d.get("failed") or {}))
+    c("остаток А вырос ещё раз", db.get_product(a)["stock"] == 20)
+    c("чужой товар не тронут", db.get_product(чужой)["stock"] == 1)
+
+    as_admin(uid=555)
+    r = client.post("/api/admin/stock/move/batch", json={"initData": "x", "reason": "in", "items": []})
+    c("пустая пачка — отказ", r.get_json().get("ok") is False)
+    r = client.post("/api/admin/stock/move/batch", json={"initData": "x", "reason": "бред", "items": [{"id": a, "qty": 1}]})
+    c("плохая причина на всю пачку — отказ сразу", r.get_json().get("ok") is False)
+
+    _clean()
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)

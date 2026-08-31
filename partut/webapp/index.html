@@ -644,7 +644,14 @@
         <div class="ochips" id="admCatChips"></div>
         <div class="ochips" id="admLocChips"></div>
         <div class="ochips" id="admStockChips"></div>
+        <!-- Крупный завоз разом: без этого каждая позиция партии — отдельный
+             тап «Записать». Варианты со вкусами сюда не входят: у них остаток
+             свой на каждый вкус, для них есть редактор товара (✏️). -->
+        <button class="closebtn" id="batchModeBtn" style="margin:8px 0">📦 Массовый приход</button>
         <div id="adminList"></div>
+        <div id="batchBar" style="display:none;position:sticky;bottom:8px;margin-top:10px">
+          <button class="bigbtn" id="batchSave">Записать приход</button>
+        </div>
       </div>
     </details>
   </div>

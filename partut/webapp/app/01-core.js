@@ -384,7 +384,7 @@ async function start() {
     const startParam = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || "";
     me = await bootFetch("me", "/api/me", { method: "POST", headers: { "Content-Type": "application/json" },
                                             body: JSON.stringify({ initData, start_param: startParam }) });
-    if (!me.ok) { alertMsg("Откройте магазин из бота."); return; }
+    if (!me.ok) { hideSplash(); alertMsg("Откройте магазин из бота."); return; }
     stockAlerts = new Set(me.alerts || []);   // о чём уже просили сообщить
     remindersOn = me.reminders_on !== false;
     raffleOn = me.raffle_on === true;         // нет розыгрыша — нет и вкладки
@@ -408,8 +408,11 @@ async function start() {
     }
     renderNav();
     // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
-    if (me.age_ok) loadCatalog().then(prefetchBonuses).then(openDeepLink); else $("ageView").classList.add("show");
-  } catch (e) { alertMsg(текстСбоя(e)); }
+    // Заставку убираем сразу, как только есть что показать: каталог загружен,
+    // либо (если 18+ ещё не подтверждён) сам гейт уже готов встретить человека.
+    if (me.age_ok) loadCatalog().then(hideSplash).then(prefetchBonuses).then(openDeepLink);
+    else { $("ageView").classList.add("show"); hideSplash(); }
+  } catch (e) { hideSplash(); alertMsg(текстСбоя(e)); }
 }
 
 // Продавец приходит сюда из уведомления о заказе — кнопка в чате ведёт на
@@ -751,7 +754,14 @@ let remindersOn = true;     // напоминания о повторной по
 let stockAlerts = new Set();
 const waitingFor = (id) => stockAlerts.has(id);
 
+// Пока запрос не вернулся — повторный тап по той же карточке ничего не шлёт.
+// Раньше двойной тап (плохая связь, нетерпеливый палец) уходил ДВУМЯ
+// одинаковыми запросами: не опасно само по себе (подписка идемпотентна), но
+// кнопка при этом не давала понять, что первый тап уже принят.
+const notifyInFlight = new Set();
 async function notifyMe(id) {
+  if (notifyInFlight.has(id)) return;
+  notifyInFlight.add(id);
   try {
     const r = await fetch("/api/notify-me", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, product_id: id }) });
     const d = await r.json();
@@ -763,6 +773,7 @@ async function notifyMe(id) {
     if (currentProductId === id) renderProduct();
     alertMsg("Сообщим, как только появится 🔔");
   } catch (e) { alertMsg(текстСбоя(e)); }
+  finally { notifyInFlight.delete(id); }
 }
 
 // Оценка видна прямо на полке, с первого же отзыва — но всегда рядом с их
@@ -929,6 +940,12 @@ function renderCart() {
   // Подсказка про бесплатную доставку — ради неё порог и вводится: человек
   // сам добирает жидкость, чтобы не платить за дорогу. Считаем от стоимости
   // товаров, не от суммы со скидкой, иначе обещание не совпадёт с расчётом.
+  //
+  // Если способы доставки для этого города ещё не подтянуты (первый рендер
+  // корзины мог обогнать prefetchDelivery в start()) — city не значится в
+  // freeFromCache вовсе, и подсказка молча пропадала бы, будто порога нет.
+  // Дозапрашиваем и перерисовываем корзину, когда ответ придёт.
+  if (city && !(city in freeFromCache)) fetchDeliveryFor(city).then(() => { if (activeTab === "cart") renderCart(); });
   const freeFrom = freeFromCache[city] || 0;
   const freeHtml = !freeFrom ? ""
     : total >= freeFrom
@@ -1015,7 +1032,9 @@ function renderProfile() {
       <div class="prow"><span>${dark ? "🌙 Тёмная тема" : "☀️ Светлая тема"}</span><span class="switch ${dark?'on':''}" id="themeSwitch"></span></div>
       <div class="prow" id="openMySettings"><span>⚙️ Мои настройки</span><span>›</span></div>
       <div class="prow" id="openMyOrders"><span>📦 Мои заказы</span><span>›</span></div>
+      <div class="prow" id="openCoinHistory"><span>🪙 История монет</span><span>›</span></div>
       <div class="prow" id="openMyAlerts"><span>🔔 Жду поступления <b id="alertsBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
+      <div class="prow" id="openDocsTop" style="display:none"><span>📄 Оферта и обработка данных</span><span>›</span></div>
       <div class="prow" id="openRules"><span>📖 Как всё устроено</span><span>›</span></div>
       <div class="prow" id="openSupport"><span>💬 Написать в поддержку</span><span>›</span></div>
     </div></div>`;
@@ -1023,7 +1042,10 @@ function renderProfile() {
   $("openMySettings").onclick = openMySettings;
   if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
   $("openMyOrders").onclick = openMyOrders;
+  $("openCoinHistory").onclick = openCoinHistory;
   $("openMyAlerts").onclick = openMyAlerts;
+  $("openDocsTop").onclick = () => openDocs("offer");
+  applyDocsVisibility();
   $("openRules").onclick = openRules;
   $("openSupport").onclick = () => openSupport();
   $("profIdCopy").onclick = copyMyId;
@@ -1306,6 +1328,10 @@ function docsReady() { return !!(me && me.docs_ready); }
 
 function applyDocsVisibility() {
   if ($("myDocs")) $("myDocs").style.display = docsReady() ? "" : "none";
+  // Тот же документ — ещё и прямой строкой в профиле, не только внутри
+  // «Моих настроек». Юридический документ должен быть виден сразу, а не на
+  // втором уровне вложенности, куда без причины никто не заходит.
+  if ($("openDocsTop")) $("openDocsTop").style.display = docsReady() ? "" : "none";
 }
 
 async function openMySettings() {
@@ -1329,6 +1355,22 @@ async function copyMyId() {
   const ok = await copyText(id);
   haptic("impact", "light");
   if (ok) toast("ID скопирован ✓");
+}
+
+// Раньше баланс монет и общая сумма ref_earned были видны, а откуда взялась
+// КАЖДАЯ монета — только по разным экранам порознь (колесо своя история за
+// сессию, рефералы отдельно). Один список — вся летопись coin_log.
+async function openCoinHistory() {
+  showInfo("🪙 История монет", `<p style="color:var(--hint)">Загрузка…</p>`);
+  try {
+    const r = await fetch("/api/coins/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+    const d = await r.json();
+    const rows = (d.ok && d.history) || [];
+    if (!rows.length) { $("infoBody").innerHTML = `<p style="color:var(--hint)">Пока пусто.</p>`; return; }
+    $("infoBody").innerHTML = rows.map(x => `<div class="statrow" style="font-size:14px">
+        <span>${esc(x.reason)}<small style="display:block;color:var(--hint)">${esc(whenRu(x.at))}</small></span>
+        <b style="color:${x.delta >= 0 ? '#2e9e4f' : 'var(--danger)'}">${x.delta >= 0 ? "+" : ""}${x.delta} 🪙</b></div>`).join("");
+  } catch (e) { $("infoBody").innerHTML = `<p style="color:var(--hint)">${текстСбоя(e)}</p>`; }
 }
 
 $("myAlertsClose").onclick = () => $("myAlertsView").classList.remove("show");

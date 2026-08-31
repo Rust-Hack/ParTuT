@@ -583,7 +583,8 @@ def init_db():
             user_id    BIGINT,
             delta      INTEGER,
             reason     TEXT,
-            created_at TEXT
+            created_at TEXT,
+            related_id BIGINT
         )
     """)
 
@@ -678,6 +679,7 @@ def init_db():
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
     _ensure_user_columns()      # coins / referred_by у пользователей
     _ensure_order_columns()     # coins_used / доставка у заказов
+    _ensure_coin_log_columns()  # related_id — какой реферал за начислением
     _ensure_category_columns()  # has_flavors у категорий
     _ensure_photo_columns()     # галерея у модели, а не у товара
     _migrate("0001-модели-собраны-из-товаров", models_seeded_from_products)
@@ -886,6 +888,22 @@ def _ensure_user_columns():
     _migrate("0002-прогресс-колеса-в-рублях", _migrate_wheel_progress_to_money)
 
 
+
+
+def _ensure_coin_log_columns():
+    """related_id — кто (какой реферал) стоит за начислением reason='referral'.
+
+    Без него владелец видел «+300 монет · реферальная программа» и дату, но
+    не мог сказать, за какого именно приглашённого — только общую сумму
+    ref_earned. Для других причин (кэшбэк, колесо, ручное начисление) поле
+    остаётся пустым — там «за что» и так ясно из reason."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "coin_log")
+    if "related_id" not in cols:
+        cur.execute("ALTER TABLE coin_log ADD COLUMN related_id BIGINT")
+    conn.commit()
+    conn.close()
 
 
 def remember_user_name(user_id, username="", first_name=""):
@@ -2551,6 +2569,7 @@ from partut.db.customers import (                                       # noqa: 
     count_referrals, referral_bonus, coins_per_byn, ref_percent,            # noqa: F401
     get_bonus_stats, count_active_referrals, list_referrals,                # noqa: F401
     get_ref_earned, add_ref_earned, reward_referrer_for_order,              # noqa: F401
+    referral_earnings, coin_history,                                        # noqa: F401
     set_ref_activated, unlink_referral, clear_referrals_of,                 # noqa: F401
     list_users, customer_card, delete_user,                                 # noqa: F401
 )

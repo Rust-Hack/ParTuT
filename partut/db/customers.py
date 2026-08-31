@@ -68,18 +68,21 @@ def get_user_row(user_id):
     return row
 
 
-def log_coins(user_id, delta, reason="other"):
+def log_coins(user_id, delta, reason="other", related_id=None):
     """Запись в летопись монет. Без неё «роздано за месяц» пришлось бы угадывать
-    по остаткам на балансах, а это неверно: часть монет уже потрачена."""
+    по остаткам на балансах, а это неверно: часть монет уже потрачена.
+
+    related_id — кто стоит за начислением (пригласивший видит по нему, ЗА
+    КАКОГО именно друга пришли монеты, а не только общую сумму)."""
     if not delta:
         return
     try:
         conn = db.connect()
         cur = conn.cursor()
-        cur.execute(db._q("INSERT INTO coin_log (user_id, delta, reason, created_at) "
-                       "VALUES (%s, %s, %s, %s)"),
+        cur.execute(db._q("INSERT INTO coin_log (user_id, delta, reason, created_at, related_id) "
+                       "VALUES (%s, %s, %s, %s, %s)"),
                     (user_id, int(delta), reason if reason in db.COIN_REASONS else "other",
-                     db._now_str()))
+                     db._now_str(), related_id))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -88,7 +91,7 @@ def log_coins(user_id, delta, reason="other"):
         print(f"Не удалось записать движение монет ({user_id}, {delta}, {reason}): {e}")
 
 
-def add_coins(user_id, n, reason="other"):
+def add_coins(user_id, n, reason="other", related_id=None):
     """Меняет баланс на n (может быть отрицательным), не опускаясь ниже нуля."""
     ensure_user(user_id)
     conn = db.connect()
@@ -97,7 +100,7 @@ def add_coins(user_id, n, reason="other"):
                 (int(n), user_id))
     conn.commit()
     conn.close()
-    log_coins(user_id, n, reason)
+    log_coins(user_id, n, reason, related_id=related_id)
 
 
 def get_coins(user_id):
@@ -238,17 +241,53 @@ def reward_referrer_for_order(buyer_id, subtotal):
     first = not row["ref_activated"]
     earned = 0
     if pct_coins > 0:
-        add_coins(ref, pct_coins, "referral")
+        add_coins(ref, pct_coins, "referral", related_id=buyer_id)
         earned += pct_coins
     if first:
         set_ref_activated(buyer_id)
         bonus = referral_bonus()
-        add_coins(ref, bonus, "referral")
+        add_coins(ref, bonus, "referral", related_id=buyer_id)
         earned += bonus
     if earned > 0:
         add_ref_earned(ref, earned)
     return {"referrer": ref, "percent": percent, "pct_coins": pct_coins,
             "first": first, "bonus": (referral_bonus() if first else 0), "earned": earned}
+
+
+def coin_history(user_id, limit=50):
+    """Все движения монет покупателя одним списком: колесо, слот, кэшбэк,
+    рефералы, компенсации. Раньше баланс и общая сумма ref_earned были видны,
+    а откуда взялась КАЖДАЯ монета — только по разным экранам порознь, если
+    вообще было видно."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("SELECT delta, reason, created_at FROM coin_log "
+                   "WHERE user_id = %s ORDER BY id DESC LIMIT %s"), (user_id, limit))
+    rows = [{"delta": int(r["delta"]), "reason": r["reason"] or "other",
+            "at": r["created_at"] or ""} for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def referral_earnings(referrer_id, limit=50):
+    """История начислений за рефералов: когда, сколько и за какого именно
+    друга. Раньше был виден только итог (ref_earned) — за какого из
+    приглашённых он набежал, было не восстановить."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("""SELECT l.delta, l.created_at, l.related_id,
+                              COALESCE(u.first_name, '') AS first_name,
+                              COALESCE(u.username, '') AS username
+                       FROM coin_log l LEFT JOIN users u ON u.user_id = l.related_id
+                       WHERE l.user_id = %s AND l.reason = 'referral'
+                       ORDER BY l.id DESC LIMIT %s"""), (referrer_id, limit))
+    out = []
+    for r in cur.fetchall():
+        who = r["first_name"] or (("@" + r["username"]) if r["username"] else None)
+        out.append({"delta": int(r["delta"]), "at": r["created_at"] or "",
+                    "friend": who or "друг"})
+    conn.close()
+    return out
 
 
 def set_ref_activated(user_id):

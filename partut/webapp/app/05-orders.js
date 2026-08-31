@@ -139,14 +139,21 @@ function cancelMyOrder(o) {
 function orderTracker(status) {
   if (status === "canceled") return `<div class="ocanceled">✖️ Заказ отклонён</div>`;
   const stage = status === "issued" ? 3 : status === "confirmed" ? 2 : 1;
-  const s1 = "done";
+  // 'new' (карточный заказ без чека) и 'paid' (чек загружен, ждёт продавца)
+  // раньше выглядели ОДИНАКОВО — первый шаг всегда «Оформлен ✓». Разница
+  // существенная: в 'new' дело за покупателем (загрузить чек), в 'paid' —
+  // уже за продавцом. Наличные/другие способы этот шаг вообще не проходят
+  // (заказ создаётся сразу как 'paid'), поэтому лишнего шага не добавляем —
+  // просто честно подписываем первый, пока он не пройден.
+  const waitingReceipt = status === "new";
+  const s1 = waitingReceipt ? "active" : "done";
   const s2 = stage >= 2 ? "done" : "active";
   const s3 = stage >= 3 ? "done" : (stage >= 2 ? "active" : "");
-  const d = (cls, done) => `<div class="dot">${done ? "✓" : ""}</div>`;
+  const d = (done) => `<div class="dot">${done ? "✓" : ""}</div>`;
   return `<div class="otrack">
-    <div class="ostep ${s1}">${d(s1, true)}<div class="lbl">Оформлен</div></div>
-    <div class="ostep ${s2}">${d(s2, stage >= 2)}<div class="lbl">Подтверждён</div></div>
-    <div class="ostep ${s3}">${d(s3, stage >= 3)}<div class="lbl">Выдан</div></div>
+    <div class="ostep ${s1}">${d(!waitingReceipt)}<div class="lbl">${waitingReceipt ? "Ждёт чек" : "Оформлен"}</div></div>
+    <div class="ostep ${s2}">${d(stage >= 2)}<div class="lbl">Подтверждён</div></div>
+    <div class="ostep ${s3}">${d(stage >= 3)}<div class="lbl">Выдан</div></div>
   </div>`;
 }
 function repeatOrder(o) {

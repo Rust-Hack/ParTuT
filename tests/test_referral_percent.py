@@ -5,7 +5,7 @@
 Ошибка здесь тихая — пригласивший просто получает меньше, чем обещано на
 экране, и заметит это в лучшем случае через месяц.
 """
-from _common import db, client, Checker, as_admin
+from _common import db, client, Checker, as_admin, as_user
 
 from partut import cache
 from partut.db import customers as c_mod
@@ -115,8 +115,31 @@ def run():
     c2("процент — от товаров (100 Br), а не от товаров+доставки (120 Br)",
        стало - было == 300 + бонус)
 
+    # --- История начислений: видно, ЗА КАКОГО друга пришли монеты ---
+    # Раньше был виден только итог (ref_earned) — разбивку по друзьям
+    # восстановить было нечем: coin_log не помнил, чей это был заказ.
+    c3 = Checker("История начислений по рефералам")
+    db.remember_user_name(друг2, "friend_two", "Друг Второй")
+    as_user(ПРИГЛАСИВШИЙ, "приглашающий")
+    r = client.post("/api/referral/history", json={"initData": "x"})
+    hist = (r.get_json() or {}).get("history") or []
+    c3("запись про друга2 есть", any(h["friend"] == "Друг Второй" and h["delta"] == 300 for h in hist))
+    c3("и бонус за его первый заказ тоже своей строкой",
+       any(h["friend"] == "Друг Второй" and h["delta"] == бонус for h in hist))
+    c3("новые записи сверху", bool(hist) and hist[0]["at"] >= hist[-1]["at"])
+    # Друг без имени и username в Telegram — не пустая строка, а «друг».
+    db.ensure_user(8130)
+    db.set_referrer_once(8130, ПРИГЛАСИВШИЙ)
+    as_admin()
+    _покупка(8130, pid, 100.0)
+    as_user(ПРИГЛАСИВШИЙ, "приглашающий")
+    r = client.post("/api/referral/history", json={"initData": "x"})
+    hist = (r.get_json() or {}).get("history") or []
+    c3("безымянный друг подписан как «друг», не пусто", any(h["friend"] == "друг" for h in hist))
+    as_admin()
+
     _clean()
-    return c.fails
+    return c.fails + c2.fails + c3.fails
 
 
 if __name__ == "__main__":

@@ -65,6 +65,31 @@ def api_bonus():
                     "coin_value": shopinfo.COIN_VALUE})
 
 
+@bp.route("/api/coins/history", methods=["POST"])
+def api_coins_history():
+    """Все движения монет покупателя одним списком — колесо, слот, кэшбэк,
+    рефералы, компенсации. Раньше это было раскидано по разным экранам."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = auth.get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    rows = db.coin_history(int(user["id"]), 50)
+    return jsonify({"ok": True, "history": [
+        {"delta": r["delta"], "at": r["at"], "reason": db.COIN_REASONS.get(r["reason"], r["reason"])}
+        for r in rows]})
+
+
+@bp.route("/api/referral/history", methods=["POST"])
+def api_referral_history():
+    """Кому и сколько принёс каждый приглашённый — не только общая сумма
+    ref_earned, а по датам и по друзьям."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = auth.get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    return jsonify({"ok": True, "history": db.referral_earnings(int(user["id"]), 50)})
+
+
 @bp.route("/api/admin/grant", methods=["POST"])
 def api_admin_grant():
     """Начислить пользователю монеты и/или прокруты колеса (по id). Обычный админ — через подтверждение."""

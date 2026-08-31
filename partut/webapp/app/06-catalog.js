@@ -515,6 +515,45 @@ function renderStockPick() {
   });
 }
 
+// ----- Массовый приход: несколько товаров одним запросом -----
+// Раньше завоз партии из пятнадцати позиций был пятнадцатью отдельными
+// «Записать». Варианты со вкусами не входят: остаток у них свой на каждый
+// вкус, качественно то же самое действие делает редактор товара.
+let batchMode = false;
+$("batchModeBtn").onclick = () => {
+  batchMode = !batchMode;
+  $("batchModeBtn").classList.toggle("active", batchMode);
+  $("batchModeBtn").textContent = batchMode ? "✕ Отменить массовый приход" : "📦 Массовый приход";
+  $("batchBar").style.display = batchMode ? "" : "none";
+  renderAdminList();
+};
+function batchItems() {
+  return [...document.querySelectorAll("[data-batchqty]")]
+    .map(inp => ({ id: +inp.dataset.batchqty, qty: parseInt(inp.value, 10) || 0 }))
+    .filter(x => x.qty > 0);
+}
+$("batchSave").onclick = async () => {
+  const items = batchItems();
+  if (!items.length) { alertMsg("Впишите количество хотя бы для одного товара."); return; }
+  const btn = $("batchSave");
+  btn.disabled = true; btn.textContent = "Записываю…";
+  try {
+    const r = await fetch("/api/admin/stock/move/batch", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData, reason: "in", items }) });
+    const d = await r.json();
+    const провалы = Object.keys(d.failed || {}).length;
+    if (!d.ok) { alertMsg("Не удалось записать приход."); return; }
+    await refreshProducts();
+    batchMode = false; $("batchModeBtn").classList.remove("active");
+    $("batchModeBtn").textContent = "📦 Массовый приход"; $("batchBar").style.display = "none";
+    renderAdminList();
+    alertMsg(провалы
+      ? `Записано ${(d.done || []).length}, не прошло ${провалы} — проверьте эти позиции отдельно.`
+      : `Готово ✅ Приход записан по ${(d.done || []).length} ${plural((d.done || []).length, "товару", "товарам", "товарам")}.`);
+  } catch (e) { alertMsg(текстСбоя(e)); }
+  finally { btn.disabled = false; btn.textContent = "Записать приход"; }
+};
+
 function renderAdminList() {
   if (!shelf().length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
   const q = (admSearch || "").trim().toLowerCase();
@@ -552,6 +591,13 @@ function renderAdminList() {
         <button class="iconbtn" data-hide="${p.id}" title="${p.hidden ? 'Вернуть на витрину' : 'Снять с витрины'}">${p.hidden ? '👁' : '🚫'}</button>
         <button class="iconbtn" data-edit="${p.id}">✏️</button>
         <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
+    // В массовом приходе — поле количества вместо кнопок действий. Модели со
+    // вкусами сюда не входят: остаток у них свой на каждый вкус, для них
+    // это поле бессмысленно — цифра «стало N» не сказала бы, какому вкусу.
+    const batchTail = hasVariants(p)
+      ? `<span style="color:var(--hint);font-size:12px">через ✏️ редактор</span></div>`
+      : `<input type="number" min="0" inputmode="numeric" placeholder="+шт" data-batchqty="${p.id}"
+             style="width:64px;text-align:center"></div>`;
     const фото = p.photo_url ? "фото ✓" : "без фото";
     const хит = p.is_hit ? " · 🔥" : "";
     if (hasVariants(p)) {
@@ -559,12 +605,13 @@ function renderAdminList() {
       // цену должно быть здесь: за ней в этот список и заходят чаще всего.
       return `<div class="admrow">
         <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.variants.length} вк · ${p.stock} шт · ${фото}${хит}</small>${marks}</div>
-        ${tail}`;
+        ${batchMode ? batchTail : tail}`;
     }
     return `<div class="admrow">
       <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт · ${фото}${хит}</small>${marks}</div>
-      ${tail}`;
+      ${batchMode ? batchTail : tail}`;
   }).join("");
+  if (batchMode) return;         // в этом режиме действуют не иконки, а data-batchqty выше
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
   $("adminList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => delAdminRow(+b.dataset.del));
@@ -1190,7 +1237,13 @@ async function doDelAdminRow(id, force) {
   } catch (e) { alertMsg(текстСбоя(e)); }
 }
 
-// Убираем заставку после проигрыша анимации, чтобы не мешала кликам.
-setTimeout(() => { const s = document.getElementById("splash"); if (s) s.style.display = "none"; }, 4000);
+// Убираем заставку по факту готовности данных (зовёт start() в 01-core.js),
+// а не по фиксированному времени. Раньше уходила ровно через 4 сек всегда —
+// на медленной сети (ради которой и написан весь остальной код) это значило
+// увидеть пустую сетку каталога ДО того, как он реально загрузился. Таймер
+// остаётся только страховкой: если что-то в start() зависло навсегда,
+// заставка всё равно не провисит вечно.
+function hideSplash() { const s = document.getElementById("splash"); if (s) s.style.display = "none"; }
+setTimeout(hideSplash, 4000);
 
 start();
