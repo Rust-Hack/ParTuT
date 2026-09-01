@@ -303,12 +303,12 @@ async function spinSlot() {
     [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) s.classList.remove("spinning"); });
     alertMsg(текстСбоя(e)); return;
   }
-  // Плейсхолдер-прокрут снят — дальше барабаны ведёт настоящий результат.
-  [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) s.classList.remove("spinning"); });
-  if (!res.ok) { slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return; }
+  if (!res.ok) {
+    [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) s.classList.remove("spinning"); });
+    slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return;
+  }
   bonus.coins = res.balance;
   const isWin = !!res.win;
-  const K = 22;
   const cols = [0, 1, 2].map(c => [res.grid[0][c], res.grid[1][c], res.grid[2][c]]);
   // Барабаны останавливаются по очереди с заметной, ОДИНАКОВОЙ паузой между
   // ними — не «почти одновременно» (было 0.45с/0.9с), а по-настоящему друг
@@ -318,12 +318,22 @@ async function spinSlot() {
   const base = [START, START + GAP, START + GAP * 2];
   const durs = slotAuto ? base.map(d => d * 0.55) : base;       // авто-прокрут — быстрее
   const maxEnd = durs[2] * 1000;
+  // Заглушка (.spinning) для каждого барабана продолжает крутиться — не снята
+  // сразу по ответу сервера, как раньше, — а живёт до его СОБСТВЕННОЙ паузы.
+  // Тормозим только последний короткий отрезок (BRAKE): если растянуть плавное
+  // торможение на всю паузу (2.5+ с), финал ощущается вязким — барабан почти
+  // не движется последнюю секунду. Короткий резкий стоп в конце ощущается
+  // энергичнее, а само вращение до этого продолжается на постоянной скорости.
+  const BRAKE = 0.8, BRAKE_K = 10;
+  [0, 1, 2].forEach(c => {
+    const s = $("strip" + c); if (!s) return;
+    const wait = Math.max(0, (durs[c] - BRAKE) * 1000);
+    setTimeout(() => { s.classList.remove("spinning"); runReel(s, cols[c], BRAKE_K, BRAKE); }, wait);
+  });
   // 2) Трещотка на всё время самого длинного барабана (замедляется к концу).
   scheduleRatchet(Math.round(durs[2] * 16), durs[2]);
-  // 3) Барабаны стартуют одновременно, останавливаются по очереди (разные dur), каждый — плавно.
-  [0, 1, 2].forEach(c => runReel($("strip" + c), cols[c], K, durs[c]));
   [0, 1, 2].forEach(c => setTimeout(() => { haptic("impact", "light"); clickSound(); }, durs[c] * 1000));
-  // 4) Предвкушение на 3-м барабане при выигрыше: свечение колонки + нарастающий звук + пульс.
+  // 3) Предвкушение на 3-м барабане при выигрыше: свечение колонки + нарастающий звук + пульс.
   if (isWin) {
     const col2 = document.querySelectorAll(".reel-col")[2];
     const from = durs[1] * 1000, to = durs[2] * 1000;
