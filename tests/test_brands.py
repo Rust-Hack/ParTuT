@@ -51,6 +51,13 @@ def run():
     c("дубль имени отклонён", dup.status_code == 400 and dup.get_json()["error"] == "exists")
     c("и сказано, какой бренд мешает", dup.get_json()["name"] == "Vaporesso")
 
+    # То же самое кириллицей: SQL LOWER() у SQLite не трогает кириллицу —
+    # сравнение обязано идти на стороне Python, иначе «Хаски»/«хаски» заведутся
+    # как два разных бренда.
+    client.post("/api/admin/brand", json={"initData": "x", "name": "Хаски", "category": "", "flavors": []})
+    dup_ru = client.post("/api/admin/brand", json={"initData": "x", "name": "хаски", "category": "coils", "flavors": []})
+    c("дубль кириллицей тоже отклонён", dup_ru.status_code == 400 and dup_ru.get_json()["error"] == "exists")
+
     # --- Переименование тянет за собой товары ---
     c2 = Checker("Переименование и удаление")
     pid = db.add_product("Минск", "coils", "Картридж XROS", 12.0, 3, brand="Vaporesso")

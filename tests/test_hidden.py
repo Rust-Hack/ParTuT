@@ -138,8 +138,29 @@ def run_locations():
     c("и сказано, сколько их", r.get_json()["count"] == 1)
 
     db.set_order_status(oid, "issued")
+
+    # Способ доставки, точка самовывоза и продавец — тоже держат город: иначе
+    # они остались бы строками с именем несуществующей точки (delivery/pickup
+    # продолжили бы отдаваться покупателю, продавец — числиться неизвестно где).
+    db.add_delivery_method("Временная", "Самовывоз", 0, "", "", 0, 0)
     r = client.post("/api/admin/location/delete", json={"initData": "x", "id": lid})
-    c("когда заказ выдан — удаляется", r.get_json().get("ok"))
+    c("со способом доставки не удалить", r.status_code == 400 and r.get_json()["error"] == "has_delivery")
+    for dm in db.get_delivery_methods("Временная"):
+        db.delete_delivery_method(dm["id"])
+
+    db.add_pickup_point("Временная", "ул. Тестовая 1")
+    r = client.post("/api/admin/location/delete", json={"initData": "x", "id": lid})
+    c("с точкой самовывоза не удалить", r.status_code == 400 and r.get_json()["error"] == "has_pickup")
+    for pp in db.get_pickup_points("Временная"):
+        db.delete_pickup_point(pp["id"])
+
+    db.add_staff(90099, city="Временная")
+    r = client.post("/api/admin/location/delete", json={"initData": "x", "id": lid})
+    c("с закреплённым продавцом не удалить", r.status_code == 400 and r.get_json()["error"] == "has_staff")
+    db.remove_staff(90099)
+
+    r = client.post("/api/admin/location/delete", json={"initData": "x", "id": lid})
+    c("когда заказ выдан и хвостов не осталось — удаляется", r.get_json().get("ok"))
     c("точки больше нет", all(l["name"] != "Временная" for l in db.get_locations()))
 
     conn = db.connect(); cur = conn.cursor()

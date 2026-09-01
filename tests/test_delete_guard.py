@@ -22,8 +22,14 @@ def run():
     _чисто(); as_admin()
 
     pid = db.add_product("Минск", "pods", "Ходовой", 30.0, 5, cost=18.0)
+    # Избранное и «жду поступления» раньше переживали удаление товара —
+    # оставались хвостом в базе навсегда, ничем больше не удерживаемые.
+    db.add_favorite(pid, 700099)
+    db.add_stock_alert(pid, 700099)
     c("без заказов удаляется сразу",
       client.post("/api/admin/product/delete", json={"initData": "x", "id": pid}).get_json()["ok"])
+    c("избранное на удалённый товар не осталось", db.favorites_for_user(700099) == [])
+    c("подписка на удалённый товар не осталась", db.alerts_of_user(700099) == [])
 
     pid2 = db.add_product("Минск", "pods", "Ходовой", 30.0, 5, cost=18.0)
     oid = db.create_order(700001, "buyer", "Минск",

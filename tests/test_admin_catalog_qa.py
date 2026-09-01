@@ -104,6 +104,14 @@ def run_negative_price_and_stock():
                   json={"initData": "x", "id": pid, "field": "price", "value": "1"}).status_code == 403)
     as_admin()
 
+    # --- Название товара нельзя стереть в пустую строку правкой ---
+    было_имя = _product(pid)["name"]
+    r = client.post("/api/admin/product/update",
+                     json={"initData": "x", "id": pid, "field": "name", "value": "   "})
+    d = r.get_json() or {}
+    c("пустое название отклонено", r.status_code == 400 and d.get("error") == "bad_value")
+    c("название не стёрлось", _product(pid)["name"] == было_имя)
+
     _clean()
     return c.fails
 

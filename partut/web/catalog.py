@@ -154,10 +154,12 @@ def api_admin_category_update():
     if code not in db.category_codes():
         return jsonify({"ok": False, "error": "not_found"}), 404
     sort = data.get("sort")
-    db.update_category(code, name=data.get("name"), emoji=data.get("emoji"),
+    ok = db.update_category(code, name=data.get("name"), emoji=data.get("emoji"),
                        sort=(int(sort) if str(sort or "").strip().lstrip("-").isdigit() else None),
                        has_flavors=(bool(data.get("has_flavors")) if "has_flavors" in data else None),
                        variant_label=(inputs._text(data.get("variant_label")) if "variant_label" in data else None))
+    if not ok:
+        return jsonify({"ok": False, "error": "bad_name"}), 400
     return jsonify({"ok": True})
 
 
@@ -395,7 +397,11 @@ def _проверить_поле(admin, pid, field, raw):
             value = int(raw)
             if value < 0:
                 return None, ("bad_value", "Остаток не может быть отрицательным.")
-        elif field in ("name", "description", "brand", "flavor", "strength", "volume"):
+        elif field == "name":
+            value = str(raw).strip()
+            if not value:
+                return None, ("bad_value", "Название не может быть пустым.")
+        elif field in ("description", "brand", "flavor", "strength", "volume"):
             value = str(raw).strip()
         elif field == "category":
             value = str(raw).strip()

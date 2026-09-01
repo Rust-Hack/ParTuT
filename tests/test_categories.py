@@ -75,6 +75,18 @@ def run():
     c("значок изменился", ren["emoji"] == "🥤")
     c("код остался прежним — товар не потерялся", db.get_product(pid)["category"] == new_code)
 
+    # --- Переименование в пустое/чужое имя отклоняется ---
+    # Раньше update_category тихо записывал что угодно — прямой запрос мог
+    # стереть название категории до пустой строки, 200 OK.
+    r = client.post("/api/admin/category/update", json={"initData": "x", "code": new_code, "name": "   "})
+    c("пустое имя при правке отклонено", r.status_code == 400)
+    c("название не стёрлось",
+      next(x for x in client.get("/api/categories").get_json() if x["code"] == new_code)["name"] == "Паучи")
+    r = client.post("/api/admin/category/update", json={"initData": "x", "code": new_code, "name": "жидкости"})
+    c("переименование в чужое имя отклонено", r.status_code == 400)
+    c("название не поменялось на чужое",
+      next(x for x in client.get("/api/categories").get_json() if x["code"] == new_code)["name"] == "Паучи")
+
     # --- Удаление ---
     r = client.post("/api/admin/category/delete", json={"initData": "x", "code": new_code})
     c("непустую категорию не удалить", r.status_code == 400 and r.get_json()["error"] == "has_products")

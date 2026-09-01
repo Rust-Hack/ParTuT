@@ -113,6 +113,15 @@ def run():
     c4("удаление несуществующей — 404",
       client.post("/api/admin/model/delete", json={"initData": "x", "id": 999999}).status_code == 404)
 
+    # Галерея модели раньше не чистилась при удалении — фото оставались в
+    # базе навсегда, ничем больше не удерживаемые.
+    from partut.db import photos as _photos
+    mid_photo = db.add_model("coils", "С галереей", "Бренд")
+    _photos.add_model_photo(mid_photo, "fid_test_1")
+    c4("фото добавилось", len(_photos.model_photos(mid_photo)) == 1)
+    db.delete_model(mid_photo)
+    c4("фото модели удалились вместе с ней", _photos.model_photos(mid_photo) == [])
+
     # --- Вкус убрали из модели, а на точке он остался ---
     c6 = Checker("Осиротевшие вкусы")
     r = client.post("/api/admin/model", json={"initData": "x", "id": lid, "category": "liquid",

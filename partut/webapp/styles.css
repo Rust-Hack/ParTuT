@@ -384,7 +384,24 @@ details[open] > .secthead::after { transform: rotate(180deg); }
 .loader-inline { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 26px 0; color: var(--hint); font-size: 13px; }
 .loader-ring { width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%; border: 2.5px solid var(--line); border-top-color: var(--accent); animation: loaderSpin .8s linear infinite; }
 @keyframes loaderSpin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .loader-ring { animation-duration: 2.4s; } }
+@media (prefers-reduced-motion: reduce) {
+  /* Раньше сокращение движения было учтено только у лоадера — колесо,
+     слот, конфетти, заставка и все шторки продолжали крутиться/мигать/
+     разлетаться в полную силу. Лоадеру оставляем медленное вращение
+     (по нему видно, что приложение работает), у всего остального —
+     гасим анимации и переходы почти до нуля, а не убираем совсем: так
+     JS-таймеры, ждущие конца анимации по времени, не расходятся с тем,
+     что видно на экране. */
+  .loader-ring { animation-duration: 2.4s !important; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
 /* Бонусы */
 .bonuswrap { padding: 16px; }
 .bonushero { background: linear-gradient(135deg, var(--accent), var(--brand-neon)); color: #04232a; border-radius: 20px; padding: 28px; text-align: center; margin-bottom: 16px; box-shadow: var(--shadow); }

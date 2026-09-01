@@ -293,27 +293,34 @@ def _write_admin_log(resp):
         print(f"Журнал действий: {e}")
 
 
+_stock_alerts_lock = threading.Lock()
+
+
 def _flush_stock_alerts():
-    """Сообщает тем, кто ждал товар, что он снова в наличии."""
-    try:
-        ready = db.stock_alerts_ready()
-    except Exception as e:
-        print(f"Не удалось прочитать подписки на поступление: {e}")
-        return
-    if not ready:
-        return
-    done = set()
-    for uid, pid, name in ready:
+    """Сообщает тем, кто ждал товар, что он снова в наличии.
+
+    Завоз двух позиций подряд запускает эту функцию дважды почти одновременно
+    (фон дёргается на каждое действие продавца, меняющее остаток) — без замка
+    оба захода читали бы одну и ту же готовность и слали письмо дважды.
+    Снимаем подписку точечно и только после успешной отправки: если письмо
+    не ушло (человек заблокировал бота, сеть моргнула), подписка остаётся —
+    следующий завоз попробует снова, а не молча забудет про этого человека."""
+    with _stock_alerts_lock:
         try:
-            tgsend.tg.send_message(uid, f"🔔 «{name}» снова в наличии.\nОткройте приложение — товар доступен к заказу.")
+            ready = db.stock_alerts_ready()
         except Exception as e:
-            print(f"Не смог сообщить о поступлении {pid} покупателю {uid}: {e}")
-        done.add(pid)
-    for pid in done:
-        try:
-            db.clear_stock_alerts(pid)
-        except Exception as e:
-            print(f"Не удалось очистить подписки на товар {pid}: {e}")
+            print(f"Не удалось прочитать подписки на поступление: {e}")
+            return
+        for uid, pid, name in ready:
+            try:
+                tgsend.tg.send_message(uid, f"🔔 «{name}» снова в наличии.\nОткройте приложение — товар доступен к заказу.")
+            except Exception as e:
+                print(f"Не смог сообщить о поступлении {pid} покупателю {uid}: {e}")
+                continue
+            try:
+                db.remove_stock_alert(pid, uid)
+            except Exception as e:
+                print(f"Не удалось снять подписку на поступление {pid}/{uid}: {e}")
 
 
 @app.route("/api/notify-me", methods=["POST"])

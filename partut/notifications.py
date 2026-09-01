@@ -8,6 +8,7 @@ notifications.py — отправка заказа продавцам город
 Функция принимает `bot` (экземпляр telebot) — тот, через который слать.
 """
 
+import html
 import secrets
 import json
 from telebot import types
@@ -46,9 +47,9 @@ def notify_sellers(bot, order_id):
     # Способ получения + адрес + оплата
     method = order["delivery_method"] or ""
     if method:
-        addr = order["delivery_address"] or ""
+        addr = html.escape((order["delivery_address"] or "").strip())
         fee = order["delivery_fee"] or 0
-        lines.append(f"🚚 {method}" + (f": {addr}" if addr else "") + (f" (+{fee:.2f} BYN)" if fee else ""))
+        lines.append(f"🚚 {html.escape(method)}" + (f": {addr}" if addr else "") + (f" (+{fee:.2f} BYN)" if fee else ""))
     pm = order["payment_method"] or ""
     pm_ru = {"card": "💳 картой (чек)", "cash": "💵 наличными", "none": "🚕 при получении"}.get(pm, pm)
     if pm_ru:
@@ -69,10 +70,10 @@ def notify_sellers(bot, order_id):
         lines.append(f'👤 Клиент: <a href="tg://user?id={uid}">открыть чат</a> (id <code>{uid}</code>)')
     phone = (order["phone"] or "").strip() if "phone" in order.keys() else ""
     if phone:
-        lines.append(f"📞 Телефон: {phone}")
+        lines.append(f"📞 Телефон: {html.escape(phone)}")
     comment = (order["comment"] or "").strip() if "comment" in order.keys() else ""
     if comment:
-        lines.append(f"💬 Комментарий: {comment}")
+        lines.append(f"💬 Комментарий: {html.escape(comment)}")
     text = "\n".join(lines)
     kb = _orders_kb()
 

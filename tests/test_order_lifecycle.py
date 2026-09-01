@@ -130,7 +130,37 @@ def run():
     c6("чек на отменённый заказ отклонён", r.status_code == 409)
     c6("отменённый заказ не воскрес", db.get_order(oid2)["status"] == "canceled")
 
-    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails
+    c7 = Checker("G. Отмена заказа: сбой у одного продавца не молчит остальных")
+    # Раньше весь цикл рассылки был в одном try/except — если первый продавец
+    # заблокировал бота, исключение прерывало цикл, и остальные продавцы того
+    # же города вообще не узнавали об отмене (продолжили бы готовить заказ).
+    from partut.integrations import tgsend
+    from partut import config
+    db.add_staff(90101, city="minsk")
+    db.add_staff(90102, city="minsk")
+    config.refresh_staff()
+    real_send = tgsend.tg.send_message
+    dошли = []
+
+    def flaky_send(cid, text, **kw):
+        if cid == 90101:
+            raise RuntimeError("бот заблокирован")
+        dошли.append(cid)
+    tgsend.tg.send_message = flaky_send
+    try:
+        as_admin()
+        oid, pid = make_order("new")
+        as_user(CLIENT, "vasya")
+        r = client.post("/api/order/cancel", json={"initData": "x", "order_id": oid})
+        c7("отмена всё равно прошла", r.status_code == 200)
+        c7("заказ отменён", db.get_order(oid)["status"] == "canceled")
+        c7("второй продавец узнал об отмене, несмотря на сбой у первого", 90102 in dошли)
+    finally:
+        tgsend.tg.send_message = real_send
+        db.remove_staff(90101); db.remove_staff(90102)
+        config.refresh_staff()
+
+    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails + c7.fails
 
 
 if __name__ == "__main__":

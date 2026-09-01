@@ -93,6 +93,96 @@ def run():
     return c.fails
 
 
+def run_send_failure_keeps_subscription():
+    """Раньше вся пачка подписок на товар снималась одним махом ПОСЛЕ рассылки,
+    даже для тех, кому отправка упала (заблокировал бота) — человек ждал
+    уведомление, но не получал его ни разу и тихо терял подписку без права
+    переспросить. Теперь снимается только то, что реально дошло."""
+    c = Checker("Сбой отправки не теряет подписку")
+    conn = db.connect(); conn.cursor().execute("DELETE FROM stock_alerts"); conn.commit(); conn.close()
+    cache.bust()
+    real_bg = tgsend.bg
+    tgsend.bg = lambda fn, *a, **k: fn(*a, **k)
+    real_send = tgsend.tg.send_message
+
+    pid = db.add_product("Минск", "pods", "ГлючныйТовар", 20, 0)
+    as_user(BUYER, "buyer")
+    client.post("/api/notify-me", json={"initData": "x", "product_id": pid})
+    as_user(BUYER2, "buyer2")
+    client.post("/api/notify-me", json={"initData": "x", "product_id": pid})
+
+    def flaky(cid, text, **kw):
+        if cid == BUYER:
+            raise RuntimeError("бот заблокирован")
+        real_send(cid, text, **kw)
+    tgsend.tg.send_message = flaky
+
+    try:
+        reset_sent()
+        as_admin()
+        r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid, "field": "stock", "value": 3})
+        c("запрос всё равно успешен, сбой у одного не роняет ручку",
+          (r.get_json() or {}).get("ok"))
+        got = {chat for chat, _t, _p in SENT}
+        c("второму сообщили", BUYER2 in got)
+        c("первому не дошло — send упал", BUYER not in got)
+        c("подписка первого осталась — попробуем при следующем завозе",
+          db.alerts_of_user(BUYER) == [pid])
+        c("подписка второго снята — сообщение реально дошло",
+          db.alerts_of_user(BUYER2) == [])
+    finally:
+        tgsend.tg.send_message = real_send
+        tgsend.bg = real_bg
+        conn = db.connect(); conn.cursor().execute("DELETE FROM stock_alerts"); conn.commit(); conn.close()
+    return c.fails
+
+
+def run_concurrent_flush_does_not_double_notify():
+    """Завоз двух позиций подряд запускает _flush_stock_alerts дважды почти
+    одновременно (фон дёргается на каждое действие продавца, меняющее
+    остаток). Без замка оба захода читали бы одну и ту же готовность и
+    слали письмо дважды."""
+    c = Checker("Гонка: параллельный завоз не шлёт письмо дважды")
+    conn = db.connect(); conn.cursor().execute("DELETE FROM stock_alerts"); conn.commit(); conn.close()
+    cache.bust()
+
+    import time
+    import threading
+    from partut.web import server as _server
+
+    pid = db.add_product("Минск", "pods", "ГоночныйТовар", 20, 3)   # уже в наличии
+    db.add_stock_alert(pid, BUYER)
+
+    real_ready = db.stock_alerts_ready
+
+    def slow_ready():
+        # Пауза внутри чтения готовности: без замка оба потока успели бы
+        # прочитать одну и ту же готовность до того, как первый её погасит.
+        # С замком второй поток в это время просто ждёт своей очереди снаружи.
+        time.sleep(0.15)
+        return real_ready()
+    db.stock_alerts_ready = slow_ready
+
+    reset_sent()
+    try:
+        t1 = threading.Thread(target=_server._flush_stock_alerts)
+        t2 = threading.Thread(target=_server._flush_stock_alerts)
+        t1.start()
+        time.sleep(0.02)   # первый поток успевает войти в замок раньше второго
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        got = [chat for chat, _t, _p in SENT if chat == BUYER]
+        c("сообщили ровно один раз, не дважды", len(got) == 1)
+        c("подписка снята один раз", db.alerts_of_user(BUYER) == [])
+    finally:
+        db.stock_alerts_ready = real_ready
+        conn = db.connect(); conn.cursor().execute("DELETE FROM stock_alerts"); conn.commit(); conn.close()
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
-    sys.exit(1 if run() else 0)
+    sys.exit(1 if (run() + run_send_failure_keeps_subscription()
+                    + run_concurrent_flush_does_not_double_notify()) else 0)

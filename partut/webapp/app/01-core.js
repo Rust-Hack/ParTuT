@@ -482,7 +482,11 @@ $("ageYes").onclick = async () => {
 $("ageNo").onclick = () => { if (tg) tg.close(); };
 
 async function fetchProducts() {
-  allProducts = await bootFetch("products", "/api/products");
+  // try/catch — иначе обрыв сети роняет весь Promise.all в loadCatalog()
+  // необработанным отказом: заставка уходит по страховочному таймеру, а
+  // каталог остаётся пустым навсегда, без единого слова об ошибке.
+  try { allProducts = await bootFetch("products", "/api/products"); return true; }
+  catch (e) { return false; }
 }
 
 // Витрина и админка смотрят на разные списки: покупателю снятое с продажи
@@ -498,7 +502,8 @@ async function fetchAdminProducts() {
   } catch (e) { /* останемся на витрине — это хуже, но не пусто */ }
 }
 async function fetchLocations() {
-  locations = await bootFetch("locations", "/api/locations");
+  try { locations = await bootFetch("locations", "/api/locations"); return true; }
+  catch (e) { return false; }
 }
 function recomputeCities() {
   cityList = locations.map(l => l.name);   // точки берём из базы (даже пустые)
@@ -506,9 +511,14 @@ function recomputeCities() {
   $("pointName").textContent = city || "Выбери точку";
 }
 async function loadCatalog() {
-  await Promise.all([fetchLocations(), fetchProducts(), fetchCategories()]);
+  const [okL, okP] = await Promise.all([fetchLocations(), fetchProducts(), fetchCategories()]);
   recomputeCities(); renderChips(); updateFilterBtn(); renderGrid();
   fetchAlsoBought(); fetchFlavors();   // подсказки корзины и справочник вкусов — в фоне
+  // Не подменяем "город без товаров" (легитимная пустота) на "сеть отвалилась":
+  // сообщаем только когда сам запрос не дошёл, и не оставляем пустой экран молча.
+  if (okL === false || okP === false) {
+    alertMsg("Не удалось загрузить каталог — проверьте связь и откройте магазин заново.");
+  }
 }
 // После любой правки перечитывались ТОВАРЫ, ТОЧКИ, КАТЕГОРИИ и СПРАВОЧНИК
 // ВКУСОВ — пять запросов на каждое нажатие. Замерено на живом магазине: любой

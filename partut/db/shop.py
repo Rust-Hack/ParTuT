@@ -300,9 +300,23 @@ def add_category(name, emoji="", sort=0, variant_label="Вкус"):
 
 def update_category(code, name=None, emoji=None, sort=None, has_flavors=None, variant_label=None):
     """Переименовать категорию, сменить значок или слово для варианта.
-    Код не меняется — за ним товары."""
+    Код не меняется — за ним товары. Возвращает False (ничего не применив),
+    если новое имя пустое или совпадает с именем другой категории — прямой
+    запрос в обход фронтенда не должен тихо стирать название."""
     conn = db.connect()
     cur = conn.cursor()
+    if name is not None:
+        name = (name or "").strip()[:40]
+        if not name:
+            conn.close()
+            return False
+        # Сравниваем на стороне Python, а не через SQL LOWER(): у SQLite он
+        # приводит к нижнему регистру только ASCII, кириллица проходит как
+        # есть — «Жидкости» и «жидкости» для него разные строки.
+        cur.execute(db._q("SELECT name FROM categories WHERE code != %s"), (code,))
+        if any((r["name"] or "").strip().lower() == name.lower() for r in cur.fetchall()):
+            conn.close()
+            return False
     if variant_label is not None:
         слово = (variant_label or "").strip()[:20] or "Вкус"
         cur.execute(db._q("UPDATE categories SET variant_label = %s WHERE code = %s"), (слово, code))
@@ -310,13 +324,14 @@ def update_category(code, name=None, emoji=None, sort=None, has_flavors=None, va
         cur.execute(db._q("UPDATE categories SET has_flavors = %s WHERE code = %s"),
                     (1 if has_flavors else 0, code))
     if name is not None:
-        cur.execute(db._q("UPDATE categories SET name = %s WHERE code = %s"), ((name or "").strip()[:40], code))
+        cur.execute(db._q("UPDATE categories SET name = %s WHERE code = %s"), (name, code))
     if emoji is not None:
         cur.execute(db._q("UPDATE categories SET emoji = %s WHERE code = %s"), ((emoji or "").strip()[:8], code))
     if sort is not None:
         cur.execute(db._q("UPDATE categories SET sort = %s WHERE code = %s"), (int(sort), code))
     conn.commit()
     conn.close()
+    return True
 
 
 def count_products_in_category(code):
@@ -526,8 +541,10 @@ def add_location(name):
         return None
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("SELECT id FROM locations WHERE name = %s"), (name,))
-    existing = cur.fetchone()
+    # Сравниваем на стороне Python: SQL LOWER() у SQLite не трогает кириллицу —
+    # «Минск» и «минск» для него разные строки, и завелись бы как два города.
+    cur.execute("SELECT id, name FROM locations")
+    existing = next((r for r in cur.fetchall() if (r["name"] or "").lower() == name.lower()), None)
     if existing:
         conn.close()
         return existing["id"]

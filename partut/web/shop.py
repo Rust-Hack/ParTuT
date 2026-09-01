@@ -319,6 +319,16 @@ def api_admin_location_delete():
                    if o["status"] in ("new", "paid", "confirmed")]
     if open_orders:
         return jsonify({"ok": False, "error": "has_orders", "count": len(open_orders)}), 400
+    # Способы доставки/точки самовывоза и продавцы точки остались бы строками
+    # с именем города, которого больше нет — рабочими для витрины/прав, но
+    # ничем не управляемыми (rename переносит их, delete должен либо тоже
+    # переносить, либо явно отказать, а не тихо оставлять хвост).
+    if db.get_delivery_methods(loc["name"]):
+        return jsonify({"ok": False, "error": "has_delivery"}), 400
+    if db.get_pickup_points(loc["name"]):
+        return jsonify({"ok": False, "error": "has_pickup"}), 400
+    if db.staff_ids_by_city().get(loc["name"]):
+        return jsonify({"ok": False, "error": "has_staff"}), 400
     db.delete_location(lid)
     return jsonify({"ok": True})
 

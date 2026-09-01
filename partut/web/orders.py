@@ -441,12 +441,13 @@ def api_order_cancel():
         return jsonify({"ok": False, "error": "not_found"}), 404
     if not db.cancel_order(oid, ["new", "paid"]):   # после подтверждения — только через продавца
         return jsonify({"ok": False, "error": "too_late"}), 400
-    # сообщим продавцам города, чтобы не обрабатывали
-    try:
-        for admin_id in admins_for_city(order["city"]):
+    # сообщим продавцам города, чтобы не обрабатывали — каждому отдельно: если
+    # один заблокировал бота, это не должно оставить без уведомления остальных
+    for admin_id in admins_for_city(order["city"]):
+        try:
             tgsend.tg.send_message(admin_id, f"❌ Клиент отменил заказ #{oid}.")
-    except Exception as e:
-        print(f"Не смог уведомить об отмене #{oid}: {e}")
+        except Exception as e:
+            print(f"Не смог уведомить об отмене #{oid} ({admin_id}): {e}")
     return jsonify({"ok": True})
 
 

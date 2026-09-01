@@ -579,11 +579,14 @@ async function catApi(path, body) {
 $("catAdd").onclick = async () => {
   const name = $("catNameNew").value.trim();
   if (!name) { alertMsg("Введите название категории."); return; }
-  const d = await catApi("/api/admin/category", { name, emoji: $("catEmojiNew").value.trim() });
-  if (!d.ok) { alertMsg(d.error === "exists" ? "Такая категория уже есть." : "Не удалось добавить."); return; }
-  $("catNameNew").value = ""; $("catEmojiNew").value = "";
-  await afterCatsChanged();
-  toast("Категория добавлена ✅");
+  $("catAdd").disabled = true;
+  try {
+    const d = await catApi("/api/admin/category", { name, emoji: $("catEmojiNew").value.trim() });
+    if (!d.ok) { alertMsg(d.error === "exists" ? "Такая категория уже есть." : "Не удалось добавить."); return; }
+    $("catNameNew").value = ""; $("catEmojiNew").value = "";
+    await afterCatsChanged();
+    toast("Категория добавлена ✅");
+  } finally { $("catAdd").disabled = false; }
 };
 async function moveCat(code, dir) {
   const i = categories.findIndex(c => c.code === code);
@@ -677,13 +680,16 @@ $("specAdd").onclick = async () => {
   if (!label) { alertMsg("Введите название характеристики."); return; }
   const kind = $("specKind").value;
   if (kind === "select" && !$("specOptions").value.trim()) { alertMsg("Перечислите варианты через запятую."); return; }
-  const d = await catApi("/api/admin/category/spec", { category: specsCat, label,
-    unit: $("specUnit").value.trim(), kind, options: $("specOptions").value.trim() });
-  if (!d.ok) { alertMsg(d.error === "exists" ? "Такая характеристика уже есть." : "Не удалось добавить."); return; }
-  $("specLabel").value = ""; $("specUnit").value = ""; $("specOptions").value = "";
-  await afterCatsChanged();
-  renderSpecList();
-  toast("Характеристика добавлена ✅");
+  $("specAdd").disabled = true;
+  try {
+    const d = await catApi("/api/admin/category/spec", { category: specsCat, label,
+      unit: $("specUnit").value.trim(), kind, options: $("specOptions").value.trim() });
+    if (!d.ok) { alertMsg(d.error === "exists" ? "Такая характеристика уже есть." : "Не удалось добавить."); return; }
+    $("specLabel").value = ""; $("specUnit").value = ""; $("specOptions").value = "";
+    await afterCatsChanged();
+    renderSpecList();
+    toast("Характеристика добавлена ✅");
+  } finally { $("specAdd").disabled = false; }
 };
 function delSpec(id) {
   // Значения у товаров остаются в базе: вернули поле — вернулись и они.
@@ -1329,7 +1335,7 @@ async function postDocs(body) {
 
 async function openDocsAdmin() {
   $("docsAdminView").classList.add("show");
-  $("docsAdminState").textContent = "Загрузка…";
+  $("docsAdminState").innerHTML = loaderHtml();
   try {
     const d = await postDocs({});
     const док = (d && d.docs) || {};

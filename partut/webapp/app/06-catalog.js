@@ -6,8 +6,10 @@
 // ----- Бренды и вкусы -----
 let brands = [], brandFlavors = [], editingBrandId = null;
 async function fetchBrands() {
-  const r = await fetch("/api/brands");
-  brands = await r.json();
+  try {
+    const r = await fetch("/api/brands");
+    brands = await r.json();
+  } catch (e) { /* останемся с тем, что было — экран уже открыт */ }
 }
 const catName = (code) => (CAT_OPTS.find(([c]) => c === code) || [, code])[1];
 
@@ -350,7 +352,14 @@ async function doDelLocation(id) {
     const r = await fetch("/api/admin/location/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
     const d = await r.json();
     if (!d.ok) {
-      alertMsg(d.error === "has_products" ? "Нельзя удалить: в этой локации есть товары. Сначала уберите их." : "Не удалось удалить локацию.");
+      const тексты = {
+        has_products: "Нельзя удалить: в этой локации есть товары. Сначала уберите их.",
+        has_orders: `Нельзя удалить: есть незакрытые заказы (${d.count || "?"}). Сначала закройте их.`,
+        has_delivery: "Нельзя удалить: у точки настроены способы доставки. Сначала уберите их.",
+        has_pickup: "Нельзя удалить: у точки есть точки самовывоза. Сначала уберите их.",
+        has_staff: "Нельзя удалить: за точкой закреплены продавцы. Сначала снимите их.",
+      };
+      alertMsg(тексты[d.error] || "Не удалось удалить локацию.");
       return;
     }
     await refreshAll();          // города пропали из фильтров и форм

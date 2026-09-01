@@ -100,6 +100,28 @@ def run():
         notifications.notify_sellers(bot3, oid)
         c3("сообщение всё равно ушло", any(s[0] == 8801 for s in bot3.sent))
         c3("просто без кнопки", _buttons(bot3.sent[0][2]) == [])
+
+        # --- Комментарий/адрес покупателя может сломать HTML-разметку ---
+        # Сообщение продавцу уходит с parse_mode="HTML". Комментарий — вольный
+        # текст покупателя: без экранирования что-то вроде "<не раньше 18:00>"
+        # Telegram не распарсит как валидный тег, отправка упадёт исключением,
+        # и продавец не узнает о заказе вовсе (упавшая отправка гасится внутри
+        # notify_sellers try/except — молча).
+        c4 = Checker("Экранирование пользовательского текста")
+        notifications.WEBAPP_URL = "https://shop.example"
+        oid2 = db.create_order(7702, "buyer2", "Минск",
+                               [{"product_id": 1, "name": "Elf Bar", "price": 15.0, "qty": 1}], 15.0, "")
+        db.set_order_delivery(oid2, "Доставка <срочно>", "ул. <тест> 5 & K", 2.0, "cash",
+                              comment="привезите к 18:00 <не раньше>", phone="+375291112233")
+        bot4 = FakeBot()
+        notifications.notify_sellers(bot4, oid2)
+        c4("сообщение дошло, а не упало на битой разметке", any(s[0] == 8801 for s in bot4.sent))
+        text4 = bot4.sent[0][1] if bot4.sent else ""
+        c4("угловые скобки в комментарии экранированы", "&lt;не раньше&gt;" in text4)
+        c4("сырой тег из комментария не остался", "<не раньше>" not in text4)
+        c4("угловые скобки в адресе экранированы", "&lt;тест&gt;" in text4)
+        c4("амперсанд в адресе экранирован", "&amp; K" in text4)
+        c4("угловые скобки в способе доставки экранированы", "&lt;срочно&gt;" in text4)
     finally:
         notifications.notify_sellers = _stub      # дальше по стенду снова тихо
         db.remove_staff(8801)
@@ -108,7 +130,7 @@ def run():
         cur.execute("DELETE FROM orders")
         conn.commit(); conn.close()
 
-    return c.fails + c2.fails + c3.fails
+    return c.fails + c2.fails + c3.fails + c4.fails
 
 
 if __name__ == "__main__":

@@ -111,6 +111,10 @@ def delete_product(product_id):
     # факт её наличия в Турове. Раньше товар уносил с собой чужие слова —
     # вернул модель на точку через месяц, а отзывов уже нет.
     cur.execute(db._q("DELETE FROM reviews WHERE product_id = %s AND model_id IS NULL"), (product_id,))
+    # Хвосты: кто-то ждал этот товар или отметил его сердечком — товара больше
+    # нет, ждать и показывать в избранном нечего.
+    cur.execute(db._q("DELETE FROM stock_alerts WHERE product_id = %s"), (product_id,))
+    cur.execute(db._q("DELETE FROM favorites WHERE product_id = %s"), (product_id,))
     conn.commit()
     conn.close()
 
@@ -151,14 +155,20 @@ def get_brand(brand_id):
 
 def find_brand_by_name(name, except_id=None):
     """Бренд с таким именем (без учёта регистра). Нужен, чтобы не плодить дубли:
-    «Vaporesso» и «vaporesso» в фильтре выглядят как два разных бренда."""
+    «Vaporesso» и «vaporesso» в фильтре выглядят как два разных бренда.
+
+    Сравниваем на стороне Python, а не через SQL LOWER(): у SQLite он приводит
+    к нижнему регистру только ASCII, кириллица проходит как есть — «Хаски» и
+    «хаски» для него разные строки (Postgres с этим справляется сам, но код
+    должен работать одинаково на обоих)."""
+    target = (name or "").strip().lower()
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("SELECT * FROM brands WHERE LOWER(name) = %s"), ((name or "").strip().lower(),))
+    cur.execute("SELECT * FROM brands")
     rows = cur.fetchall()
     conn.close()
     for r in rows:
-        if except_id is None or int(r["id"]) != int(except_id):
+        if (r["name"] or "").strip().lower() == target and (except_id is None or int(r["id"]) != int(except_id)):
             return r
     return None
 
@@ -452,6 +462,9 @@ def delete_model(model_id):
     conn = db.connect()
     cur = conn.cursor()
     cur.execute(db._q("UPDATE products SET model_id = NULL WHERE model_id = %s"), (model_id,))
+    # Галерея модели — не товара: без этого фото оставались бы в базе навсегда,
+    # ничем больше не удерживаемые.
+    cur.execute(db._q("DELETE FROM product_photos WHERE model_id = %s"), (model_id,))
     cur.execute(db._q("DELETE FROM models WHERE id = %s"), (model_id,))
     deleted = cur.rowcount > 0
     conn.commit()

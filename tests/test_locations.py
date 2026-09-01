@@ -61,6 +61,12 @@ def run():
     r = client.post("/api/admin/location/rename", json={"initData": "x", "id": 999999, "name": "Кто-то"})
     c("несуществующая точка — not_found", r.get_json().get("error") == "not_found")
 
+    # add_location раньше сравнивал имя регистрозависимо — «Ренейм-Новое» и
+    # «ренейм-новое» завелись бы как два разных города, не пересекаясь ни в
+    # фильтрах, ни в остатках.
+    same_case_id = db.add_location("ренейм-новое")
+    c("регистр не создаёт вторую точку", same_case_id == lid)
+
     _clean()
     return c.fails
 
