@@ -636,6 +636,14 @@ function openEdit(id) {
 
 // Общий блок замены фото — превью + выбор файла (для любого товара).
 function editPhotoBlock(p) {
+  // /api/admin/photo — owner-only на сервере (фото витрины общее для всех
+  // точек). Продавцу показывать поле загрузки незачем — нажатие «Сохранить»
+  // молча отказало бы именно в этой части, а остальные поля бы сохранились.
+  if (!isOwner()) {
+    return p.photo_url
+      ? `<label>Главное фото</label><img alt="" src="${thumbOf(p)}" style="max-width:120px;border-radius:10px;display:block">`
+      : "";
+  }
   return `<label>Главное фото</label>
     <div class="edphoto">
       <img id="edPhotoPrev" alt="" src="${thumbOf(p) || ''}" ${p.photo_url ? '' : 'style="display:none"'}>
@@ -862,6 +870,15 @@ function обновитьБлокТочек() {
 // модели. Раньше это никак не объяснялось — блока точек просто не было, и
 // владелец заводил товар в другом городе заново, руками.
 function toModelBlock() {
+  // Заводит запись в ОБЩЕМ ассортименте (то же самое, что и «Ассортимент» в
+  // хабе «Управление») — сервер это тоже проверяет (owner-only), но кнопка,
+  // на которую продавец жмёт и получает молчаливый отказ, — плохой экран
+  // сама по себе. Продавцу просто объясняем, что делать в этом случае.
+  if (!isOwner()) {
+    return `<div style="border-top:1px solid var(--line);margin:20px 0 0"></div>
+      <label style="margin-top:16px">Точки продаж</label>
+      <div class="dnote" style="margin:0 0 10px">Этот товар заведён без модели — на других точках его заводит владелец через «Ассортимент».</div>`;
+  }
   return `<div style="border-top:1px solid var(--line);margin:20px 0 0"></div>
     <label style="margin-top:16px">Точки продаж</label>
     <div class="dnote" style="margin:0 0 10px">Этот товар заведён без модели, поэтому живёт только на одной точке. Модель — это описание товара, общее для всех городов; из неё он и добавляется куда угодно.</div>

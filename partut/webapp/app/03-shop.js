@@ -571,6 +571,17 @@ function renderProdActions(p) {
     if (items > 0) {
       $("prodActions").innerHTML = `<button class="bigbtn" id="pdGoCart">В корзину · ${items} шт · ${(items*p.price).toFixed(2)} ${CUR}</button>`;
       $("pdGoCart").onclick = () => { $("productView").classList.remove("show"); renderGrid(); showTab("cart"); };
+    } else if (p.stock <= 0) {
+      // Все вкусы разобраны разом — «нажмите на вкус» тут тупик: нажимать
+      // не на что, каждая строка задизейблена. Тот же выход, что и у
+      // обычного товара без остатка: сообщить о поступлении (по модели
+      // целиком — уведомления по отдельному вкусу склад не различает).
+      if (waitingFor(p.id)) {
+        $("prodActions").innerHTML = `<button class="bigbtn" disabled>🔔 Сообщим о поступлении</button>`;
+      } else {
+        $("prodActions").innerHTML = `<button class="bigbtn" id="pdNotify">🔔 Сообщить о поступлении</button>`;
+        $("pdNotify").onclick = () => notifyMe(p.id);
+      }
     } else {
       $("prodActions").innerHTML = `<div style="text-align:center;color:var(--hint);padding:10px 0">Нажмите на ${esc(catVariant(p.category).toLowerCase())}, чтобы добавить</div>`;
     }

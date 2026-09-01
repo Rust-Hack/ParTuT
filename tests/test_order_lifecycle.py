@@ -123,8 +123,7 @@ def run():
     # Тот же сценарий для отменённого заказа: склад и монеты уже вернулись,
     # чек «оживить» его не должен.
     as_admin()
-    oid2, pid2 = make_order("new")
-    stock_before_cancel = db.get_product(pid2)["stock"]
+    oid2, _ = make_order("new")
     db.cancel_order(oid2, ["new"])
     as_user(CLIENT, "vasya")
     r = _чек(oid2)
