@@ -236,6 +236,55 @@ def run_вечный_цикл_переживает_падение():
     return c.fails
 
 
+def run_переподключение_после_обрыва():
+    """Neon рвёт простаивающие соединения между тиками (цикл специально
+    редкий — 15 минут, чтобы дать базе заснуть, см. docstring _reminder_loop).
+    Первая попытка после паузы иногда попадает на уже мёртвое соединение из
+    пула — psycopg2 узнаёт об этом только на самом запросе. Это должно
+    чиниться одной автоматической повторной попыткой, без письма владельцу о
+    том, что уже разрешилось само — но если обрыв не разовый, а реальная
+    беда, отчёт всё равно обязан дойти."""
+    if not db.USE_PG:
+        return 0   # завязано на psycopg2.OperationalError — на SQLite такого не бывает
+
+    c = Checker("Обрыв соединения чинится повторной попыткой")
+    _clean(); _reset_marks(); reset_sent()
+    real_needing = db.orders_needing_reminder
+    попытки = {"n": 0}
+
+    def рвётся_один_раз(*a, **k):
+        попытки["n"] += 1
+        if попытки["n"] == 1:
+            raise db.psycopg2.OperationalError("SSL connection has been closed unexpectedly")
+        return real_needing(*a, **k)
+
+    db.orders_needing_reminder = рвётся_один_раз
+    try:
+        botmod._background_tick()
+    finally:
+        db.orders_needing_reminder = real_needing
+    c("шаг выполнился со второй попытки", попытки["n"] == 2)
+    c("владельцу не пишем — само зажило",
+      not any("напоминания продавцам" in str(s[1]) for s in SENT))
+
+    c2 = Checker("Обрыв, который не лечится, всё равно доходит до владельца")
+    _reset_marks(); reset_sent()
+
+    def рвётся_всегда(*a, **k):
+        raise db.psycopg2.OperationalError("SSL connection has been closed unexpectedly")
+
+    db.orders_needing_reminder = рвётся_всегда
+    try:
+        botmod._background_tick()
+    finally:
+        db.orders_needing_reminder = real_needing
+    c2("после неудачной повторной попытки — сообщили владельцу",
+       any("напоминания продавцам" in str(s[1]) for s in SENT))
+
+    _reset_marks()
+    return c.fails + c2.fails
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)
