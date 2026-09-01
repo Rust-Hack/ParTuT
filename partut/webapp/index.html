@@ -504,27 +504,27 @@
       <button class="closebtn" id="raHistory" style="margin-bottom:12px">🏆 История и контакты победителей</button>
       <label>Название</label><input id="raTitle" placeholder="Розыгрыш месяца">
       <label>🥇 Приз за 1 место</label><input id="raPrize1" placeholder="Одноразка">
-      <div class="edphoto raPhotoRow" data-place="1">
+      <div class="edphoto raPhotoRow" data-place="1" style="display:none">
         <img class="raPhotoPrev" alt="" style="display:none">
         <input type="file" class="raPhotoInput" accept="image/*">
       </div>
       <label>🥈 Приз за 2 место</label><input id="raPrize2" placeholder="Жидкость">
-      <div class="edphoto raPhotoRow" data-place="2">
+      <div class="edphoto raPhotoRow" data-place="2" style="display:none">
         <img class="raPhotoPrev" alt="" style="display:none">
         <input type="file" class="raPhotoInput" accept="image/*">
       </div>
       <label>🥉 Приз за 3 место (монеты)</label><input id="raPrize3" inputmode="numeric" placeholder="500">
-      <div class="edphoto raPhotoRow" data-place="3">
+      <div class="edphoto raPhotoRow" data-place="3" style="display:none">
         <img class="raPhotoPrev" alt="" style="display:none">
         <input type="file" class="raPhotoInput" accept="image/*">
       </div>
-      <div class="dnote" id="raPhotoNote" style="margin:6px 0 0">Фото приза можно добавить, когда розыгрыш начат — своё для каждого места.</div>
+      <div class="dnote" id="raPhotoNote" style="margin:6px 0 0;display:none">Фото приза можно добавить, когда розыгрыш начат — своё для каждого места.</div>
       <label>Порог участия (Br за месяц)</label><input id="raThreshold" inputmode="decimal" placeholder="25">
       <div id="raDaysRow"><label>Сколько дней идёт</label><input id="raDays" inputmode="numeric" placeholder="30"></div>
-      <button class="bigbtn" id="raSave" style="margin-top:16px">Сохранить</button>
+      <button class="bigbtn" id="raSave" style="margin-top:16px;display:none">Сохранить</button>
       <button class="bigbtn" id="raStart" style="margin-top:16px">Начать розыгрыш</button>
-      <button class="closebtn" id="raDraw" style="color:var(--danger)">🎲 Подвести итоги и завершить</button>
-      <button class="closebtn" id="raCancel" style="color:var(--hint);margin-top:8px">✕ Отменить без итогов (тестовый)</button>
+      <button class="closebtn" id="raDraw" style="color:var(--danger);display:none">🎲 Подвести итоги и завершить</button>
+      <button class="closebtn" id="raCancel" style="color:var(--hint);margin-top:8px;display:none">✕ Отменить без итогов (тестовый)</button>
     </div>
   </div>
 
