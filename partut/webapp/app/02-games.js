@@ -122,8 +122,16 @@ function initStrip(el) {   // стартовое состояние бараба
 const REEL_EASE = "cubic-bezier(.28,0,.14,1)";   // быстрый разгон, долгое мягкое торможение
 function runReel(el, three, K, dur) {
   const em = slotEmojis();
+  // Последние 3 ячейки филлера — те же символы, что уже крутились в заглушке
+  // (initStrip), а не случайные новые. Заглушка ждёт ответ сервера и мгновенно
+  // сменяется этой лентой: на медленной сети заглушка успевает прокрутиться
+  // заметно, и если тут же вместо неё подставить произвольные символы, глаз
+  // ловит резкую смену картинки ровно в момент передачи. Одинаковый набор в
+  // стыке — и смены не видно, хотя перестановка внутри всё равно мгновенная.
+  const stub = Array.from(el.children).slice(0, 3).map(c => c.textContent).filter(Boolean);
   const cells = [three[0], three[1], three[2]];
   for (let i = 0; i < K; i++) cells.push(em[Math.floor(Math.random() * em.length)] || "❔");
+  if (stub.length === 3) { cells[K] = stub[0]; cells[K + 1] = stub[1]; cells[K + 2] = stub[2]; }
   const cellH = el.parentElement.clientHeight / 3;
   el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
   el.style.transition = "none";
