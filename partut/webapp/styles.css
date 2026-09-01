@@ -501,11 +501,18 @@ html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shad
    как только ответ пришёл. */
 /* Лента продублирована (см. initStrip): едем ровно до половины высоты — до
    точки, где вторая копия совпадает с первой, — а мгновенный сброс кадра
-   при перезапуске цикла остаётся незаметным (тот же рисунок в кадре). */
+   при перезапуске цикла остаётся незаметным (тот же рисунок в кадре).
+
+   Направление — СВЕРХУ ВНИЗ, как и у настоящего прокрута (runReel: старт на
+   translateY(-K·высота), финиш на translateY(0) — тоже сверху вниз). Раньше
+   заглушка ехала в обратную сторону (0 → -50%, т.е. вверх), и в момент, когда
+   ответ сервера приходит и её сменяет runReel, направление визуально
+   дёргалось на противоположное — это и читалось как рывок, а не смена
+   картинки в стыке (её уже прячет runReel, см. переменную stub). */
 .reel-strip.spinning { animation: reelPlaceholder .66s linear infinite; }
 @keyframes reelPlaceholder {
-  from { transform: translateY(0); }
-  to   { transform: translateY(-50%); }
+  from { transform: translateY(-50%); }
+  to   { transform: translateY(0); }
 }
 .reel-col.antic { animation: reelAntic .42s ease-in-out infinite; }   /* предвкушение на 3-м барабане */
 @keyframes reelAntic {
