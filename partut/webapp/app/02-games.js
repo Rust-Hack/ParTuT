@@ -265,12 +265,17 @@ async function spinSlot() {
   if (slotSpinning || (bonus.coins || 0) < slotBet) return;
   slotSpinning = true; $("slotBtn").disabled = true;
   const stage = document.querySelector(".slot3"); if (stage) stage.classList.remove("win");
-  [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) [...s.children].forEach(ch => ch.classList.remove("hit")); });
   haptic("impact", "medium");
   // Крутим СРАЗУ, не дожидаясь сети: колесо (spinWheel) уже так делает, а слот
   // раньше стоял неподвижным барабаном, пока ответ шёл до Render и обратно —
   // на живой сети это заметная пауза, и тап ощущался как «не сработал».
-  [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) s.classList.add("blur", "spinning"); });
+  //
+  // initStrip ЗАНОВО кладёт продублированную пару ячеек (см. её же комментарий):
+  // после первого прокрута барабан остаётся с лентой ИТОГА (3 + K случайных
+  // ячеек, без повтора) — если просто включить .spinning на ней, заглушка
+  // едет по кривой длине и на стыке цикла дёргается, а это ровно тот рывок,
+  // который был виден на каждый повторный тап, а не только на первый.
+  [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) { initStrip(s); s.classList.add("blur", "spinning"); } });
   // 1) Параллельно с этим — результат (быстрый запрос).
   let res;
   try {

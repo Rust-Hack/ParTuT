@@ -2525,7 +2525,7 @@ from partut.db.raffles import (                                        # noqa: E
     _RAFFLE_EDITABLE, _ensure_raffle_columns, _ensure_raffle_uniques,       # noqa: F401
     get_active_raffle, get_last_finished_raffle, recent_finished_raffle,    # noqa: F401
     finished_raffles,                                                      # noqa: F401
-    create_raffle, update_raffle_field, claim_raffle_draw,                  # noqa: F401
+    create_raffle, update_raffle_field, claim_raffle_draw, cancel_raffle,   # noqa: F401
     set_raffle_winners, finish_raffle, add_raffle_entry, is_entered,        # noqa: F401
     count_entries, get_raffle_user_ids, spent_since, get_raffle_state,      # noqa: F401
 )

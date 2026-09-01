@@ -934,6 +934,7 @@ async function openRaffleAdmin() {
     if ($("raPhotoNote")) $("raPhotoNote").style.display = raffleRunning ? "" : "none";
     $("raSave").style.display = raffleRunning ? "" : "none";
     $("raDraw").style.display = raffleRunning ? "" : "none";
+    $("raCancel").style.display = raffleRunning ? "" : "none";
     $("raStart").style.display = raffleRunning ? "none" : "";
     $("raDaysRow").style.display = raffleRunning ? "none" : "";
     $("raffleAdminInfo").innerHTML = raffleRunning
@@ -993,6 +994,20 @@ $("raDraw").onclick = () => {
   const сколько = raffleУчастников;
   confirmMsg(`Подвести итоги сейчас и завершить розыгрыш? Участников: ${сколько}. `
              + "Новый начнётся только когда вы его начнёте.", go);
+};
+$("raCancel").onclick = () => {
+  const go = async () => {
+    if (!await админПост("/api/admin/raffle/cancel", {}, "отменить розыгрыш")) return;
+    alertMsg("Розыгрыш отменён, без итогов ✅"); openRaffleAdmin();
+  };
+  // Отличие от «Подвести итоги»: без победителей, без сообщений участникам —
+  // для тестового розыгрыша или заведённого по ошибке. Настоящим участникам
+  // (если уже есть) так же ничего не придёт, поэтому предупреждаем отдельно.
+  const сколько = raffleУчастников;
+  const предупреждение = сколько
+    ? ` Внимание: участников уже ${сколько} — им ничего не сообщат, розыгрыш просто исчезнет.`
+    : "";
+  confirmMsg(`Отменить розыгрыш БЕЗ итогов? Победителей не будет, никто не получит сообщений.${предупреждение}`, go);
 };
 
 // ----- Пользователи и рефералы (админ) -----

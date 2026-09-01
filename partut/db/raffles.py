@@ -186,6 +186,28 @@ def claim_raffle_draw(raffle_id):
     return won
 
 
+def cancel_raffle(raffle_id):
+    """Отменяет розыгрыш без итогов — для тестового или заведённого по ошибке.
+
+    В отличие от «подвести итоги»: победителей не выбираем, монет не
+    начисляем, участникам и владельцу ничего не пишем. Строку удаляем
+    совсем (а не помечаем статусом) — она не должна всплыть ни в архиве
+    (finished_raffles), ни тизером «прошлый победитель» у следующего
+    розыгрыша: отменённого розыгрыша для покупателя как будто не было.
+    Фото приза, если успели загрузить, подберёт ночная уборка сирот —
+    как только строка исчезает, ссылок на файл не остаётся.
+
+    Возвращает True, если розыгрыш был активен и правда отменён."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("DELETE FROM raffle_entries WHERE raffle_id = %s"), (raffle_id,))
+    cur.execute(db._q("DELETE FROM raffles WHERE id = %s AND status = 'active'"), (raffle_id,))
+    cancelled = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return cancelled
+
+
 def set_raffle_winners(raffle_id, winners):
     conn = db.connect()
     cur = conn.cursor()

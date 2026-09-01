@@ -437,9 +437,46 @@ def run():
     c12("админу в тизере тоже имя", тизер_админу and тизер_админу["who"] == "Алексей")
     c12("и контакт для связи", тизер_админу and тизер_админу.get("username") == "win_user")
 
+    # --- Отменить тестовый розыгрыш без итогов ---
+    c13 = Checker("Отмена розыгрыша — без победителей и без писем")
+    активный = db.get_active_raffle()   # тот самый «Новый» из c12, с одним участником
+    db.add_raffle_entry(активный["id"], UIDS[0])
+    монеты_до = db.get_coins(UIDS[0])
+    reset_sent()
+
+    as_admin(uid=8905, username="продавец", role="staff", city="Туров")
+    r = client.post("/api/admin/raffle/cancel", json={"initData": "x"})
+    c13("продавцу отмена закрыта", r.status_code == 403)
+    c13("розыгрыш всё ещё активен", db.get_active_raffle() is not None)
+
+    as_admin()
+    r = client.post("/api/admin/raffle/cancel", json={"initData": "x"}).get_json()
+    c13("владелец отменяет", r.get("ok") is True)
+    c13("активного розыгрыша больше нет", db.get_active_raffle() is None)
+    c13("участнику ничего не начислили", db.get_coins(UIDS[0]) == монеты_до)
+    c13("и ничего не написали", len(SENT) == 0)
+
+    hist = client.post("/api/raffle/history", json={"initData": "x"}).get_json()
+    c13("отменённого нет в архиве",
+        "Новый" not in [h["title"] for h in (hist.get("history") or [])])
+
+    r = client.post("/api/admin/raffle/cancel", json={"initData": "x"})
+    c13("отменять уже нечего — так и сказано", r.status_code == 404)
+
+    # Отменённый розыгрыш никогда не был «finished» — тизер «прошлый
+    # победитель» честно берёт того, кто выиграл ПОСЛЕДНИМ по-настоящему
+    # (ИмённойРозыгрыш из c11), а не что-то от удалённого «Новый».
+    client.post("/api/admin/raffle/start", json={"initData": "x", "title": "СледомЗаОтменённым", "days": 30})
+    as_user(UIDS[0], "смотрит")
+    st = client.post("/api/raffle", json={"initData": "x"}).get_json()["raffle"]
+    тизер_после_отмены = next((w for w in st.get("last_winners", []) if w["prize"] == "Под"), None)
+    c13("тизер честно берёт последний РЕАЛЬНО завершённый розыгрыш, не отменённый",
+        тизер_после_отмены and тизер_после_отмены["who"] == "Алексей")
+    as_admin()
+
     _clean()
     return (c.fails + c2.fails + c3.fails + c31.fails + c4.fails + c5.fails + c6.fails
-            + c7.fails + c8.fails + c9.fails + c10.fails + c11.fails + c12.fails)
+            + c7.fails + c8.fails + c9.fails + c10.fails + c11.fails + c12.fails + c13.fails)
 
 
 if __name__ == "__main__":

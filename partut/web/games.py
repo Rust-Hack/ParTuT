@@ -506,6 +506,25 @@ def api_admin_raffle_draw():
     return jsonify({"ok": True})
 
 
+@bp.route("/api/admin/raffle/cancel", methods=["POST"])
+def api_admin_raffle_cancel():
+    """Отменить розыгрыш без итогов — для тестового или заведённого по ошибке.
+
+    В отличие от «Подвести итоги»: победителей не выбираем, участникам и
+    владельцу ничего не пишем, монеты не начисляем. Строка удаляется совсем,
+    будто розыгрыша не было. Права — как у остальных ручек розыгрыша:
+    /api/admin/raffle/ владельцу открыт целиком (auth._OWNER_ONLY), сюда
+    заходит только тот, у кого прошёл общий шлюз."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not auth.get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    r = db.get_active_raffle()
+    if not r:
+        return jsonify({"ok": False, "error": "no_raffle"}), 404
+    db.cancel_raffle(r["id"])
+    return jsonify({"ok": True})
+
+
 def _mask_id(uid):
     """Кто это был — не называя человека. Показывать полный id участникам
     незачем: по нему пишут в личку."""
