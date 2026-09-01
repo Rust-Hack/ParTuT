@@ -1538,7 +1538,7 @@ async function fetchBonus() {
 let bonusTab = "wheel", gameMode = "wheel";
 let wheel = { sectors: [], spins: 0, progress: 0, step: 100 };   // шаг в Br, приходит с сервера
 let slot = { bets: [2], balance: 0, symbols: [], lines: [] };
-let slotBet = parseInt(localStorage.getItem("slotBet") || "2", 10) || 2;   // текущая ставка
+let slotBet = parseInt(localStorage.getItem("slotBet") || "5", 10) || 5;   // текущая ставка
 let slotHistory = [];   // последние результаты слота (сессия): >0 выигрыш, 0 промах
 let _anticHb = null;    // таймер пульс-хаптика на предвкушении
 let slotAuto = false;   // авто-прокрут вкл/выкл

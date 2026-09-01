@@ -163,10 +163,9 @@ function updateSlotPays() {
   (slot.symbols || []).forEach((s, i) => { if (smalls[i]) smalls[i].textContent = `${slotBet * s.mult} 🪙`; });
 }
 function renderSlot() {
-  if (!(slot.bets || []).includes(slotBet)) slotBet = (slot.bets || [2])[0];   // защита от stale-значения
+  if (!(slot.bets || []).includes(slotBet)) slotBet = (slot.bets || [5])[0];   // защита от stale-значения
   const canSpin = (bonus.coins || 0) >= slotBet;
   const pay = slotPayHtml();
-  const bets = (slot.bets || []).map(b => `<button class="betbtn ${b === slotBet ? 'on' : ''}" data-bet="${b}">${b}</button>`).join("");
   $("gameWrap").innerHTML = `
     <div class="slot-top"><div class="wheel-head" id="slotHead" style="margin:0">🪙 ${bonus.coins || 0} монет</div>
       <button class="soundtgl" id="slotInfo" aria-label="Правила">ℹ️</button>
@@ -178,7 +177,11 @@ function renderSlot() {
     </div>
     <div class="game-result" id="slotResult">3 одинаковых в линию — ряд, диагональ или зигзаг</div>
     <div class="wheel-hist" id="slotHist"></div>
-    <div class="betsel"><span class="betlbl">Ставка</span>${bets}</div>
+    <div class="betsel"><span class="betlbl">Ставка</span>
+      <button class="betstep" id="betMinus" aria-label="Меньше">−</button>
+      <span class="betval" id="betVal">${slotBet} 🪙</span>
+      <button class="betstep" id="betPlus" aria-label="Больше">+</button>
+    </div>
     <button class="bigbtn" id="slotBtn" ${canSpin ? "" : "disabled"}>${slotBtnText()}</button>
     <button class="autobtn" id="slotAutoBtn">🔄 Авто-прокрут</button>
     <div class="wheel-hint">Возможный выигрыш за 3 в линию:</div>
@@ -187,15 +190,33 @@ function renderSlot() {
   [0, 1, 2].forEach(c => initStrip($("strip" + c)));
   renderSlotHist(); updateAutoBtn();
   $("slotAutoBtn").onclick = toggleAuto;
-  document.querySelectorAll(".betsel .betbtn").forEach(btn => btn.onclick = () => {
+  // Степпер вместо ряда кнопок: один слот под ставку, +/- ходят по списку
+  // slot.bets по шагу (список задаёт сервер — он же его и проверяет на спине).
+  function updateBetStepBtns() {
+    const list = slot.bets || [];
+    const i = list.indexOf(slotBet);
+    $("betMinus").disabled = i <= 0;
+    $("betPlus").disabled = i < 0 || i >= list.length - 1;
+  }
+  function setBet(v) {
     if (slotSpinning) return;
-    slotBet = parseInt(btn.dataset.bet, 10);
+    slotBet = v;
     localStorage.setItem("slotBet", slotBet);
-    document.querySelectorAll(".betsel .betbtn").forEach(b => b.classList.toggle("on", parseInt(b.dataset.bet, 10) === slotBet));
+    $("betVal").textContent = `${slotBet} 🪙`;
+    updateBetStepBtns();
     const sb = $("slotBtn"); if (sb) { sb.disabled = (bonus.coins || 0) < slotBet; sb.textContent = slotBtnText(); }
     updateSlotPays();          // суммы пересчитываются на месте (без рефлоу)
     haptic("impact", "light");
-  });
+  }
+  $("betMinus").onclick = () => {
+    const list = slot.bets || []; const i = list.indexOf(slotBet);
+    if (i > 0) setBet(list[i - 1]);
+  };
+  $("betPlus").onclick = () => {
+    const list = slot.bets || []; const i = list.indexOf(slotBet);
+    if (i >= 0 && i < list.length - 1) setBet(list[i + 1]);
+  };
+  updateBetStepBtns();
   $("slotBtn").onclick = spinSlot;
   $("soundTgl").onclick = () => { toggleSound(); $("soundTgl").textContent = soundOn ? "🔊" : "🔇"; };
   $("slotInfo").onclick = () => {

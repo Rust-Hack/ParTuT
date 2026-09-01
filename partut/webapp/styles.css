@@ -534,12 +534,21 @@ html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shad
 .slotpay { background: var(--slotpay-bg); border: 1px solid var(--slotpay-line); border-radius: 12px; box-shadow: var(--slot-inset); padding: 8px 4px; text-align: center; }
 .slotpay span { font-size: 22px; display: block; }
 .slotpay small { color: var(--brand-neon); font-size: 11px; text-shadow: 0 0 6px var(--brand-glow); white-space: nowrap; }
-.betsel { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 4px 0 10px; }
+.betsel { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 4px 0 10px; }
 .betlbl { color: var(--hint); font-size: 13px; margin-right: 2px; }
-/* Фон был зашит тёмным, а текст брался из темы: на свету получались тёмные
-   цифры на тёмно-сером — ставку было не прочесть. Теперь фон тоже из темы. */
-.betbtn { min-width: 38px; padding: 7px 0; border-radius: 10px; border: 1px solid var(--slotpay-line); background: var(--slotpay-bg); color: var(--text); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
-.betbtn.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); box-shadow: 0 0 12px var(--brand-glow); }
+/* Степпер вместо ряда кнопок «на каждую ставку своя кнопка»: тапать +/- по
+   одной привычной позиции быстрее, чем целиться в нужное число в ряду,
+   особенно когда значений стало девять вместо пяти. */
+.betstep {
+  width: 38px; flex: 0 0 38px; height: 38px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--slotpay-line); background: var(--slotpay-bg); color: var(--text);
+  font-size: 20px; line-height: 1; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  user-select: none; -webkit-user-select: none; touch-action: manipulation;
+}
+.betstep:active { background: var(--accent-soft); }
+.betstep:disabled { opacity: .35; cursor: default; }
+.betval { min-width: 64px; text-align: center; font-size: 17px; font-weight: 800; color: var(--text); }
 .autobtn { width: 100%; margin-top: 8px; padding: 11px; border-radius: 12px; border: 1px solid var(--slotpay-line); background: var(--slotpay-bg); color: var(--accent); font-size: 15px; font-weight: 700; transition: background .15s, box-shadow .15s; }
 .autobtn.on { background: rgba(255,61,129,.15); border-color: #ff3d81; color: #ff6b9d; box-shadow: 0 0 12px rgba(255,61,129,.4); }
 .unrefx, .delx { border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
