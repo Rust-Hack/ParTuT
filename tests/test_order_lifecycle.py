@@ -1,7 +1,17 @@
 """Жизненный цикл заказа: статусы, идемпотентность, кэшбэк, отмена, возвраты."""
+import io as _io
+
 from _common import db, client, Checker, as_user, as_admin
 
 CLIENT = 555
+
+
+def _чек(oid):
+    """/api/receipt как его вызывает покупатель — тем же путём, что и в бою."""
+    return client.post("/api/receipt",
+                       data={"initData": "x", "order_id": str(oid),
+                             "file": (_io.BytesIO(b"\x89PNG\r\n\x1a\nphoto"), "check.jpg")},
+                       content_type="multipart/form-data")
 
 
 def make_order(status, price=10, qty=2, coins_used=0):
@@ -85,7 +95,43 @@ def run():
     c5("confirmed клиент отменить не может → too_late",
        r.status_code == 400 and (r.get_json() or {}).get("error") == "too_late")
 
-    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails
+    c6 = Checker("F. Повторный чек не воскрешает заказ и не задваивает кэшбэк")
+    # Заказ дошёл до 'issued' обычным путём (paid → confirmed → issued),
+    # кэшбэк уже начислен. Чек по нему присылают ЕЩЁ РАЗ — например, старым
+    # запросом, который завис в пути, или потому что не заметили, что заказ
+    # уже выдан. Раньше это молча откатывало статус на 'paid' — с кнопками
+    # «Подтвердить»/«Выдать» СНОВА доступными продавцу.
+    as_admin()
+    oid, pid = make_order("new")
+    as_user(CLIENT, "vasya")
+    r = _чек(oid)
+    c6("первый чек принят", r.get_json().get("ok") is True)
+    c6("заказ стал paid", db.get_order(oid)["status"] == "paid")
+    as_admin()
+    act(oid, "confirm")
+    before = db.get_coins(CLIENT)
+    act(oid, "issued")
+    gained = db.get_coins(CLIENT) - before
+    c6("кэшбэк начислен один раз", gained > 0 and db.get_order(oid)["status"] == "issued")
+
+    as_user(CLIENT, "vasya")
+    r = _чек(oid)
+    c6("повторный чек на уже выданный заказ отклонён", r.status_code == 409)
+    c6("заказ остался issued, не откатился на paid", db.get_order(oid)["status"] == "issued")
+    c6("кэшбэк не начислился второй раз", db.get_coins(CLIENT) == before + gained)
+
+    # Тот же сценарий для отменённого заказа: склад и монеты уже вернулись,
+    # чек «оживить» его не должен.
+    as_admin()
+    oid2, pid2 = make_order("new")
+    stock_before_cancel = db.get_product(pid2)["stock"]
+    db.cancel_order(oid2, ["new"])
+    as_user(CLIENT, "vasya")
+    r = _чек(oid2)
+    c6("чек на отменённый заказ отклонён", r.status_code == 409)
+    c6("отменённый заказ не воскрес", db.get_order(oid2)["status"] == "canceled")
+
+    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails
 
 
 if __name__ == "__main__":

@@ -102,6 +102,15 @@ def run_product_to_model():
     db.recalc_product_stock(pid)
     c("у товара нет модели", db.get_product(pid)["model_id"] is None)
 
+    # Заведение модели — это заведение записи в ОБЩЕМ ассортименте (то же,
+    # что /api/admin/model), а не правка своей точки: продавцу должно быть
+    # закрыто тем же правилом, что и прямому созданию модели.
+    as_admin(uid=9200, username="продавец", role="staff", city="Минск")
+    закрыто = client.post("/api/admin/product/to-model", json={"initData": "x", "id": pid})
+    c("продавцу закрыто — это ассортимент, а не его точка", закрыто.status_code == 403)
+    c("модель не завелась", db.get_product(pid)["model_id"] is None)
+    as_admin()
+
     ответ = client.post("/api/admin/product/to-model", json={"initData": "x", "id": pid})
     c("ручка ответила", ответ.status_code == 200 and ответ.get_json()["ok"])
     mid = ответ.get_json()["model_id"]

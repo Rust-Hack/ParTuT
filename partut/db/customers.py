@@ -238,13 +238,16 @@ def reward_referrer_for_order(buyer_id, subtotal):
     ref = row["referred_by"]
     percent = ref_percent(count_active_referrals(ref))
     pct_coins = round((subtotal or 0) * percent)   # X Br * p% = X*p монет (1 Br = 100 монет)
-    first = not row["ref_activated"]
     earned = 0
     if pct_coins > 0:
         add_coins(ref, pct_coins, "referral", related_id=buyer_id)
         earned += pct_coins
+    # set_ref_activated сам решает, кто первый, условным UPDATE — не по
+    # предварительному чтению row["ref_activated"]: два заказа того же
+    # приглашённого, выданные почти одновременно, иначе оба бы прочли
+    # ref_activated=0 и заплатили фикс дважды.
+    first = set_ref_activated(buyer_id)
     if first:
-        set_ref_activated(buyer_id)
         bonus = referral_bonus()
         add_coins(ref, bonus, "referral", related_id=buyer_id)
         earned += bonus
@@ -291,11 +294,20 @@ def referral_earnings(referrer_id, limit=50):
 
 
 def set_ref_activated(user_id):
+    """Помечает «фикс за первого друга» выплаченным. Условие в самом UPDATE
+    (не читаем-потом-пишем): два заказа одного приглашённого, выданные
+    почти одновременно (два продавца, два клика подряд), иначе оба
+    успевают увидеть ref_activated=0 и фикс уйдёт дважды. Возвращает True,
+    только если это МЫ первыми выставили флаг — тогда и только тогда стоит
+    платить бонус."""
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("UPDATE users SET ref_activated = 1 WHERE user_id = %s"), (user_id,))
+    cur.execute(db._q("UPDATE users SET ref_activated = 1 "
+                   "WHERE user_id = %s AND COALESCE(ref_activated, 0) = 0"), (user_id,))
+    выиграли = cur.rowcount > 0
     conn.commit()
     conn.close()
+    return выиграли
 
 
 def unlink_referral(user_id):

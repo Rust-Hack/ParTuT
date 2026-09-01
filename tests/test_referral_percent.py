@@ -5,6 +5,8 @@
 Ошибка здесь тихая — пригласивший просто получает меньше, чем обещано на
 экране, и заметит это в лучшем случае через месяц.
 """
+import threading
+
 from _common import db, client, Checker, as_admin, as_user
 
 from partut import cache
@@ -138,8 +140,44 @@ def run():
     c3("безымянный друг подписан как «друг», не пусто", any(h["friend"] == "друг" for h in hist))
     as_admin()
 
+    # --- Гонка: два заказа СВЕЖЕГО друга выдают почти одновременно ---
+    # Раньше «первый заказ» решался чтением ref_activated ДО записи — два
+    # запроса на /api/admin/order/status (issued) для разных заказов одного
+    # и того же ещё не активного друга оба видели ref_activated=0 и оба
+    # платили разовый бонус. set_ref_activated теперь решает это условным
+    # UPDATE, поэтому бонус обязан прийти РОВНО один раз, сколько бы заказов
+    # ни выдали одновременно.
+    c4 = Checker("Гонка: бонус за первого друга не задваивается")
+    друг3 = _друг(8140)
+    oid_a, *_ = db.place_order(друг3, "u8140", "Минск",
+                               [{"id": pid, "name": "Реф-под", "price": 100.0, "qty": 1, "cost": 0}],
+                               100.0, 0, 0.01, 0, "Самовывоз", "ул. Тест 1", "cash", "", "", "paid")
+    oid_b, *_ = db.place_order(друг3, "u8140", "Минск",
+                               [{"id": pid, "name": "Реф-под", "price": 100.0, "qty": 1, "cost": 0}],
+                               100.0, 0, 0.01, 0, "Самовывоз", "ул. Тест 1", "cash", "", "", "paid")
+    было = db.get_user_row(ПРИГЛАСИВШИЙ)["coins"] or 0
+    # Оба заказа выдаём ПАРАЛЛЕЛЬНО (два разных заказа одного и того же
+    # ещё не активного друга) — та самая гонка, которую чинили в
+    # set_ref_activated.
+    потоки = [
+        threading.Thread(target=lambda oid=oid_a: client.post(
+            "/api/admin/order/status", json={"initData": "x", "id": oid, "action": "issued"})),
+        threading.Thread(target=lambda oid=oid_b: client.post(
+            "/api/admin/order/status", json={"initData": "x", "id": oid, "action": "issued"})),
+    ]
+    for t in потоки:
+        t.start()
+    for t in потоки:
+        t.join()
+    стало = db.get_user_row(ПРИГЛАСИВШИЙ)["coins"] or 0
+    # Оба заказа по 100 Br на ступени 3% (пятеро активных с начала теста) = 600,
+    # плюс РОВНО один разовый бонус — не два.
+    c4("бонус за первого друга начислен один раз, не два",
+       стало - было == 600 + бонус)
+    c4("друг помечен активным один раз", db.get_user_row(друг3)["ref_activated"] == 1)
+
     _clean()
-    return c.fails + c2.fails + c3.fails
+    return c.fails + c2.fails + c3.fails + c4.fails
 
 
 if __name__ == "__main__":

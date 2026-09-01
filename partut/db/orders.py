@@ -570,13 +570,23 @@ def set_order_status_if(order_id, new_status, allowed):
 
 
 def set_order_receipt(order_id, file_id):
-    """Сохраняет фото чека и переводит заказ в статус 'paid'."""
+    """Сохраняет фото чека и переводит заказ в статус 'paid'.
+
+    Только из 'new': без этого условия повторная (или запоздавшая — заказ
+    успели отменить по неоплате, пока чек летел до Телеграма и обратно)
+    отправка чека воскрешала бы ЛЮБОЙ заказ обратно в 'paid' — включая уже
+    подтверждённый, выданный (кэшбэк и % рефереру уже начислены — продавец
+    нажал бы «Выдан» ещё раз и начислил бы их повторно) или уже отменённый
+    (склад и монеты уже возвращены на полку). Возвращает True, только если
+    заказ действительно был в 'new' и чек принят."""
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("UPDATE orders SET receipt_file_id = %s, status = 'paid' WHERE id = %s"),
-                (file_id, order_id))
+    cur.execute(db._q("UPDATE orders SET receipt_file_id = %s, status = 'paid' "
+                   "WHERE id = %s AND status = 'new'"), (file_id, order_id))
+    принято = cur.rowcount > 0
     conn.commit()
     conn.close()
+    return принято
 
 
 def set_order_paid_amount(order_id, amount):

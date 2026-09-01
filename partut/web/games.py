@@ -521,7 +521,13 @@ def api_admin_raffle_cancel():
     r = db.get_active_raffle()
     if not r:
         return jsonify({"ok": False, "error": "no_raffle"}), 404
-    db.cancel_raffle(r["id"])
+    # Розыгрыш мог в этот же миг увести _close_expired_raffle (его лениво
+    # запускает любой покупатель, открывший вкладку после срока) — cancel_raffle
+    # проверяет это условным удалением и возвращает False, если опоздали.
+    # Ответить «ok: true» в такой момент значило бы соврать: отмены не было.
+    if not db.cancel_raffle(r["id"]):
+        return jsonify({"ok": False, "error": "already_drawn",
+                        "message": "Розыгрыш уже начали подводить — отменять больше нечего."}), 409
     return jsonify({"ok": True})
 
 

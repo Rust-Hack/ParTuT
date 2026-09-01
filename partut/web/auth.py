@@ -127,6 +127,12 @@ _OWNER_ONLY = (
 # (продавцу), и по префиксу их не различить.
 _OWNER_ONLY_EXACT = {
     "/api/admin/product",
+    # Заводит новую запись в общем ассортименте (модель) из товара продавца —
+    # тот же эффект, что и /api/admin/model, просто с другой стороны. Не
+    # префикс: /api/admin/product/update, /variants, /delete, /specs,
+    # /from-model — законная работа продавца на своей точке, их это не
+    # должно тронуть.
+    "/api/admin/product/to-model",
     "/api/admin/promos",      # коды со статистикой: сколько выручки принёс каждый
     "/api/admin/raffle",      # настройка розыгрыша
     "/api/admin/settings",    # реквизиты и правила магазина

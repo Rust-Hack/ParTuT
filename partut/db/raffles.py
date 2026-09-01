@@ -197,12 +197,22 @@ def cancel_raffle(raffle_id):
     Фото приза, если успели загрузить, подберёт ночная уборка сирот —
     как только строка исчезает, ссылок на файл не остаётся.
 
-    Возвращает True, если розыгрыш был активен и правда отменён."""
+    Возвращает True, если розыгрыш был активен и правда отменён.
+
+    Порядок важен: розыгрыш параллельно может подводить ленивый _close_expired_raffle
+    (его дёргает любой покупатель, открывший вкладку после срока) — claim_raffle_draw
+    тем же приёмом (условный UPDATE ... WHERE status='active') атомарно решает, кто
+    первый. Удаляя СНАЧАЛА билеты, а строку розыгрыша вторым условным запросом,
+    можно было выиграть отмену строки, но проиграть заявку на розыгрыш — тогда
+    настоящих участников уже подведённого розыгрыша стёрли бы из-под него. Условное
+    удаление строки идёт первым: если оно не задело ни одной строки — розыгрыш уже
+    увели подводить итоги, и билеты трогать нельзя."""
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("DELETE FROM raffle_entries WHERE raffle_id = %s"), (raffle_id,))
     cur.execute(db._q("DELETE FROM raffles WHERE id = %s AND status = 'active'"), (raffle_id,))
     cancelled = cur.rowcount > 0
+    if cancelled:
+        cur.execute(db._q("DELETE FROM raffle_entries WHERE raffle_id = %s"), (raffle_id,))
     conn.commit()
     conn.close()
     return cancelled

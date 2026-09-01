@@ -474,9 +474,51 @@ def run():
         тизер_после_отмены and тизер_после_отмены["who"] == "Алексей")
     as_admin()
 
+    # --- Гонка: «Отменить» против автоподведения итогов по сроку ---
+    # _close_expired_raffle (claim_raffle_draw) может увести розыгрыш в
+    # 'finished' в ЛЮБОЙ момент — его лениво дёргает первый же покупатель,
+    # открывший вкладку после срока, а не только явное действие админа.
+    # Порядок операций в cancel_raffle раньше был обратным (билеты удалялись
+    # ДО условного удаления строки розыгрыша) — если draw успевал забрать
+    # розыгрыш первым, cancel всё равно стирал уже РЕАЛЬНО разыгранные
+    # билеты. Здесь воспроизводим оба порядка выигрыша гонки напрямую,
+    # не полагаясь на удачу планировщика потоков.
+    c14 = Checker("Гонка отмены с автоподведением итогов")
+    client.post("/api/admin/raffle/start", json={"initData": "x", "title": "ГонкаОтмены", "days": 30})
+    гонка = db.get_active_raffle()
+    db.add_raffle_entry(гонка["id"], UIDS[0])
+
+    # Сценарий А: draw успевает забрать розыгрыш ПЕРВЫМ (claim_raffle_draw
+    # уже перевёл статус в 'finished') — cancel опаздывает.
+    won = db.claim_raffle_draw(гонка["id"])
+    c14("подведение забрало право первым", won is True)
+    cancelled = db.cancel_raffle(гонка["id"])
+    c14("отмена честно говорит, что опоздала", cancelled is False)
+    c14("билеты НЕ стёрты — хотя подведение итогов их ещё не читало",
+        db.get_raffle_user_ids(гонка["id"]) == [UIDS[0]])
+    db.finish_raffle(гонка["id"], [{"place": 1, "user_id": UIDS[0], "prize": "Тест"}])
+    c14("подведённый розыгрыш можно закрыть с настоящими участниками",
+        json.loads(db.get_last_finished_raffle()["winners"])[0]["user_id"] == UIDS[0])
+
+    # Сценарий Б: cancel успевает забрать розыгрыш первым — draw опаздывает.
+    client.post("/api/admin/raffle/start", json={"initData": "x", "title": "ГонкаОтмены2", "days": 30})
+    гонка2 = db.get_active_raffle()
+    db.add_raffle_entry(гонка2["id"], UIDS[1])
+    cancelled2 = db.cancel_raffle(гонка2["id"])
+    c14("отмена выигрывает вторую гонку", cancelled2 is True)
+    won2 = db.claim_raffle_draw(гонка2["id"])
+    c14("опоздавшее подведение итогов честно отказано", won2 is False)
+    c14("билеты отменённого розыгрыша тоже стёрты (не мусорят таблицу)",
+        db.get_raffle_user_ids(гонка2["id"]) == [])
+
+    r = client.post("/api/admin/raffle/cancel", json={"initData": "x"})
+    c14("активных розыгрышей не осталось — отменять нечего, так и сказано",
+        r.status_code == 404)
+
     _clean()
     return (c.fails + c2.fails + c3.fails + c31.fails + c4.fails + c5.fails + c6.fails
-            + c7.fails + c8.fails + c9.fails + c10.fails + c11.fails + c12.fails + c13.fails)
+            + c7.fails + c8.fails + c9.fails + c10.fails + c11.fails + c12.fails + c13.fails
+            + c14.fails)
 
 
 if __name__ == "__main__":
