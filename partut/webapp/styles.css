@@ -379,6 +379,12 @@ details[open] > .secthead::after { transform: rotate(180deg); }
 .dmhead .an { font-weight: 700; font-size: 14px; flex: 1; min-width: 0; }
 .dmhead .an small { display: block; color: var(--hint); font-weight: 400; font-size: 12.5px; line-height: 1.35; margin-top: 2px; }
 .dmhead .iconbtn { flex: 0 0 auto; }
+/* Единый индикатор загрузки (loaderHtml, 01-core.js): кольцо крутится —
+   видно, что приложение работает, а не «текст повис на экране». */
+.loader-inline { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 26px 0; color: var(--hint); font-size: 13px; }
+.loader-ring { width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%; border: 2.5px solid var(--line); border-top-color: var(--accent); animation: loaderSpin .8s linear infinite; }
+@keyframes loaderSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loader-ring { animation-duration: 2.4s; } }
 /* Бонусы */
 .bonuswrap { padding: 16px; }
 .bonushero { background: linear-gradient(135deg, var(--accent), var(--brand-neon)); color: #04232a; border-radius: 20px; padding: 28px; text-align: center; margin-bottom: 16px; box-shadow: var(--shadow); }
@@ -476,10 +482,13 @@ html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shad
 /* Прокрут-заглушка на время ответа сервера: барабан крутится сразу по тапу,
    ещё не зная результата, — реальный прокрут (JS, runReel) подхватывает его,
    как только ответ пришёл. */
-.reel-strip.spinning { animation: reelPlaceholder .22s linear infinite; }
+/* Лента продублирована (см. initStrip): едем ровно до половины высоты — до
+   точки, где вторая копия совпадает с первой, — а мгновенный сброс кадра
+   при перезапуске цикла остаётся незаметным (тот же рисунок в кадре). */
+.reel-strip.spinning { animation: reelPlaceholder .66s linear infinite; }
 @keyframes reelPlaceholder {
   from { transform: translateY(0); }
-  to   { transform: translateY(-33.333%); }
+  to   { transform: translateY(-50%); }
 }
 .reel-col.antic { animation: reelAntic .42s ease-in-out infinite; }   /* предвкушение на 3-м барабане */
 @keyframes reelAntic {

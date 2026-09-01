@@ -483,7 +483,7 @@ async function openStockPick() {
   $("stockPickSearch").value = "";
   // Модели грузились только при входе в «Ассортимент», а сюда попадают мимо
   // него — список был пуст, и это выглядело как «завозить нечего».
-  $("stockPickList").innerHTML = `<p style="color:var(--hint);margin:8px 0 0">Загрузка…</p>`;
+  $("stockPickList").innerHTML = loaderHtml();
   await fetchModels();
   renderStockPick();
 }

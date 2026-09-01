@@ -11,7 +11,7 @@ let payUnpaidHours = 0;        // сколько заказ ждёт чек, п�
 $("myOrdersClose").onclick = () => $("myOrdersView").classList.remove("show");
 async function openMyOrders() {
   $("myOrdersView").classList.add("show");
-  $("myOrdersList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+  $("myOrdersList").innerHTML = loaderHtml();
   try {
     const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
@@ -193,7 +193,7 @@ $("ordersClose").onclick = () => { $("ordersView").classList.remove("show"); loa
 $("ordersSearch").oninput = (e) => { ordersSearch = e.target.value; renderOrders(); };
 
 async function loadAdminOrders() {
-  $("ordersList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+  $("ordersList").innerHTML = loaderHtml();
   try {
     const r = await fetch("/api/admin/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();

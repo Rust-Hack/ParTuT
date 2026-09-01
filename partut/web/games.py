@@ -269,14 +269,26 @@ def _raffle_results(raffle, for_admin=False):
             "participants_count": len(entrants)}
 
 
-def _raffle_public_from_state(st):
+def _raffle_public_from_state(st, for_admin=False):
     r = st["raffle"]
     threshold = round(r["threshold"] or 0, 2)
     spent = round(st["spent"], 2)
     try:
-        last_winners = json.loads(st["last_winners_raw"]) if st["last_winners_raw"] else []
+        raw_winners = json.loads(st["last_winners_raw"]) if st["last_winners_raw"] else []
     except (TypeError, ValueError):
-        last_winners = []
+        raw_winners = []
+    # Та же подстановка имени, что и в _raffle_results: сырые данные хранят
+    # только user_id, а кто это — решаем каждый раз заново при чтении (имя в
+    # Telegram могло смениться), и одинаково для обеих витрин с победителями.
+    last_winners = []
+    for w in raw_winners:
+        entry = {"place": w.get("place"), "who": _winner_name(w.get("user_id")),
+                 "prize": w.get("prize") or ""}
+        if for_admin:
+            u = db.get_user_row(w.get("user_id"))
+            entry["user_id"] = w.get("user_id")
+            entry["username"] = (u["username"] or "") if (u and "username" in u.keys()) else ""
+        last_winners.append(entry)
     return {
         "id": r["id"], "title": r["title"] or "Розыгрыш месяца",
         "prize1": r["prize1"] or "", "prize2": r["prize2"] or "", "prize3_coins": r["prize3_coins"],
@@ -308,7 +320,8 @@ def api_raffle():
             return jsonify({"ok": True, "raffle": None,
                             "finished": _raffle_results(finished_raffle, for_admin)})
         return jsonify({"ok": False, "error": "no_raffle"}), 404
-    return jsonify({"ok": True, "raffle": _raffle_public_from_state(st)})
+    for_admin = bool(auth.get_admin(data.get("initData", "")))
+    return jsonify({"ok": True, "raffle": _raffle_public_from_state(st, for_admin)})
 
 
 @bp.route("/api/raffle/history", methods=["POST"])

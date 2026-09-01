@@ -107,11 +107,14 @@ function slotBtnText() {
   return can ? `Крутить · ${slotBet} 🪙` : "Недостаточно монет";
 }
 function initStrip(el) {   // стартовое состояние барабана — 3 случайных символа
+  // Ряд дублирован (3+3 те же символы): заглушка-прокрут (.spinning, CSS) двигает
+  // ленту ровно на «свою» половину и мгновенно сбрасывается — с дублем в конце
+  // сброс приходится на визуально одинаковый кадр, и рывка не видно.
   const em = slotEmojis();
   const cells = [0, 1, 2].map(() => em[Math.floor(Math.random() * em.length)] || "❔");
   el.classList.remove("blur");
   el.style.transition = "none"; el.style.transform = "translateY(0)";
-  el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
+  el.innerHTML = cells.concat(cells).map(e => `<div class="reel-cell">${e}</div>`).join("");
 }
 // Единый плавный прокрут барабана: ОДИН transition с мягким ease-in-out —
 // плавный разгон и плавное затихание, без переключений анимаций (не «багает»).
@@ -337,7 +340,6 @@ async function spinSlot() {
 
 // ----- Розыгрыши -----
 let raffle = null, raffleDone = null, raffleReady = false;
-const maskId = (id) => "•••" + ("" + id).slice(-3);
 // Контакт под именем победителя — приходит только админу (для_admin на сервере):
 // покупателю сервер эти поля вообще не присылает, так что для него функция
 // молчит сама собой, ничего проверять на клиенте не нужно.
@@ -365,7 +367,7 @@ async function fetchRaffle() {
 // Архив прошлых розыгрышей: без него виден только последний завершённый —
 // как только стартует следующий, итоги предыдущего пропадают безвозвратно.
 async function openRaffleHistory() {
-  showInfo("🏆 История розыгрышей", `<p style="color:var(--hint)">Загрузка…</p>`);
+  showInfo("🏆 История розыгрышей", loaderHtml());
   try {
     const r = await fetch("/api/raffle/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
@@ -436,7 +438,7 @@ function renderRaffle() {
       <div style="color:var(--hint);font-size:13px;margin-top:8px;text-align:center">Осталось потратить <b>${r.remaining.toFixed(2)} Br</b> до участия<br>(${r.spent.toFixed(2)} / ${r.threshold.toFixed(2)} Br за месяц)</div>`;
   }
   const wins = (r.last_winners || []).length
-    ? r.last_winners.map(w => `<div class="statrow"><span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${maskId(w.user_id)}</span><b>${esc(w.prize)}</b></div>`).join("")
+    ? r.last_winners.map(w => `<div class="statrow"><span>${["", "🥇", "🥈", "🥉"][w.place] || (w.place + " место")} ${esc(w.who)}${contactLine(w)}</span><b>${esc(w.prize)}</b></div>`).join("")
     : "";
   $("raffleWrap").innerHTML = `
     <div class="card-block" style="text-align:left">
@@ -526,7 +528,7 @@ function bindReferral() {
 // Раньше был виден только итог (ref_earned) — за какого именно друга
 // пришли монеты, было не восстановить. related_id в coin_log это чинит.
 async function openReferralHistory() {
-  showInfo("🧾 История начислений", `<p style="color:var(--hint)">Загрузка…</p>`);
+  showInfo("🧾 История начислений", loaderHtml());
   try {
     const r = await fetch("/api/referral/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();

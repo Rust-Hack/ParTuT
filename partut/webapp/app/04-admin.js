@@ -130,7 +130,7 @@ async function openRequests() {
   await loadRequests();
 }
 async function loadRequests() {
-  $("requestsList").innerHTML = `<div class="card-block" style="color:var(--hint)">Загрузка…</div>`;
+  $("requestsList").innerHTML = `<div class="card-block">${loaderHtml()}</div>`;
   try {
     const r = await fetch("/api/admin/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
@@ -759,7 +759,7 @@ function hbars(rows) {
   return rows.map(r => `<div class="hbar"><div class="hbar-l">${esc(r.label)}</div><div class="hbar-t"><i style="width:${Math.round(r.value / max * 100)}%"></i></div><div class="hbar-v">${r.sub}</div></div>`).join("");
 }
 async function loadStats() {
-  $("statsBody").innerHTML = periodSelHtml() + `<p style="color:var(--hint)">Загрузка…</p>`;
+  $("statsBody").innerHTML = periodSelHtml() + loaderHtml();
   bindPeriodBtns();
   let s;
   try {
@@ -1095,7 +1095,7 @@ function whenRu(s) {
 async function showUserCard(u) {
   if (!u) return;
   const who = (u.username ? `@${esc(u.username)}` : `ID ${u.id}`) + (u.super ? " 🛡" : "");
-  showInfo(who, `<div style="color:var(--hint)">Загрузка…</div>`);
+  showInfo(who, loaderHtml());
   let card = null;
   try {
     const r = await fetch("/api/admin/customer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, user_id: u.id }) });
@@ -1206,7 +1206,7 @@ $("spinAdd").onclick = () => adjustSpins(1);
 $("spinRemove").onclick = () => adjustSpins(-1);
 async function loadAllUsers() {
   const q = $("userSearch").value.trim();
-  $("allUsersList").innerHTML = `<div style="color:var(--hint)">Загрузка…</div>`;
+  $("allUsersList").innerHTML = loaderHtml();
   try {
     const r = await fetch("/api/admin/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, search: q }) });
     const d = await r.json();
@@ -1238,7 +1238,7 @@ async function loadAllUsers() {
   } catch (e) { $("allUsersList").innerHTML = `<div style="color:var(--hint)">Сеть недоступна.</div>`; }
 }
 async function loadMyReferrals() {
-  $("myRefList").innerHTML = `<div style="color:var(--hint)">Загрузка…</div>`;
+  $("myRefList").innerHTML = loaderHtml();
   try {
     const r = await fetch("/api/admin/referrals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
@@ -1631,7 +1631,7 @@ function renderRevFilter() {
   });
 }
 async function loadPendingReviews(silent) {
-  if (!silent) { renderRevFilter(); $("reviewsList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`; }
+  if (!silent) { renderRevFilter(); $("reviewsList").innerHTML = loaderHtml(); }
   try {
     const r = await fetch("/api/admin/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, status: silent ? "pending" : revFilter }) });
     const d = await r.json();
@@ -1712,7 +1712,7 @@ async function openPromos() {
 }
 
 async function loadPromos() {
-  $("promoList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+  $("promoList").innerHTML = loaderHtml();
   try {
     const r = await fetch("/api/admin/promos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
@@ -1865,7 +1865,7 @@ async function openLog() {
     if ($h) $h.textContent = "🧾 Журнал";
     if ($note) $note.textContent = "Кто и что менял: цену, остаток, товар, настройки. Остаток и раньше писался в журнал движений у каждого товара — здесь всё остальное, что прежде менялось бесследно.";
   }
-  $("logList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+  $("logList").innerHTML = loaderHtml();
   try {
     const r = await fetch("/api/admin/log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
@@ -1888,7 +1888,7 @@ async function openStaff() {
 }
 
 async function loadStaff() {
-  $("staffList").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+  $("staffList").innerHTML = loaderHtml();
   try {
     const r = await fetch("/api/admin/staff", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();

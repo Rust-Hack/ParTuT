@@ -213,6 +213,10 @@ function confirmMsg(question, onYes) {
 }
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+// Единый индикатор ожидания данных: крутящееся кольцо вместо голого слова
+// «Загрузка…» — тот же экран, но видно, что приложение работает, а не зависло.
+const loaderHtml = (text) => `<div class="loader-inline"><span class="loader-ring"></span><span>${esc(text || "Загрузка…")}</span></div>`;
+
 const NAV = [
   { id: "catalog", label: "Каталог", icon: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/>' },
   { id: "bonus", label: "Бонусы", icon: '<rect x="3" y="8" width="18" height="13" rx="1"/><path d="M3 12h18M12 8v13"/><path d="M12 8S9 3 6.5 4.5 9 8 12 8zM12 8s3-5 5.5-3.5S15 8 12 8z"/>' },
@@ -1290,7 +1294,7 @@ async function openDocs(which) {
   $("docsView").classList.add("show");
   showDocTab(which || "offer");
   if (!docsCache) {
-    $("docsText").textContent = "Загрузка…";
+    $("docsText").innerHTML = loaderHtml();
     try {
       docsCache = await (await fetch("/api/docs")).json();
     } catch (e) {
@@ -1340,7 +1344,7 @@ async function openMySettings() {
   myPointId = (me && me.my_point) || null;
   $("myPhone").value = (me && me.prefill && me.prefill.phone) || "";
   $("myRemind").classList.toggle("on", remindersOn);
-  $("myPoints").innerHTML = `<p style="color:var(--hint);font-size:13px;margin:0">Загрузка…</p>`;
+  $("myPoints").innerHTML = loaderHtml();
   renderMyCities();
   try {
     const r = await fetch("/api/my-points");
@@ -1361,7 +1365,7 @@ async function copyMyId() {
 // КАЖДАЯ монета — только по разным экранам порознь (колесо своя история за
 // сессию, рефералы отдельно). Один список — вся летопись coin_log.
 async function openCoinHistory() {
-  showInfo("🪙 История монет", `<p style="color:var(--hint)">Загрузка…</p>`);
+  showInfo("🪙 История монет", loaderHtml());
   try {
     const r = await fetch("/api/coins/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
@@ -1553,7 +1557,7 @@ async function renderBonus() {
   if (bonusTab === "wheel" && gameMode === "slot" && !slotReady) jobs.push(fetchSlot());
   if (bonusTab === "raffle" && !raffleReady) jobs.push(fetchRaffle());
   if (jobs.length) {
-    if (!bonusReady) $("tab-bonus").innerHTML = `<div class="bonuswrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
+    if (!bonusReady) $("tab-bonus").innerHTML = `<div class="bonuswrap">${loaderHtml()}</div>`;
     await Promise.all(jobs);
   }
   // Вкладку показываем, только когда розыгрыш идёт: «Розыгрыши» там, где
@@ -1569,7 +1573,7 @@ async function renderBonus() {
     // прошлых пропадали безвозвратно, как только стартовал следующий.
     body = `<div style="text-align:right;margin-bottom:8px">
         <button class="soundtgl" id="raffleHistBtn" style="width:auto;padding:0 12px">🏆 История</button></div>
-      <div id="raffleWrap"><p style="color:var(--hint)">Загрузка…</p></div>`;
+      <div id="raffleWrap">${loaderHtml()}</div>`;
   } else if (bonusTab === "ref") {
     body = referralHtml();
   } else {

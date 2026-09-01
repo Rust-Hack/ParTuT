@@ -416,9 +416,30 @@ def run():
     c11("в нём есть имя победителя", any("Алексей" in t for t in от_бота_владельцу))
     c11("и что делать с монетами (3 место) — сказано", any("начислены сами" in t for t in от_бота_владельцу))
 
+    # --- Тот же победитель виден и в тизере «прошлый розыгрыш» ---
+    # /api/raffle отдаёт last_winners из СЫРОГО json — отдельным путём от
+    # _raffle_results (который используют «итоги» и архив). Имя туда чинили
+    # отдельно, и один из трёх экранов чуть не остался с id вместо имени.
+    c12 = Checker("Прошлый победитель виден и в тизере активного розыгрыша")
+    client.post("/api/admin/raffle/start", json={"initData": "x", "title": "Новый", "days": 30})
+
+    deny_admin()
+    as_user(9999, "прохожий")
+    st = client.post("/api/raffle", json={"initData": "x"}).get_json()["raffle"]
+    тизер = next((w for w in st.get("last_winners", []) if w["prize"] == "Под"), None)
+    c12("покупатель видит имя в тизере", тизер and тизер["who"] == "Алексей")
+    c12("а не голый id", тизер and тизер["who"] != ПОБЕДИТЕЛЬ)
+    c12("покупателю контакт не присылают", тизер and "username" not in тизер)
+
+    as_admin()
+    st = client.post("/api/raffle", json={"initData": "x"}).get_json()["raffle"]
+    тизер_админу = next((w for w in st.get("last_winners", []) if w["prize"] == "Под"), None)
+    c12("админу в тизере тоже имя", тизер_админу and тизер_админу["who"] == "Алексей")
+    c12("и контакт для связи", тизер_админу and тизер_админу.get("username") == "win_user")
+
     _clean()
     return (c.fails + c2.fails + c3.fails + c31.fails + c4.fails + c5.fails + c6.fails
-            + c7.fails + c8.fails + c9.fails + c10.fails + c11.fails)
+            + c7.fails + c8.fails + c9.fails + c10.fails + c11.fails + c12.fails)
 
 
 if __name__ == "__main__":

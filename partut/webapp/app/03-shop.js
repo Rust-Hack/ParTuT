@@ -54,7 +54,7 @@ async function openDelivery() {
     renderDelivery();
     if (!deliveryPending[city]) fetchDeliveryFor(city);   // тихо обновим на случай изменений
   } else {
-    $("deliveryBody").innerHTML = `<p style="color:var(--hint)">Загрузка…</p>`;
+    $("deliveryBody").innerHTML = loaderHtml();
     const openedFor = city;
     deliveryMethods = await fetchDeliveryFor(city);
     if (openedFor !== city) return;          // пока грузилось, точку сменили — не рисуем чужое
@@ -518,7 +518,7 @@ function renderProduct() {
       ${infoHtml}
       ${p.description ? `<p class="pd-desc">${esc(p.description)}</p>` : ""}
       ${flavorHtml}
-      ${rating.count ? `<div class="revs" id="prodRevs"><h3>Отзывы покупателей</h3><div style="color:var(--hint);font-size:13px">Загрузка…</div></div>` : ""}
+      ${rating.count ? `<div class="revs" id="prodRevs"><h3>Отзывы покупателей</h3>${loaderHtml()}</div>` : ""}
     </div>`;
   if (rating.count) loadProductReviews(p.id);
   const gwrap = $("pgal");
