@@ -508,8 +508,12 @@ html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shad
    заглушка ехала в обратную сторону (0 → -50%, т.е. вверх), и в момент, когда
    ответ сервера приходит и её сменяет runReel, направление визуально
    дёргалось на противоположное — это и читалось как рывок, а не смена
-   картинки в стыке (её уже прячет runReel, см. переменную stub). */
-.reel-strip.spinning { animation: reelPlaceholder .66s linear infinite; }
+   картинки в стыке (её уже прячет runReel, см. переменную stub).
+
+   Длительность (.4s) ДОЛЖНА совпадать с COAST_CYCLE в 02-games.js: runReel
+   считает по этому числу скорость заглушки, чтобы торможение стартовало
+   ровно с той же скорости, а не рывком. Поменяли здесь — поменяйте и там. */
+.reel-strip.spinning { animation: reelPlaceholder .4s linear infinite; }
 @keyframes reelPlaceholder {
   from { transform: translateY(-50%); }
   to   { transform: translateY(0); }

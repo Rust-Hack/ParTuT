@@ -116,42 +116,41 @@ function initStrip(el) {   // стартовое состояние бараба
   el.style.transition = "none"; el.style.transform = "translateY(0)";
   el.innerHTML = cells.concat(cells).map(e => `<div class="reel-cell">${e}</div>`).join("");
 }
-// Единый плавный прокрут барабана: ОДИН transition с мягким ease-out —
-// без переключений анимаций (не «багает»).
+// Скорость заглушки (reelPlaceholder, styles.css): 3 ячейки (-50% от
+// задвоенной ленты) за COAST_CYCLE секунд, линейно. Это число здесь и там
+// должно совпадать — иначе торможение стартует не с той скорости, на которой
+// реально едет заглушка, и на стыке виден скачок (было: заглушка ~370 px/c,
+// торможение стартовало на ~6500 px/c — барабан «спотыкался», потом дёргался).
+const COAST_CYCLE = 0.4;
+// Кривая «постоянное замедление», как торможение машины: скорость линейно
+// падает с начальной до нуля. cubic-bezier(1/3,2/3,2/3,1) — точное кубическое
+// представление квадратичной y=2x-x² (единственный способ гарантировать, что
+// НАЧАЛЬНАЯ скорость торможения равна скорости коастинга, без скачка).
+const REEL_BRAKE_EASE = "cubic-bezier(.3333,.6667,.6667,1)";
 // Крутится СВЕРХУ ВНИЗ: результат [верх,середина,низ] в начале ленты, филлер снизу.
-//
-// Кривая старта — не «разгон с нуля», а «сразу быстро, потом долгое мягкое
-// торможение»: прошлая cubic-bezier(.28,0,.14,1) в первые ~150 мс еле
-// двигалась (замер живьём: ~50 px/c), а к 400 мс уже разгонялась до ~2800
-// px/c — барабан будто спотыкался в момент запуска, а потом срывался с
-// места. Заглушка (reelPlaceholder) перед этим едет с постоянной скоростью
-// ~370 px/c — резкий провал скорости сразу после неё и читался как рывок.
-// easeOutExpo стартует сразу на высокой скорости и только тормозит к концу —
-// без провала.
-const REEL_EASE = "cubic-bezier(.16,1,.3,1)";
-function runReel(el, three, K, dur) {
+function runReel(el, three, brakeDur) {
   const em = slotEmojis();
   // Последние 3 ячейки филлера — те же символы, что уже крутились в заглушке
-  // (initStrip), а не случайные новые. Заглушка ждёт ответ сервера и мгновенно
-  // сменяется этой лентой: на медленной сети заглушка успевает прокрутиться
-  // заметно, и если тут же вместо неё подставить произвольные символы, глаз
-  // ловит резкую смену картинки ровно в момент передачи. Одинаковый набор в
-  // стыке — и смены не видно, хотя перестановка внутри всё равно мгновенная.
+  // (initStrip), а не случайные новые: заглушка мгновенно сменяется этой
+  // лентой, и без этого глаз ловит смену картинки ровно в момент передачи.
   const stub = Array.from(el.children).slice(0, 3).map(c => c.textContent).filter(Boolean);
+  const cellH = el.parentElement.clientHeight / 3;
+  const coastV = (3 * cellH) / COAST_CYCLE;                 // px/с — скорость заглушки
+  const brakeDist = coastV * brakeDur / 2;                  // среднее = V/2 при линейном торможении
+  const K = Math.max(3, Math.ceil(brakeDist / cellH));
   const cells = [three[0], three[1], three[2]];
   for (let i = 0; i < K; i++) cells.push(em[Math.floor(Math.random() * em.length)] || "❔");
   if (stub.length === 3) { cells[K] = stub[0]; cells[K + 1] = stub[1]; cells[K + 2] = stub[2]; }
-  const cellH = el.parentElement.clientHeight / 3;
   el.innerHTML = cells.map(e => `<div class="reel-cell">${e}</div>`).join("");
   el.style.transition = "none";
   el.style.transform = `translateY(${-K * cellH}px)`;      // старт: виден нижний филлер
   el.classList.add("blur");
   void el.offsetHeight;                                     // зафиксировать старт до анимации
   requestAnimationFrame(() => {
-    el.style.transition = `transform ${dur}s ${REEL_EASE}`;
+    el.style.transition = `transform ${brakeDur}s ${REEL_BRAKE_EASE}`;
     el.style.transform = "translateY(0)";                  // плавно съезжает к результату (сверху)
   });
-  setTimeout(() => el.classList.remove("blur"), Math.max(0, dur * 1000 - 280));  // резкость к остановке
+  setTimeout(() => el.classList.remove("blur"), Math.max(0, brakeDur * 1000 - 280));  // резкость к остановке
 }
 // Пейтабл показывает реальный выигрыш в монетах для ТЕКУЩЕЙ ставки.
 function slotPayHtml() {
@@ -324,11 +323,11 @@ async function spinSlot() {
   // торможение на всю паузу (2.5+ с), финал ощущается вязким — барабан почти
   // не движется последнюю секунду. Короткий резкий стоп в конце ощущается
   // энергичнее, а само вращение до этого продолжается на постоянной скорости.
-  const BRAKE = 0.8, BRAKE_K = 10;
+  const BRAKE = 0.8;
   [0, 1, 2].forEach(c => {
     const s = $("strip" + c); if (!s) return;
     const wait = Math.max(0, (durs[c] - BRAKE) * 1000);
-    setTimeout(() => { s.classList.remove("spinning"); runReel(s, cols[c], BRAKE_K, BRAKE); }, wait);
+    setTimeout(() => { s.classList.remove("spinning"); runReel(s, cols[c], BRAKE); }, wait);
   });
   // 2) Трещотка на всё время самого длинного барабана (замедляется к концу).
   scheduleRatchet(Math.round(durs[2] * 16), durs[2]);
