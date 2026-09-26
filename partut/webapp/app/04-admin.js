@@ -650,6 +650,7 @@ function renderSpecList() {
   // вариантам: у устройства без вариантов подписывать нечего.
   $("specVarWrap").style.display = c.has_flavors ? "" : "none";
   $("specVarLabel").value = c.variant_label || "Вкус";
+  $("specVarLabel2").value = c.variant_label2 || "";
   const list = c.specs || [];
   $("specList").innerHTML = list.length
     ? list.map(s => `<div class="admrow">
@@ -670,6 +671,13 @@ $("specVarLabel").onchange = async () => {
   const слово = $("specVarLabel").value.trim();
   if (!слово) { $("specVarLabel").value = "Вкус"; }
   const d = await catApi("/api/admin/category/update", { code: specsCat, variant_label: $("specVarLabel").value.trim() || "Вкус" });
+  await afterCatsChanged();
+  renderSpecList();
+  if (!d.ok) { alertMsg("Не удалось сохранить."); return; }
+  toast("Сохранено ✓");
+};
+$("specVarLabel2").onchange = async () => {
+  const d = await catApi("/api/admin/category/update", { code: specsCat, variant_label2: $("specVarLabel2").value.trim() });
   await afterCatsChanged();
   renderSpecList();
   if (!d.ok) { alertMsg("Не удалось сохранить."); return; }

@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 import telebot
 
 from partut import errors
-from partut.config import BOT_TOKEN
+from partut.config import BOT_TOKEN, SUBSCRIBE_CHANNEL
 
 # Отдельный экземпляр бота — ТОЛЬКО чтобы отправлять сообщения и картинки.
 # Опрос обновлений ведёт partut/bot/handlers.py, здесь его нет и быть не должно.
@@ -112,6 +112,27 @@ def notify_client(user_id, text):
         tg.send_message(int(user_id), text)
     except Exception as e:
         print(f"Не смог уведомить клиента {user_id}: {e}")
+
+
+_ПОДПИСАН = {"member", "administrator", "creator"}
+
+
+def is_subscribed(user_id):
+    """Подписан ли человек на обязательный канал. SUBSCRIBE_CHANNEL пуст —
+    проверка выключена, все считаются подписанными.
+
+    Сбой самого запроса (канал без бота-админа, сеть, опечатка в имени) не
+    должен запереть весь магазин молча: возвращаем «подписан», но пишем в
+    консоль — это ошибка настройки, а не покупателя, и владелец её увидит
+    по логам, а не по толпе людей, которых не пускает в приложение."""
+    if not SUBSCRIBE_CHANNEL:
+        return True
+    try:
+        member = tg.get_chat_member(f"@{SUBSCRIBE_CHANNEL}", int(user_id))
+        return member.status in _ПОДПИСАН
+    except Exception as e:
+        print(f"Не удалось проверить подписку {user_id} на @{SUBSCRIBE_CHANNEL}: {e}")
+        return True
 
 
 def notify_new_admin(uid, city):

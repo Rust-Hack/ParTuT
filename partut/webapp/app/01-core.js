@@ -128,6 +128,14 @@ const catVariantMany = (code) => {
   const с = catVariant(code);
   return с === "Вкус" ? "Вкусы" : с;      // «Сопротивление» и «Цвет» во множественном не нужны
 };
+// Второе измерение варианта (например у снюса — крепость). Пусто — измерение
+// одно, как у всех категорий по умолчанию. Само значение варианта в базе
+// остаётся ОДНОЙ строкой вида "20mg · Мята": склеено этим разделителем, чтобы
+// корзина, заказ, склад и выгрузка — всё, что уже умеет работать со «вкусом»
+// как с текстом, — продолжали работать без единой правки.
+const catVariant2 = (code) => ((categories.find(c => c.code === code) || {}).variant_label2 || "");
+const catTwoAxis = (code) => !!catVariant2(code);
+const AXIS_SEP = " · ";
 async function fetchCategories() {
   try {
     const list = await bootFetch("categories", "/api/categories");
@@ -410,14 +418,70 @@ async function start() {
         } catch (e) { /* перенесём при следующем заходе */ }
       }
     }
+    // Сохранённый город подставляем ДО recomputeCities(): иначе она увидит
+    // пустой city и молча возьмёт первую точку по сортировке, как раньше.
+    city = me.city || city;
     renderNav();
     // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
     // Заставку убираем сразу, как только есть что показать: каталог загружен,
-    // либо (если 18+ ещё не подтверждён) сам гейт уже готов встретить человека.
-    if (me.age_ok) loadCatalog().then(hideSplash).then(prefetchBonuses).then(openDeepLink);
-    else { $("ageView").classList.add("show"); hideSplash(); }
+    // либо (если какой-то из гейтов ещё не пройден) сам гейт уже готов
+    // встретить человека.
+    await enterGates();
   } catch (e) { hideSplash(); alertMsg(текстСбоя(e)); }
 }
+
+// Три ворот перед магазином, по порядку: 18+ → город (спрашиваем один раз,
+// дальше он же приходит в /api/me) → подписка на канал (спрашиваем КАЖДЫЙ
+// раз — отписаться можно в любой момент, и старое «да» тут не в счёт).
+// Одна функция, а не три отдельные проверки по разным местам кода: пропуск
+// через гейт всегда приводит сюда же, и порядок нельзя случайно нарушить.
+async function enterGates() {
+  if (!me.age_ok) { $("ageView").classList.add("show"); hideSplash(); return; }
+  if (!me.city) {
+    if (!locations.length) await fetchLocations();
+    showCityGate();
+    hideSplash();
+    return;
+  }
+  if (me.subscribe_channel && !me.subscribed) {
+    $("subscribeView").classList.add("show"); hideSplash(); return;
+  }
+  loadCatalog().then(hideSplash).then(prefetchBonuses).then(openDeepLink);
+}
+
+function showCityGate() {
+  const список = locations.map(l => l.name);
+  $("cityViewList").innerHTML = список.map(c =>
+    `<button class="opt" data-city="${esc(c)}">${esc(c)}</button>`).join("");
+  $("cityViewList").querySelectorAll("[data-city]").forEach(b => b.onclick = () => pickCity(b.dataset.city));
+  $("cityView").classList.add("show");
+}
+
+async function pickCity(next) {
+  if (!await админПост("/api/set-city", { city: next }, "выбрать город")) return;
+  city = next; me.city = next;
+  $("pointName").textContent = city;
+  $("cityView").classList.remove("show");
+  enterGates();
+}
+
+$("subscribeOpenBtn").onclick = () => {
+  const url = me && me.subscribe_channel;
+  if (!url) return;
+  if (tg && tg.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank");
+};
+$("subscribeCheckBtn").onclick = async () => {
+  let d;
+  try {
+    d = await fetch("/api/me", { method: "POST", headers: { "Content-Type": "application/json" },
+                                 body: JSON.stringify({ initData }) }).then(r => r.json());
+  } catch (e) { alertMsg(текстСбоя(e)); return; }
+  if (!d.ok) { alertMsg("Откройте магазин из бота."); return; }
+  me.subscribed = d.subscribed;
+  if (!me.subscribed) { toast("Подписка пока не видна — попробуйте через пару секунд."); return; }
+  $("subscribeView").classList.remove("show");
+  enterGates();
+};
 
 // Продавец приходит сюда из уведомления о заказе — кнопка в чате ведёт на
 // #orders, и приложение открывает нужный экран само, без похода по меню.
@@ -477,7 +541,9 @@ $("ageYes").onclick = async () => {
   // Не записалось — не закрываем окно: иначе человек ходит по магазину, а на
   // «Оформить» получает отказ по возрасту и не понимает, при чём тут это.
   if (!await админПост("/api/age", {}, "подтвердить возраст")) return;
-  $("ageView").classList.remove("show"); loadCatalog().then(prefetchBonuses);
+  me.age_ok = true;
+  $("ageView").classList.remove("show");
+  enterGates();     // дальше — город и подписка, если ещё не пройдены
 };
 $("ageNo").onclick = () => { if (tg) tg.close(); };
 
@@ -879,11 +945,19 @@ $("searchInput").oninput = (e) => {
 // после — что доделать на экране, с которого позвали.
 function switchCity(next, после) {
   const перейти = () => {
-    if (next !== city) { for (const k in cart) delete cart[k]; }
+    const changed = next !== city;
+    if (changed) { for (const k in cart) delete cart[k]; }
     city = next; $("pointName").textContent = city;
     brandFilters = [];   // другая точка — другой набор брендов
     prefetchDelivery();  // заранее подтянем способы получения новой точки
     updateFilterBtn(); renderGrid(); renderNav();
+    // Сохраняем и здесь, не только при первом выборе на входе: иначе
+    // «запомненный город» переставал быть правдой при первой же смене точки.
+    if (changed && me) {
+      me.city = next;
+      fetch("/api/set-city", { method: "POST", headers: { "Content-Type": "application/json" },
+                               body: JSON.stringify({ initData, city: next }) }).catch(() => {});
+    }
     if (после) после();
   };
   // Спрашиваем только когда есть что терять: корзина собирается по одной точке.

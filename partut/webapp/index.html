@@ -205,6 +205,23 @@
     <button class="closebtn" id="ageNo">Нет</button>
   </div>
 
+  <div class="view" id="cityView">
+    <div class="spacer"></div><div class="icon">📍</div>
+    <h2>Выберите город</h2><p>От точки зависят ассортимент, цены и доставка.</p>
+    <div id="cityViewList"></div>
+    <div class="spacer"></div>
+  </div>
+
+  <div class="view" id="subscribeView">
+    <div class="spacer"></div><div class="icon">📢</div>
+    <h2>Подпишитесь на канал</h2>
+    <p>Вход в магазин открыт только подписчикам нашего Telegram-канала —
+      там объявления о поступлениях и акциях.</p>
+    <div class="spacer"></div>
+    <button class="bigbtn" id="subscribeOpenBtn">Открыть канал</button>
+    <button class="bigbtn" id="subscribeCheckBtn">Я подписался — проверить</button>
+  </div>
+
   <div class="view" id="payView">
     <div class="icon">💳</div><h2 id="payTitle">Оплата заказа</h2>
     <p>Переведите сумму по реквизитам, затем загрузите фото чека.</p>
@@ -718,6 +735,10 @@
         <label style="margin-top:12px">Как называется вариант</label>
         <input id="specVarLabel" placeholder="Вкус" maxlength="20">
         <div class="dnote" style="margin:6px 0 0">Одним словом, в единственном числе: «Вкус», «Сопротивление», «Цвет», «Объём». Так это и будет подписано у вас при завозе и у покупателя в карточке.</div>
+
+        <label style="margin-top:12px">Второе измерение (необязательно)</label>
+        <input id="specVarLabel2" placeholder="например «Крепость» — у снюса" maxlength="20">
+        <div class="dnote" style="margin:6px 0 0">Заполните, если у товара выбираются ДВЕ вещи сразу — например крепость и вкус у снюса. Покупатель сначала выберет это, потом «вкус» выше. Пусто — как обычно, измерение одно.</div>
       </div>
 
       <div id="specList" style="margin-top:12px"></div>

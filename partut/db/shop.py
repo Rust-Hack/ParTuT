@@ -298,7 +298,8 @@ def add_category(name, emoji="", sort=0, variant_label="Вкус"):
     return code
 
 
-def update_category(code, name=None, emoji=None, sort=None, has_flavors=None, variant_label=None):
+def update_category(code, name=None, emoji=None, sort=None, has_flavors=None, variant_label=None,
+                    variant_label2=None):
     """Переименовать категорию, сменить значок или слово для варианта.
     Код не меняется — за ним товары. Возвращает False (ничего не применив),
     если новое имя пустое или совпадает с именем другой категории — прямой
@@ -320,6 +321,11 @@ def update_category(code, name=None, emoji=None, sort=None, has_flavors=None, va
     if variant_label is not None:
         слово = (variant_label or "").strip()[:20] or "Вкус"
         cur.execute(db._q("UPDATE categories SET variant_label = %s WHERE code = %s"), (слово, code))
+    if variant_label2 is not None:
+        # Пустая строка — осознанный способ вернуться к одному измерению,
+        # а не мусор: значит покупатель больше не должен видеть вторую группу.
+        слово2 = (variant_label2 or "").strip()[:20]
+        cur.execute(db._q("UPDATE categories SET variant_label2 = %s WHERE code = %s"), (слово2 or None, code))
     if has_flavors is not None:
         cur.execute(db._q("UPDATE categories SET has_flavors = %s WHERE code = %s"),
                     (1 if has_flavors else 0, code))

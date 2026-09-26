@@ -40,7 +40,8 @@ from partut import limits
 from partut.integrations import tgsend
 from partut import errors
 from partut import notifications
-from partut.config import (BOT_TOKEN, SUPPORT_IDS, is_admin, is_super_admin, admin_city, admin_role, all_admin_ids)
+from partut.config import (BOT_TOKEN, SUPPORT_IDS, is_admin, is_super_admin, admin_city, admin_role, all_admin_ids,
+                           SUBSCRIBE_CHANNEL, SUBSCRIBE_CHANNEL_LINK)
 
 db.init_db()      # схема, разовые переносы и права из окружения — внутри
 
@@ -603,6 +604,11 @@ def api_me():
         except (TypeError, ValueError):
             print(f"[ref/miniapp] uid={uid} плохой start_param={start_param}")
 
+    # Подписка проверяется КАЖДЫЙ раз, а не один при регистрации: отписаться
+    # можно в любой момент, и приложение не должно продолжать работать по
+    # памяти о том, что подписка когда-то была.
+    subscribed = tgsend.is_subscribed(uid) if SUBSCRIBE_CHANNEL else True
+
     return jsonify({"ok": True, "age_ok": me["age_ok"], "is_admin": is_admin(uid),
                     "is_super": is_super_admin(uid), "alerts": me["alerts"],
                     "favorites": me["favorites"],
@@ -623,7 +629,9 @@ def api_me():
                     # Флаг привязан к готовности, а не к переключателю: забыть
                     # включить показ после вставки текста нельзя, он появится сам.
                     "docs_ready": shopinfo.документы_готовы(),
-                    "my_point": me["my_point"]})
+                    "my_point": me["my_point"], "city": me["city"],
+                    "subscribed": subscribed,
+                    "subscribe_channel": SUBSCRIBE_CHANNEL_LINK})
 
 
 @app.route("/api/age", methods=["POST"])
@@ -633,6 +641,21 @@ def api_age():
     if not user or not user.get("id"):
         return jsonify({"ok": False, "error": "auth"}), 401
     db.set_age_ok(int(user["id"]))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/set-city", methods=["POST"])
+def api_set_city():
+    """Запомнить выбранный город витрины — один раз при входе, дальше он же
+    подставляется при каждом открытии приложения."""
+    data = request.get_json(force=True, silent=True) or {}
+    user = auth.get_user(data.get("initData", ""))
+    if not user or not user.get("id"):
+        return jsonify({"ok": False, "error": "auth"}), 401
+    city = inputs._text(data.get("city"), 80)
+    if not city or city not in db.location_names():
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+    db.set_user_city(int(user["id"]), city)
     return jsonify({"ok": True})
 
 
@@ -936,6 +959,9 @@ def api_categories():
                                             # Как называется вариант: у одноразок «Вкус»,
                                             # у испарителей «Сопротивление», у подов «Цвет».
                                             "variant_label": (c.get("variant_label") or "Вкус"),
+                                            # Второе измерение (например у снюса —
+                                            # крепость): пусто значит измерение одно.
+                                            "variant_label2": (c.get("variant_label2") or ""),
                                             "specs": by_cat.get(c["code"], [])}
                                            for c in db.list_categories()], 300)
     return cache.json_etag(cached)

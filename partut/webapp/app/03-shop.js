@@ -446,8 +446,9 @@ $("doneBtn").onclick = () => { showTab("catalog"); $("doneView").classList.remov
 // ---------- Карточка товара ----------
 let currentProductId = null;
 let selectedFlavor = null;
+let selAxis1 = null;   // выбранное первое измерение (например крепость снюса) на карточке
 function openProduct(id, focusFlavors = false) {
-  currentProductId = id; selectedFlavor = null; renderProduct();
+  currentProductId = id; selectedFlavor = null; selAxis1 = null; renderProduct();
   $("productView").classList.add("show");
   $("prodBody").scrollTop = 0;   // новая карточка — с начала
   if (focusFlavors) {
@@ -488,19 +489,34 @@ function renderProduct() {
 
   let flavorHtml = "";
   if (hasVariants(p)) {
+    const twoAxis = catTwoAxis(p.category);
+    let список = p.variants;
+    let axisHtml = "";
+    if (twoAxis) {
+      // Первое измерение — отдельная строка кнопок НАД списком: выбрал
+      // крепость — ниже остались только её вкусы, а не все сразу одним полотном.
+      const axes1 = [...new Set(p.variants.map(v => String(v.flavor || "").split(AXIS_SEP)[0]))];
+      if (!axes1.includes(selAxis1)) selAxis1 = axes1[0] || null;
+      axisHtml = `<div style="font-weight:700;margin:16px 0 8px">${esc(catVariant2(p.category))}:</div>
+        <div class="fltchips">${axes1.map(a =>
+          `<button class="chip ${a === selAxis1 ? 'active' : ''}" data-axis1="${esc(a)}">${esc(a)}</button>`).join("")}</div>`;
+      список = p.variants.filter(v => String(v.flavor || "").split(AXIS_SEP)[0] === selAxis1);
+    }
     // Вкусы — строками на всю ширину, чтобы список не «прыгал» при добавлении.
-    flavorHtml = `<div style="font-weight:700;margin:16px 0 8px">${esc(catVariantMany(p.category))}:</div><div class="fsel-list">` +
-      p.variants.map(v => {
+    flavorHtml = `${axisHtml}<div style="font-weight:700;margin:16px 0 8px">${esc(catVariantMany(p.category))}:</div><div class="fsel-list">` +
+      список.map(v => {
         const out = v.stock <= 0;
         const qty = cart[cartKey(p.id, v.flavor)] ? cart[cartKey(p.id, v.flavor)].qty : 0;
         const f = esc(v.flavor);
+        // Второе измерение показываем без первого — оно уже выбрано кнопкой выше.
+        const label = esc(twoAxis ? String(v.flavor || "").split(AXIS_SEP).slice(1).join(AXIS_SEP) : v.flavor);
         const right = out ? ""
           : (qty > 0
               ? `<div class="fstep"><button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div>`
               : `<button class="addbtn" data-fladd="${f}">+</button>`);
         const left = out ? `нет в наличии` : `${v.stock} шт`;
         return `<div class="frow ${qty>0?'on':''} ${out?'out':''}">
-            <div class="fname">${f}</div>
+            <div class="fname">${label}</div>
             <div class="fbottom"><span class="fbn">${left}</span>${right}</div></div>`;
       }).join("") + `</div>`;
   }
@@ -530,6 +546,7 @@ function renderProduct() {
       [...dots].forEach((d, n) => d.classList.toggle("on", n === i));
     };
   }
+  $("prodBody").querySelectorAll("[data-axis1]").forEach(b => b.onclick = () => { selAxis1 = b.dataset.axis1; renderProduct(); });
   $("prodBody").querySelectorAll("[data-fladd]").forEach(b => b.onclick = () => flavorQty(b.dataset.fladd, +1));
   $("prodBody").querySelectorAll("[data-flinc]").forEach(b => b.onclick = () => flavorQty(b.dataset.flinc, +1));
   $("prodBody").querySelectorAll("[data-fldec]").forEach(b => b.onclick = () => flavorQty(b.dataset.fldec, -1));

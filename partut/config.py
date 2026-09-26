@@ -26,6 +26,13 @@ if not BOT_TOKEN:
 # Пока пусто — кнопка Mini App просто не показывается.
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "").strip()
 
+# Канал, подписка на который обязательна для входа в магазин. Задаётся именем
+# без @ (например partut_channel) — оно же идёт и в ссылку t.me, и в запрос
+# к Telegram о членстве. Пусто — проверка подписки выключена целиком: без
+# этой переменной требовать подписку не на что.
+SUBSCRIBE_CHANNEL = os.environ.get("SUBSCRIBE_CHANNEL", "").strip().lstrip("@")
+SUBSCRIBE_CHANNEL_LINK = f"https://t.me/{SUBSCRIBE_CHANNEL}" if SUBSCRIBE_CHANNEL else ""
+
 
 # --- Справочники: код <-> красивое название ---
 # Категории переехали в базу (таблица categories, стартовый набор — db.CATEGORY_SEED):

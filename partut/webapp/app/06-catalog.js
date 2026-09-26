@@ -741,11 +741,7 @@ function renderEdit(p) {
           <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
         </div>
         ${isVar ? `<label>${esc(catVariantMany(p.category))} и остаток</label><div id="edVarList"></div>
-          <div style="display:flex;gap:8px;margin-top:10px">
-            <input id="edNewFlavor" placeholder="Добавить: ${esc(catVariant(p.category).toLowerCase())}" style="flex:1" list="edFlavorOpts">
-            <datalist id="edFlavorOpts">${(md ? md.flavors : []).map(f => `<option value="${esc(f)}">`).join("")}</datalist>
-            <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
-          </div>`
+          ${variantAddRowHtml(p.category, md ? md.flavors : [])}`
           : `<label>Остаток (шт.)</label>${qtyHtml(p.stock, 'id="edStock"')}`}
         ${editHitBlock(p)}
         <label style="margin-top:18px">Точки продаж</label>
@@ -754,13 +750,8 @@ function renderEdit(p) {
         <button class="closebtn" id="edToModel" style="margin-top:6px">📚 Открыть модель</button>
         <button class="bigbtn" id="edSave" style="margin-top:10px">Сохранить</button>
       </div>`;
-    if (isVar) renderEditVariants();
+    if (isVar) { renderEditVariants(); bindVariantAdd(p.category); }
     renderEditPoints(p, md);
-    if ($("edAddFlavor")) $("edAddFlavor").onclick = () => {
-      const v = $("edNewFlavor").value.trim(); if (!v) return;
-      if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
-      $("edNewFlavor").value = ""; renderEditVariants();
-    };
     $("edToModel").onclick = () => {
       $("editView").classList.remove("show");
       openModels().then(() => editModel(p.model_id));
@@ -818,28 +809,20 @@ function renderEdit(p) {
       ${specs}
       <label>${esc(catVariantMany(p.category))} и остаток</label>
       <div id="edVarList"></div>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <input id="edNewFlavor" placeholder="Добавить: ${esc(catVariant(p.category).toLowerCase())}" style="flex:1" list="edFlavorOpts">
-        <datalist id="edFlavorOpts">${avail.map(f => `<option value="${esc(f)}">`).join("")}</datalist>
-        <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
-      </div>
+      ${variantAddRowHtml(p.category, avail)}
       ${editHitBlock(p)}
       ${editPhotoBlock(p)}
       ${toModelBlock()}
       <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
     </div>`;
   renderEditVariants();
+  bindVariantAdd(p.category);
   bindEditPhoto(); renderEditGallery();
   // Кнопки –/+ оживляем после отрисовки: разметку собрал qtyHtml,
   // обработчики вешаются здесь. Вкусы биндятся отдельно — они перерисовываются.
   bindQty($("editView"));
   // Товар без модели: кнопка «Сделать моделью» — единственный путь к точкам.
   if ($("edToModelNew")) $("edToModelNew").onclick = () => сделатьМоделью(p);
-  $("edAddFlavor").onclick = () => {
-    const v = $("edNewFlavor").value.trim(); if (!v) return;
-    if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
-    $("edNewFlavor").value = ""; renderEditVariants();
-  };
   $("edSave").onclick = () => saveEdit(p);
 }
 
@@ -1003,6 +986,46 @@ function собратьТочки() {
     .map(б => ({ city: б.dataset.city, id: +б.dataset.have }));
 
   return { завести, убрать };
+}
+
+// Строка добавления нового значения варианта. У категории с двумя измерениями
+// (например у снюса — крепость и вкус) это два поля, которые здесь же
+// склеиваются в одну строку через AXIS_SEP — дальше по всему приложению
+// (корзина, заказ, склад, выгрузка) она живёт как обычный «вкус», без единой
+// правки в этих местах.
+function variantAddRowHtml(category, flavorOptions) {
+  if (!catTwoAxis(category)) {
+    return `<div style="display:flex;gap:8px;margin-top:10px">
+      <input id="edNewFlavor" placeholder="Добавить: ${esc(catVariant(category).toLowerCase())}" style="flex:1" list="edFlavorOpts">
+      <datalist id="edFlavorOpts">${flavorOptions.map(f => `<option value="${esc(f)}">`).join("")}</datalist>
+      <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
+    </div>`;
+  }
+  // Подсказка для первого измерения — то, что уже вводили для этого же товара:
+  // одну и ту же крепость иначе пришлось бы перепечатывать на каждой строке.
+  const axis1Opts = [...new Set(editVariants.map(v => String(v.flavor || "").split(AXIS_SEP)[0]).filter(Boolean))];
+  return `<div style="display:flex;gap:8px;margin-top:10px">
+    <input id="edNewAxis1" placeholder="${esc(catVariant2(category))}" style="flex:1" list="edAxis1Opts">
+    <datalist id="edAxis1Opts">${axis1Opts.map(a => `<option value="${esc(a)}">`).join("")}</datalist>
+    <input id="edNewAxis2" placeholder="${esc(catVariant(category))}" style="flex:1" list="edFlavorOpts">
+    <datalist id="edFlavorOpts">${flavorOptions.map(f => `<option value="${esc(f)}">`).join("")}</datalist>
+    <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
+  </div>`;
+}
+function bindVariantAdd(category) {
+  $("edAddFlavor").onclick = () => {
+    let v;
+    if (catTwoAxis(category)) {
+      const a1 = $("edNewAxis1").value.trim(), a2 = $("edNewAxis2").value.trim();
+      if (!a1 || !a2) { alertMsg(`Заполните и «${catVariant2(category)}», и «${catVariant(category)}».`); return; }
+      v = a1 + AXIS_SEP + a2;
+    } else {
+      v = $("edNewFlavor").value.trim();
+      if (!v) return;
+    }
+    if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
+    renderEditVariants();
+  };
 }
 
 function renderEditVariants() {

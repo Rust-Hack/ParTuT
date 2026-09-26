@@ -835,6 +835,11 @@ def _ensure_category_columns():
         cur.execute("ALTER TABLE categories ADD COLUMN variant_label TEXT")
         for код, слово in ВАРИАНТЫ_ПО_УМОЛЧАНИЮ.items():
             cur.execute(_q("UPDATE categories SET variant_label = %s WHERE code = %s"), (слово, код))
+    # Второе измерение варианта — например у снюса это крепость, а «Вкус»
+    # (variant_label) остаётся первым. Пусто — измерение одно, как у всех
+    # категорий сегодня; ничего в их поведении не меняется.
+    if "variant_label2" not in cols:
+        cur.execute("ALTER TABLE categories ADD COLUMN variant_label2 TEXT")
     conn.commit()
     conn.close()
 
@@ -876,6 +881,11 @@ def _ensure_user_columns():
         # Своя точка самовывоза «по умолчанию»: покупатель выбирает её один раз
         # в профиле, а в заказе может поменять.
         cur.execute("ALTER TABLE users ADD COLUMN pickup_point_id INTEGER")
+    if "city" not in cols:
+        # Выбранный город витрины. Раньше нигде не сохранялся — при каждом
+        # открытии заново подставлялась первая точка по сортировке, и человек,
+        # выбравший вчера «Минск», сегодня снова видел то, что попало первым.
+        cur.execute("ALTER TABLE users ADD COLUMN city TEXT")
     # Тем, кто уже покупал, имя достаём из их заказов: оно там лежало всё это
     # время, просто в списке пользователей его никто не показывал.
     cur.execute("""UPDATE users SET username =
@@ -1345,7 +1355,7 @@ def get_me_bundle(user_id, limit=20):
                     (user_id, now))
 
     # Одна строка покупателя — одним чтением, а не четырьмя.
-    cur.execute(_q("SELECT age_ok, no_reminders, phone, pickup_point_id "
+    cur.execute(_q("SELECT age_ok, no_reminders, phone, pickup_point_id, city "
                    "FROM users WHERE user_id = %s"), (user_id,))
     u = cur.fetchone() or {}
 
@@ -1382,6 +1392,7 @@ def get_me_bundle(user_id, limit=20):
         "age_ok": bool(u and u["age_ok"] == 1),
         "reminders_on": not bool(u and u["no_reminders"]),
         "my_point": (int(u["pickup_point_id"]) if u and u["pickup_point_id"] else None),
+        "city": (u["city"] or "") if u else "",
         "alerts": alerts,
         "favorites": favorites,
         "prefill": {"phone": phone, "addresses": addresses},
@@ -1739,6 +1750,18 @@ def set_user_point(user_id, point_id):
     cur = conn.cursor()
     cur.execute(_q("UPDATE users SET pickup_point_id = %s WHERE user_id = %s"),
                 (int(point_id) if point_id else None, user_id))
+    conn.commit()
+    conn.close()
+
+
+def set_user_city(user_id, city):
+    """Запоминает выбранный город витрины — чтобы при следующем открытии
+    приложения не подставлялась заново первая точка по сортировке."""
+    ensure_user(user_id)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(_q("UPDATE users SET city = %s WHERE user_id = %s"),
+                ((city or "").strip()[:80] or None, user_id))
     conn.commit()
     conn.close()
 
