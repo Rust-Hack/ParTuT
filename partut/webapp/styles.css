@@ -211,6 +211,9 @@ html[data-theme="dark"] .ucard { border: 1px solid rgba(95,242,242,.20); box-sha
 .bigbtn { width: 100%; border: none; background: var(--accent); color: var(--on-accent); padding: 16px; border-radius: 16px;
   font-size: 16px; font-weight: 800; display: flex; justify-content: center; gap: 10px; align-items: center; }
 .bigbtn:disabled { opacity: .6; }
+/* Второе действие на одном экране (например «проверить» после «открыть») не
+   должно спорить весом с первым — заливка остаётся только у одной кнопки. */
+.bigbtn.outline { background: transparent; color: var(--accent); border: 2px solid var(--accent); }
 
 .prof { padding: 16px; }
 .profcard { background: var(--surface); border-radius: 18px; box-shadow: var(--shadow); padding: 16px; display: flex; align-items: center; gap: 14px; }
