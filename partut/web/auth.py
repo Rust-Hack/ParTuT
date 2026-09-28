@@ -117,7 +117,7 @@ _OWNER_ONLY = (
     "/api/admin/requests", "/api/admin/request/",
     # устройство магазина
     "/api/admin/location", "/api/admin/delivery", "/api/admin/point",
-    "/api/admin/settings/update", "/api/admin/stats",
+    "/api/admin/settings/update", "/api/admin/stats", "/api/admin/payroll",
     # Отзыв виден на всех точках, поэтому публиковать и удалять — владельцу.
     # Ответить продавец может: это его разговор с покупателем.
     "/api/admin/review/decide", "/api/admin/review/delete",

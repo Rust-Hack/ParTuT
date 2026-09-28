@@ -200,13 +200,13 @@ def api_admin_settings():
     opts = db.get_settings(
         ["payment_info", "confirm_minutes", "free_delivery_from", "remind_after_days",
          "remind_daily_cap", "coins_per_byn", "wheel_step", "referral_bonus",
-         "compensation_max", "pay_cash", "pay_card"],
+         "compensation_max", "pay_cash", "pay_card", "seller_commission_percent"],
         {"payment_info": PAYMENT_INFO, "confirm_minutes": CONFIRM_MINUTES,
          "free_delivery_from": 0, "remind_after_days": 21, "remind_daily_cap": 20,
          "coins_per_byn": 1, "wheel_step": db.WHEEL_STEP_DEFAULT,
          "referral_bonus": db.REFERRAL_BONUS,
          "compensation_max": db.COMPENSATION_MAX_DEFAULT,
-         "pay_cash": "1", "pay_card": "1"})
+         "pay_cash": "1", "pay_card": "1", "seller_commission_percent": 10})
     return jsonify({"ok": True, "settings": {
         "payment_info": opts["payment_info"] or "",
         "pay_cash": str(opts["pay_cash"]) != "0",
@@ -225,6 +225,8 @@ def api_admin_settings():
         # а здесь её не было вовсе — поле в настройках всегда пустовало.
         "compensation_max": inputs._num(opts["compensation_max"], db.COMPENSATION_MAX_DEFAULT, as_int=True),
         "coin_value": shopinfo.COIN_VALUE,          # только для показа: менять нельзя, см. ниже
+        # Процент, который продавец получает от выручки своей точки за месяц.
+        "seller_commission_percent": inputs._num(opts["seller_commission_percent"], 10.0),
     }})
 
 
@@ -331,6 +333,7 @@ def api_admin_settings_update():
         ("wheel_step",          inputs.дробное,   1.0,     100000.0),
         ("referral_bonus",      inputs.целое,     0,       100000),
         ("compensation_max",    inputs.целое,     0,       100000),
+        ("seller_commission_percent", inputs.дробное, 0.0, 100.0),
     ]
     for ключ, разбор, нижняя, верхняя in ЧИСЛА:
         if ключ not in data:
@@ -353,3 +356,64 @@ def api_admin_settings_update():
     if отказы:
         ответ["failed"] = отказы
     return jsonify(ответ)
+
+
+def _валидный_период(period):
+    """"ГГГГ-ММ" и ничего больше — иначе payroll_for_period получит мусор
+    и попытается разобрать его как дату."""
+    part = period.split("-")
+    if len(part) != 2 or len(part[0]) != 4 or not part[0].isdigit() or not part[1].isdigit():
+        return False
+    return 1 <= int(part[1]) <= 12
+
+
+@bp.route("/api/admin/payroll", methods=["POST"])
+def api_admin_payroll():
+    """Зарплата продавцов за календарный месяц: выручка точки, процент, сумма."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not auth.get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    period = inputs._text(data.get("period")) or db.shop_now().strftime("%Y-%m")
+    if not _валидный_период(period):
+        return jsonify({"ok": False, "error": "bad_period"}), 400
+    return jsonify({"ok": True, "period": period, "rows": db.payroll_for_period(period)})
+
+
+@bp.route("/api/admin/payroll/pay", methods=["POST"])
+def api_admin_payroll_pay():
+    """Отметить зарплату продавца за месяц выплаченной.
+
+    Сумму не принимаем от клиента — пересчитываем на сервере той же функцией,
+    что и сам экран: так владелец не может случайно (или намеренно, чужим
+    запросом в обход приложения) записать в журнал любое число."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    period = inputs._text(data.get("period"))
+    city = inputs._text(data.get("city"))
+    user_id = inputs.целое(data.get("user_id"))
+    if not period or not city or user_id is None or not _валидный_период(period):
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+
+    строка = next((r for r in db.payroll_for_period(period) if r["city"] == city), None)
+    if not строка:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    продавец = next((s for s in строка["sellers"] if s["user_id"] == user_id), None)
+    if not продавец:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    if продавец["paid"]:
+        return jsonify({"ok": False, "error": "already_paid"}), 400
+    # Сумма на точку с несколькими продавцами не разделена — платить с этого
+    # экрана нечем, пока их не разведут вручную (см. payroll_for_period).
+    if строка["amount"] is None:
+        return jsonify({"ok": False, "error": "not_split",
+                        "message": "На этой точке несколько продавцов — разделите сумму сами, отметить отсюда нельзя."}), 400
+
+    ok = db.record_seller_payout(user_id, city, period, строка["revenue"], строка["percent"],
+                                 строка["amount"], int(admin["id"]))
+    if not ok:
+        return jsonify({"ok": False, "error": "already_paid"}), 400
+    db.log_admin_action(int(admin["id"]), admin.get("name", ""), "payroll/pay",
+                        f"{city} {period}: {строка['amount']} Br продавцу {user_id}")
+    return jsonify({"ok": True, "amount": строка["amount"]})

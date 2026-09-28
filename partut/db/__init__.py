@@ -588,6 +588,27 @@ def init_db():
         )
     """)
 
+    # Зарплата продавца — процент от выручки его точки за календарный месяц.
+    # Запись появляется в момент «Отметить выплаченным», не раньше: сумма до
+    # этого — просто предпросмотр (пересчитывается каждый раз заново), а не
+    # то, что уже случилось. revenue и percent сохраняем вместе с amount —
+    # если владелец потом поменяет процент в настройках, старые выплаты не
+    # переедут задним числом на новую цифру.
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS seller_payouts (
+            id         {ID_COL},
+            user_id    BIGINT  NOT NULL,
+            city       TEXT    NOT NULL,
+            period     TEXT    NOT NULL,
+            revenue    {MONEY}    NOT NULL,
+            percent    {MONEY}    NOT NULL,
+            amount     {MONEY}    NOT NULL,
+            paid_by    BIGINT,
+            created_at TEXT    NOT NULL,
+            UNIQUE(user_id, period)
+        )
+    """)
+
     # Сами картинки (товары, чеки). Telegram хранит их по file_id, но качать оттуда
     # долго — два запроса на каждое фото. Скачиваем ОДИН раз и держим тут, чтобы
     # перезапуск сервера не заставлял качать всё заново.
@@ -756,6 +777,7 @@ _ИНДЕКСЫ = (
     # выборочно — по человеку и по товару.
     ("ix_coin_log_user", "coin_log (user_id)"),
     ("ix_stock_moves_product", "stock_moves (product_id, id)"),
+    ("ix_seller_payouts_period", "seller_payouts (period)"),
 )
 
 
@@ -2571,6 +2593,7 @@ from partut.db.shop import (                                            # noqa: 
     delete_category_spec, list_categories, category_codes, add_category,    # noqa: F401
     update_category, count_products_in_category, delete_category,           # noqa: F401
     list_staff, add_staff, remove_staff, staff_ids_by_city,                 # noqa: F401
+    record_seller_payout, seller_payouts_for_period,                        # noqa: F401
     log_admin_action, list_admin_log,                                       # noqa: F401
     documents, documents_version, set_documents,                            # noqa: F401
 )
@@ -2580,7 +2603,7 @@ from partut.db.shop import (                                            # noqa: 
 # Выручка, прибыль, движение монет, «что берут вместе» — в partut/db/reports.py.
 from partut.db.reports import (                                         # noqa: E402
     inc_stat, reset_statistics, get_business_stats, coin_flow, also_bought,  # noqa: F401
-    orders_for_export,                                                   # noqa: F401
+    orders_for_export, payroll_for_period,                               # noqa: F401
 )
 
 

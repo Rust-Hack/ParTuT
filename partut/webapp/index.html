@@ -269,6 +269,7 @@
 
     <div class="mgroup" id="gShop">Магазин</div>
     <div class="prow" id="mStats"><span>📊 Статистика</span><span>›</span></div>
+    <div class="prow" id="mPayroll"><span>💰 Зарплата продавцов</span><span>›</span></div>
     <div class="prow" id="mReferrals"><span>👥 Пользователи и рефералы</span><span>›</span></div>
     <div class="prow" id="mPromos"><span>🎟 Промокоды</span><span>›</span></div>
     <div class="prow" id="mRaffle"><span>🏆 Розыгрыш</span><span>›</span></div>
@@ -562,6 +563,13 @@
     <div id="statsBody"></div>
   </div>
 
+  <!-- Зарплата продавцов: процент от выручки точки за календарный месяц -->
+  <div class="view" id="payrollView">
+    <div class="viewhead"><h2>💰 Зарплата продавцов</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="payrollClose">‹ Назад</button></div>
+    <div id="payrollBody"></div>
+  </div>
+
   <!-- Раздел: документы магазина (правит владелец).
        Тексты хранятся в базе, а не в коде: настоящие документы пишет юрист, и
        ждать выкатки ради запятой нельзя. -->
@@ -630,6 +638,10 @@
       <label style="margin-top:14px">Компенсация продавцом за раз, монет</label>
       <input id="setCompMax" inputmode="numeric" placeholder="1000">
       <div class="dnote" id="setCompNote" style="margin:6px 0 0"></div>
+
+      <label style="margin-top:14px">Зарплата продавца, % от выручки его точки за месяц</label>
+      <input id="setSellerPct" inputmode="decimal" placeholder="10">
+      <div class="dnote" style="margin:6px 0 0">Выручка — без доставки, только выданные заказы. Считается на экране «Зарплата продавцов» в хабе «Управление».</div>
 
       <button class="bigbtn" id="setSave" style="margin-top:16px">Сохранить</button>
     </div>

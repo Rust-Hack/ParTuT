@@ -55,7 +55,7 @@ function applyAdminScope() {
   const shopWide = isOwner();
   // Ассортимент продавцу нужен: оттуда он завозит модель на свою точку.
   // Заводить и править модели там он не сможет — это прячется внутри.
-  ["mBrands", "mCats", "gShop", "mStats", "mReferrals", "mPromos", "mRaffle",
+  ["mBrands", "mCats", "gShop", "mStats", "mPayroll", "mReferrals", "mPromos", "mRaffle",
    "gSetup", "mLocations", "mSettings", "gAccess"].forEach(id => {
     const el = $(id); if (el) el.style.display = shopWide ? "" : "none";
   });
@@ -910,6 +910,89 @@ function gamesRows(g) {
     <div class="statrow"><span>🎰 Слот — осталось у заведения</span><b style="color:${net >= 0 ? '#2e9e4f' : 'var(--danger)'}">${net} 🪙</b></div>`;
 }
 
+// ----- Зарплата продавцов: процент от выручки точки за календарный месяц -----
+$("mPayroll").onclick = openPayroll;
+$("payrollClose").onclick = () => $("payrollView").classList.remove("show");
+// "ГГГГ-ММ" текущего месяца — считаем от времени магазина, а не браузера
+// покупателя: иначе у продавца за полночь уже "новый месяц", а у владельца
+// в отчёте — ещё старый.
+function текущийПериод() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+let payrollPeriod = текущийПериод();
+const МЕСЯЦЫ = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль",
+                "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+function periodLabel(p) {
+  const [y, m] = p.split("-").map(Number);
+  return `${МЕСЯЦЫ[m - 1]} ${y}`;
+}
+function сдвинутьПериод(p, delta) {
+  let [y, m] = p.split("-").map(Number);
+  m += delta;
+  if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+async function openPayroll() {
+  $("payrollView").classList.add("show");
+  payrollPeriod = текущийПериод();
+  await loadPayroll();
+}
+async function loadPayroll() {
+  $("payrollBody").innerHTML = payrollNavHtml() + loaderHtml();
+  bindPayrollNav();
+  let rows;
+  try {
+    const r = await fetch("/api/admin/payroll", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                   body: JSON.stringify({ initData, period: payrollPeriod }) });
+    const d = await r.json();
+    if (!d.ok) { $("payrollBody").innerHTML = payrollNavHtml() + `<p style="color:var(--hint)">Не удалось загрузить.</p>`; bindPayrollNav(); return; }
+    rows = d.rows;
+  } catch (e) { $("payrollBody").innerHTML = payrollNavHtml() + `<p style="color:var(--hint)">Сеть недоступна.</p>`; bindPayrollNav(); return; }
+
+  const money = (v) => `${(+v).toFixed(2)} ${CUR}`;
+  const listHtml = rows.length ? rows.map(r => {
+    const один = r.sellers.length === 1;
+    const продавцы = r.sellers.map(s => {
+      const имя = esc(s.note || String(s.user_id));
+      if (!один) return `<div class="statrow"><span style="padding-left:12px;color:var(--hint)">${имя}</span></div>`;
+      if (s.paid) return `<div class="statrow"><span style="padding-left:12px">${имя}</span><b style="color:#1f8a5f">выплачено ${money(s.paid.amount)}</b></div>`;
+      return `<div class="statrow"><span style="padding-left:12px">${имя}</span>
+        <button class="iconbtn ok" style="width:auto;padding:4px 14px" data-pay="${r.city}::${s.user_id}">Отметить выплаченным</button></div>`;
+    }).join("");
+    return `<div class="stathead">🏙 ${esc(r.city)}</div><div class="statlist">
+      <div class="statrow"><span>Выручка за месяц (без доставки)</span><b>${money(r.revenue)}</b></div>
+      <div class="statrow"><span>${r.percent}% — к выплате</span><b>${один ? money(r.amount) : "поделите сумму сами"}</b></div>
+      ${продавцы}
+      ${!один ? `<div class="statrow"><span style="color:var(--warn)">На точке несколько продавцов — авто-разбивки нет, распределите вручную</span></div>` : ""}
+    </div>`;
+  }).join("") : `<div class="statlist"><div class="statrow"><span style="color:var(--hint)">Нет ни одной точки с назначенным продавцом.</span></div></div>`;
+
+  $("payrollBody").innerHTML = payrollNavHtml() + listHtml;
+  bindPayrollNav();
+  $("payrollBody").querySelectorAll("[data-pay]").forEach(b => b.onclick = () => payNow(b.dataset.pay, b));
+}
+function payrollNavHtml() {
+  return `<div class="periodsel">
+    <button class="periodbtn" id="payrollPrev">‹</button>
+    <button class="periodbtn on" style="flex:2" disabled>${periodLabel(payrollPeriod)}</button>
+    <button class="periodbtn" id="payrollNext" ${payrollPeriod >= текущийПериод() ? "disabled" : ""}>›</button>
+  </div>`;
+}
+function bindPayrollNav() {
+  if ($("payrollPrev")) $("payrollPrev").onclick = () => { payrollPeriod = сдвинутьПериод(payrollPeriod, -1); loadPayroll(); };
+  if ($("payrollNext")) $("payrollNext").onclick = () => { payrollPeriod = сдвинутьПериод(payrollPeriod, 1); loadPayroll(); };
+}
+async function payNow(key, btn) {
+  const [city, uid] = key.split("::");
+  confirmMsg(`Отметить зарплату продавца за ${periodLabel(payrollPeriod)} выплаченной?\n\nЭто только запись в приложении — сам перевод денег делаете отдельно, как договорились с продавцом.`, async () => {
+    btn.disabled = true; btn.textContent = "Отмечаю…";
+    const d = await админПост("/api/admin/payroll/pay", { period: payrollPeriod, city, user_id: +uid }, "отметить выплату");
+    if (d) { toast("Отмечено ✓"); loadPayroll(); }
+    else { btn.disabled = false; btn.textContent = "Отметить выплаченным"; }
+  });
+}
+
 // ----- Розыгрыш (админ) -----
 let raffleRunning = false, raffleУчастников = 0;
 $("mRaffle").onclick = openRaffleAdmin;
@@ -1392,6 +1475,7 @@ async function openSettings() {
       $("setWheelStep").value = d.settings.wheel_step ?? "";
       $("setRefBonus").value = d.settings.referral_bonus ?? "";
       $("setCompMax").value = d.settings.compensation_max ?? "";
+      $("setSellerPct").value = d.settings.seller_commission_percent ?? "";
       $("setPayCash").checked = d.settings.pay_cash !== false;
       $("setPayCard").checked = d.settings.pay_card !== false;
       coinValue = d.settings.coin_value || 0.01;
@@ -1433,6 +1517,7 @@ $("setSave").onclick = async () => {
                  coins_per_byn: $("setCashback").value, wheel_step: $("setWheelStep").value,
                  referral_bonus: $("setRefBonus").value,
                  compensation_max: $("setCompMax").value,
+                 seller_commission_percent: $("setSellerPct").value,
                  pay_cash: $("setPayCash").checked, pay_card: $("setPayCard").checked };
   $("setSave").disabled = true; $("setSave").textContent = "Сохраняю…";
   try {
@@ -1465,6 +1550,7 @@ const ПОЛЯ_НАСТРОЕК = {
   wheel_step: ["setWheelStep", "Шаг колеса"],
   referral_bonus: ["setRefBonus", "Бонус за друга"],
   compensation_max: ["setCompMax", "Потолок компенсации"],
+  seller_commission_percent: ["setSellerPct", "Зарплата продавца, %"],
 };
 
 function показатьСохранённое(отправили, легло, отказы) {

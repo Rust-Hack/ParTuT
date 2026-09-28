@@ -227,6 +227,65 @@ def coin_flow(days=None):
     return {"granted": granted, "spent": spent, "by_reason": by_reason}
 
 
+def payroll_for_period(period):
+    """Зарплата продавцов за календарный месяц (period = "ГГГГ-ММ").
+
+    Процент — от выручки точки БЕЗ ДОСТАВКИ, тем же принципом, что и
+    реферальный процент («без доставки, как везде»): курьер съедает свою
+    доставку сам, продавец не должен получать процент с чужих расходов.
+
+    Точка без продавцов в ответ не попадает — платить там некому. Точка с
+    несколькими продавцами возвращается с amount=None: общая сумма видна,
+    но как её делить между людьми — решает владелец сам, авто-разбивки нет.
+    """
+    год, месяц = (int(x) for x in period.split("-"))
+    начало = f"{год:04d}-{месяц:02d}-01 00:00"
+    if месяц == 12:
+        конец = f"{год + 1:04d}-01-01 00:00"
+    else:
+        конец = f"{год:04d}-{месяц + 1:02d}-01 00:00"
+
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q(
+        "SELECT city AS ct, COALESCE(SUM(total - COALESCE(delivery_fee, 0)), 0) AS s "
+        "FROM orders WHERE status = 'issued' AND created_at >= %s AND created_at < %s "
+        "GROUP BY city"), (начало, конец))
+    выручка_по_точкам = {r["ct"]: float(r["s"] or 0) for r in cur.fetchall()}
+    conn.close()
+
+    процент = float(db.get_setting("seller_commission_percent", 10) or 10)
+    выплачено = db.seller_payouts_for_period(period)
+
+    по_точкам = {}
+    for s in db.list_staff():
+        город = s["city"]
+        if not город:              # пустой город — админ над всеми точками, не продавец
+            continue
+        по_точкам.setdefault(город, []).append(s)
+
+    строки = []
+    for город, продавцы in по_точкам.items():
+        выручка = round(выручка_по_точкам.get(город, 0.0), 2)
+        сумма = round(выручка * процент / 100, 2)
+        одиночка = len(продавцы) == 1
+        строки.append({
+            "city": город,
+            "revenue": выручка,
+            "percent": процент,
+            # Сумму к выплате показываем только когда продавец один — иначе
+            # это чья сумма, непонятно, и кнопка «выплачено» была бы враньём.
+            "amount": сумма if одиночка else None,
+            "sellers": [{
+                "user_id": int(s["user_id"]),
+                "note": s["note"] or "",
+                "paid": выплачено.get(int(s["user_id"])),
+            } for s in продавцы],
+        })
+    строки.sort(key=lambda r: r["city"])
+    return строки
+
+
 def also_bought(top=5, scan=500, min_count=2):
     """{товар: [товары, которые брали вместе с ним]} — по реальным выданным заказам.
 

@@ -477,6 +477,36 @@ def remove_staff(user_id):
     conn.close()
 
 
+def record_seller_payout(user_id, city, period, revenue, percent, amount, paid_by):
+    """Отмечает зарплату продавца за месяц выплаченной. Возвращает False, если
+    за этот период этому человеку уже платили (UNIQUE(user_id, period)) —
+    двойная выплата в базе не появится, даже если нажать кнопку дважды."""
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        cur.execute(db._q(
+            "INSERT INTO seller_payouts (user_id, city, period, revenue, percent, amount, paid_by, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"),
+            (user_id, city, period, revenue, percent, amount, paid_by, db._now_str()))
+    except Exception:
+        conn.rollback()
+        conn.close()
+        return False
+    conn.commit()
+    conn.close()
+    return True
+
+
+def seller_payouts_for_period(period):
+    """{user_id: строка выплаты} за месяц — узнать, кому уже заплатили."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("SELECT * FROM seller_payouts WHERE period = %s"), (period,))
+    rows = {int(r["user_id"]): dict(r) for r in cur.fetchall()}
+    conn.close()
+    return rows
+
+
 def staff_ids_by_city():
     """{'': {id,...}, 'minsk': {id,...}} — для проверки прав и рассылки заказов."""
     out = {}
