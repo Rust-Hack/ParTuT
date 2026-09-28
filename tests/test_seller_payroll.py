@@ -103,12 +103,28 @@ def run():
     r = client.post("/api/admin/payroll", json={"initData": "x", "period": "мусор"})
     c5("кривой период отклонён", r.status_code == 400 and r.get_json().get("error") == "bad_period")
 
-    as_admin(uid=555, username="seller", role="seller", city=CITY1)
-    r = client.post("/api/admin/payroll", json={"initData": "x"})
-    c5("продавцу (не владельцу) зарплата закрыта", r.status_code == 403)
+    # Продавцу чтение ОТКРЫТО — это его мотивационная цифра, не финансовый
+    # отчёт по всему магазину, — но сужено сервером до своей точки и себя.
+    as_admin(uid=7001, username="seller", role="seller", city=CITY1)
+    r = client.post("/api/admin/payroll", json={"initData": "x", "period": period})
+    d7 = r.get_json()
+    c5("продавцу чтение не закрыто", r.status_code == 200 and d7.get("ok"))
+    c5("видит только свою точку", len(d7["rows"]) == 1 and d7["rows"][0]["city"] == CITY1)
+    c5("видит только себя, не коллег с других точек", len(d7["rows"][0]["sellers"]) == 1
+       and d7["rows"][0]["sellers"][0]["user_id"] == 7001)
+    r = client.post("/api/admin/payroll/pay", json={"initData": "x", "period": period, "city": CITY1, "user_id": 7001})
+    c5("а вот отметить выплату продавцу нельзя", r.status_code == 403)
+
+    # Продавец точки CITY2 (где сумма не разделена) видит только себя в sellers
+    as_admin(uid=7002, username="seller2", role="seller", city=CITY2)
+    r = client.post("/api/admin/payroll", json={"initData": "x", "period": period})
+    d8 = r.get_json()
+    c5("на общей точке продавец не видит коллегу", len(d8["rows"][0]["sellers"]) == 1
+       and d8["rows"][0]["sellers"][0]["user_id"] == 7002)
+
     deny_admin()
     r = client.post("/api/admin/payroll", json={"initData": "x"})
-    c5("постороннему тем более", r.status_code == 403)
+    c5("постороннему (не сотруднику вовсе) закрыто совсем", r.status_code == 403)
     as_admin()
 
     return c.fails + c2.fails + c3.fails + c4.fails + c5.fails

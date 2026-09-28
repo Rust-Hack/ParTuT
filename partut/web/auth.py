@@ -117,7 +117,7 @@ _OWNER_ONLY = (
     "/api/admin/requests", "/api/admin/request/",
     # устройство магазина
     "/api/admin/location", "/api/admin/delivery", "/api/admin/point",
-    "/api/admin/settings/update", "/api/admin/stats", "/api/admin/payroll",
+    "/api/admin/settings/update", "/api/admin/stats",
     # Отзыв виден на всех точках, поэтому публиковать и удалять — владельцу.
     # Ответить продавец может: это его разговор с покупателем.
     "/api/admin/review/decide", "/api/admin/review/delete",
@@ -137,6 +137,9 @@ _OWNER_ONLY_EXACT = {
     "/api/admin/raffle",      # настройка розыгрыша
     "/api/admin/settings",    # реквизиты и правила магазина
     "/api/admin/staff",       # кто ещё работает и с какими правами
+    # Отметить зарплату выплаченной — решает владелец. Сам просмотр
+    # (/api/admin/payroll) открыт и продавцу: он смотрит свою точку.
+    "/api/admin/payroll/pay",
 }
 # Единственное общее чтение, оставленное продавцу: ассортимент. Без него он не
 # завезёт модель на свою точку. Всё остальное про магазин целиком — у владельца.

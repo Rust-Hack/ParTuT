@@ -30,6 +30,12 @@ async function openAdmin() {
     const подпись = $("mLog").querySelector("span");
     if (подпись) подпись.textContent = (me && me.is_super) ? "🧾 Журнал действий" : "🧾 Мои действия";
   }
+  // Зарплату видит любой админ: владелец — по всем точкам с кнопкой выплаты,
+  // продавец — только свою, без чужих сумм и без права отмечать выплату.
+  if ($("mPayroll")) {
+    const подпись = $("mPayroll").querySelector("span");
+    if (подпись) подпись.textContent = isOwner() ? "💰 Зарплата продавцов" : "💰 Моя зарплата";
+  }
   applyAdminScope();
   $("adminView").classList.add("show");
   if (me && me.is_super) loadReqBadge();
@@ -55,7 +61,7 @@ function applyAdminScope() {
   const shopWide = isOwner();
   // Ассортимент продавцу нужен: оттуда он завозит модель на свою точку.
   // Заводить и править модели там он не сможет — это прячется внутри.
-  ["mBrands", "mCats", "gShop", "mStats", "mPayroll", "mReferrals", "mPromos", "mRaffle",
+  ["mBrands", "mCats", "gShop", "mStats", "mReferrals", "mPromos", "mRaffle",
    "gSetup", "mLocations", "mSettings", "gAccess"].forEach(id => {
     const el = $(id); if (el) el.style.display = shopWide ? "" : "none";
   });
@@ -951,6 +957,34 @@ async function loadPayroll() {
   } catch (e) { $("payrollBody").innerHTML = payrollNavHtml() + `<p style="color:var(--hint)">Сеть недоступна.</p>`; bindPayrollNav(); return; }
 
   const money = (v) => `${(+v).toFixed(2)} ${CUR}`;
+
+  // Продавцу — не финансовый отчёт, а мотивация: сколько УЖЕ заработал в этом
+  // месяце, без чужих сумм и без кнопки выплаты (сервер и так прислал только
+  // его точку и его самого в sellers — здесь просто рисуем это попроще).
+  if (!isOwner()) {
+    const row = rows[0];
+    const свой = row && row.sellers[0];
+    if (!row || !свой) {
+      $("payrollBody").innerHTML = payrollNavHtml() + `<div class="statlist"><div class="statrow"><span style="color:var(--hint)">Нет данных за этот месяц.</span></div></div>`;
+      bindPayrollNav();
+      return;
+    }
+    const выплачено = свой.paid;
+    $("payrollBody").innerHTML = payrollNavHtml() + `
+      <div class="statgrid">
+        <div class="statcard"><div class="statnum" style="color:#1f8a5f">${выплачено ? money(выплачено.amount) : (row.amount != null ? money(row.amount) : "—")}</div>
+          <div class="statlab">${выплачено ? "Выплачено" : "Заработано · пока не выплачено"}</div></div>
+      </div>
+      <div class="statlist">
+        <div class="statrow"><span>Выручка точки за месяц</span><b>${money(row.revenue)}</b></div>
+        <div class="statrow"><span>Ваш процент</span><b>${row.percent}%</b></div>
+      </div>
+      ${row.amount == null ? `<div class="dnote" style="margin:10px 0 0">На точке несколько продавцов — сумму на каждого делит владелец, здесь общая цифра на одного не считается.</div>` : ""}
+      <div class="dnote" style="margin:10px 0 0">Растёт вместе с выручкой точки за месяц — чем больше продано, тем больше сумма. Считается по уже выданным заказам.</div>`;
+    bindPayrollNav();
+    return;
+  }
+
   const listHtml = rows.length ? rows.map(r => {
     const один = r.sellers.length === 1;
     const продавцы = r.sellers.map(s => {

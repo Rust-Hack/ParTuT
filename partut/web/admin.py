@@ -369,14 +369,26 @@ def _валидный_период(period):
 
 @bp.route("/api/admin/payroll", methods=["POST"])
 def api_admin_payroll():
-    """Зарплата продавцов за календарный месяц: выручка точки, процент, сумма."""
+    """Зарплата продавцов за календарный месяц: выручка точки, процент, сумма.
+
+    Владелец видит все точки — это его деньги и его решение, кому платить.
+    Продавец видит ТОЛЬКО свою точку и только себя в списке продавцов — это
+    не финансовый отчёт для него, а мотивация «вот сколько ты уже заработал
+    в этом месяце», а не чужая зарплата и не чужой остаток к выплате."""
     data = request.get_json(force=True, silent=True) or {}
-    if not auth.get_admin(data.get("initData", "")):
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     period = inputs._text(data.get("period")) or db.shop_now().strftime("%Y-%m")
     if not _валидный_период(period):
         return jsonify({"ok": False, "error": "bad_period"}), 400
-    return jsonify({"ok": True, "period": period, "rows": db.payroll_for_period(period)})
+    rows = db.payroll_for_period(period)
+    if admin.get("role") not in ("owner", "dev"):
+        my_city = admin.get("city") or ""
+        uid = int(admin["id"])
+        rows = [{**r, "sellers": [s for s in r["sellers"] if s["user_id"] == uid]}
+                for r in rows if r["city"] == my_city]
+    return jsonify({"ok": True, "period": period, "rows": rows})
 
 
 @bp.route("/api/admin/payroll/pay", methods=["POST"])
