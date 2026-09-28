@@ -22,6 +22,7 @@ from partut.config import CONFIRM_MINUTES, PAYMENT_INFO
 REFERRAL_BONUS = 50        # vapecoins пригласившему за нового друга
 COINS_PER_BYN = 1          # vapecoins клиенту за каждый Br выданного заказа
 COIN_VALUE = 0.01          # сколько стоит 1 монета при списании (100 монет = 1 Br)
+COIN_MAX_SHARE = 0.25      # монетами гасим не больше этой доли суммы товаров
 LOW_STOCK = 3              # с этого остатка товар считается «заканчивается» (везде одинаково)
 
 

@@ -106,15 +106,16 @@ def run():
     c2("без монет: заказ ok, скидки нет", d.get("ok") and d.get("coins_used") == 0
        and abs(float(d.get("total", 0)) - 25) < 0.01)
 
-    # монет больше, чем стоит заказ: списываем не больше суммы товаров
+    # монет намного больше, чем стоит заказ: списываем не больше 25% суммы
+    # товаров (25 Br × 0.25 = 6.25 Br = 625 монет), а не всю сумму заказа.
     db.add_coins(COINS_CLIENT, 10000)               # 100 Br монетами на заказ в 25 Br
     r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
                                         "payment_method": "cash", "use_coins": True,
                                         "items": [{"id": pid, "qty": 1}]})
     d = r.get_json() or {}
-    c2("списано не больше суммы заказа", d.get("coins_used") == 2500)
-    c2("итого 0", abs(float(d.get("total", 0))) < 0.01)
-    c2("остаток монет 7500", db.get_coins(COINS_CLIENT) == 7500)
+    c2("списано не больше 25% заказа (625 монет)", d.get("coins_used") == 625)
+    c2("итого 25 − 6.25 = 18.75", abs(float(d.get("total", 0)) - 18.75) < 0.01)
+    c2("остаток монет 9375", db.get_coins(COINS_CLIENT) == 9375)
 
     # --- Товар со вкусами: списывается нужный вариант + пересчёт общего остатка ---
     c3 = Checker("Заказ товара со вкусами (варианты)")
@@ -160,6 +161,46 @@ def run():
     c3("несуществующий вкус → 400 empty", r.status_code == 400)
 
     return c.fails + c2.fails + c3.fails
+
+
+CAP_CLIENT = 6167
+
+
+def run_монеты_ограничены_долей_заказа():
+    """Монетами гасим не больше 25% суммы товаров (shopinfo.COIN_MAX_SHARE) —
+    даже если монет на балансе с запасом и/или сумма ещё уменьшена промокодом.
+    Числа круглые нарочно: 100 Br × 25% = 25 Br = 2500 монет — ошибку в доле
+    видно сразу, не только в округлении."""
+    c = Checker("Монеты: потолок 25% от заказа")
+    as_user(CAP_CLIENT, "capbuyer")
+    db.set_age_ok(CAP_CLIENT)
+    db.add_delivery_method("coincapcity", "Самовывоз", False, "", "ул. Тест", 0, True)
+    mid = db.get_delivery_methods("coincapcity")[-1]["id"]
+    pid = db.add_product("coincapcity", "pods", "CapPod", 100, 5)
+
+    # С запасом монет (в разы больше 25% заказа) — списывается ровно потолок.
+    db.add_coins(CAP_CLIENT, 100000)                # 1000 Br монетами на заказ в 100 Br
+    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                        "payment_method": "cash", "use_coins": True,
+                                        "items": [{"id": pid, "qty": 1}]})
+    d = r.get_json() or {}
+    c("списано ровно 25% (2500 монет), а не всё, что есть", d.get("coins_used") == 2500)
+    c("скидка 25 Br", abs(float(d.get("discount", 0)) - 25) < 0.01)
+    c("итого 100 − 25 = 75", abs(float(d.get("total", 0)) - 75) < 0.01)
+    c("остаток монет 97500", db.get_coins(CAP_CLIENT) == 97500)
+
+    # Потолок считается от суммы ТОВАРОВ, а не от остатка после промокода —
+    # иначе промокод рядом с монетами давал бы ещё и больше монет впридачу.
+    db.add_promo("CAP40", "fixed", 40, once_per_user=False)
+    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                        "payment_method": "cash", "use_coins": True,
+                                        "promo_code": "CAP40", "items": [{"id": pid, "qty": 1}]})
+    d = r.get_json() or {}
+    c("потолок не съезжает из-за промокода: те же 2500 монет",
+      d.get("coins_used") == 2500)
+    c("итого 100 − 40 (промо) − 25 (монеты) = 35", abs(float(d.get("total", 0)) - 35) < 0.01)
+
+    return c.fails
 
 
 def run_способ_оплаты_можно_выключить():
@@ -218,4 +259,5 @@ def run_способ_оплаты_можно_выключить():
 
 if __name__ == "__main__":
     import sys
-    sys.exit(1 if (run() + run_способ_оплаты_можно_выключить()) else 0)
+    sys.exit(1 if (run() + run_монеты_ограничены_долей_заказа()
+                    + run_способ_оплаты_можно_выключить()) else 0)

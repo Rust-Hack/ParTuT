@@ -201,10 +201,12 @@ function renderDelivery() {
   // Итог с разбивкой (live)
   const subtotal = cartTotal();
   const coinVal = bonus.coin_value || 0.01;
-  // Монетами добираем то, что осталось после промокода — так же, как считает
-  // сервер: иначе показанная скидка не совпадёт с фактической.
+  // Монетами добираем то, что осталось после промокода, но не больше доли
+  // заказа (shopinfo.COIN_MAX_SHARE) — так же, как считает сервер: иначе
+  // показанная скидка не совпадёт с фактической.
   const afterPromo = Math.max(0, subtotal - promoOff);
-  const maxCoins = Math.min(bonus.coins || 0, Math.floor(afterPromo / coinVal));
+  const coinCap = Math.min(afterPromo, subtotal * (bonus.coin_max_share || 0.25));
+  const maxCoins = Math.min(bonus.coins || 0, Math.floor(coinCap / coinVal));
   const discount = useCoins ? +(maxCoins * coinVal).toFixed(2) : 0;
   // Монеты предлагаем И ЗДЕСЬ, а не только в корзине. Это экран, на котором
   // человек думает о деньгах: рядом поле промокода, рядом сумма. Оставить

@@ -1015,7 +1015,10 @@ function renderCart() {
     : "";
   const total = cartTotal();
   const coinVal = bonus.coin_value || 0.01;
-  const maxCoins = Math.min(bonus.coins || 0, Math.floor(total / coinVal));
+  // Монетами гасим не больше доли заказа (см. shopinfo.COIN_MAX_SHARE на
+  // сервере) — иначе тут показали бы скидку больше той, что реально применится.
+  const coinCap = total * (bonus.coin_max_share || 0.25);
+  const maxCoins = Math.min(bonus.coins || 0, Math.floor(coinCap / coinVal));
   const discount = useCoins ? +(maxCoins * coinVal).toFixed(2) : 0;
   const payable = +(total - discount).toFixed(2);
   const coinsHtml = maxCoins > 0
