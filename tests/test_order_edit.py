@@ -7,6 +7,8 @@
 Цена ошибки здесь высокая: правка двигает и склад, и деньги. Если они разъедутся,
 магазин отдаст товар бесплатно или спишет то, чего не продавал.
 """
+import json
+
 from _common import db, client, Checker, as_admin, deny_admin, SENT, reset_sent
 
 from partut import cache
@@ -196,6 +198,44 @@ def run_flavor_not_doubled():
     return c.fails
 
 
+def run_гонка_правки_не_продаёт_лишнее():
+    """Два РАЗНЫХ заказа на один товар, правятся одновременно (два продавца,
+    или два клика подряд). Раньше проверка остатка была обычным SELECT перед
+    UPDATE: оба потока читали одно и то же число, оба проходили проверку до
+    чьего-либо коммита — вместе заказы обещали больше, чем было на полке.
+    Числа как в отчёте аудита: было 3, в сумме заказов не должно стать 4."""
+    import threading
+    c = Checker("Гонка при правке позиций: не продаём лишнее")
+    as_admin()
+    _clean()
+
+    pid = db.add_product("Минск", "disposable", "RacePod", 10.0, 3)
+    oid_a = _order([{"id": pid, "name": "RacePod", "price": 10.0, "qty": 1}], 10.0)
+    oid_b = _order([{"id": pid, "name": "RacePod", "price": 10.0, "qty": 1}], 10.0)
+    c("на полке остался 1 (3 − 1 − 1)", db.get_product(pid)["stock"] == 1)
+
+    out = {}
+
+    def bump(oid, key):
+        out[key] = _edit(oid, {0: 2}).get_json()   # оба просят +1, а есть только 1
+
+    ta = threading.Thread(target=bump, args=(oid_a, "a"))
+    tb = threading.Thread(target=bump, args=(oid_b, "b"))
+    ta.start(); tb.start()
+    ta.join(); tb.join()
+
+    успехов = sum(1 for r in out.values() if r.get("ok"))
+    c("ровно один запрос прошёл, а не оба", успехов == 1)
+    c("остаток не ушёл в минус", db.get_product(pid)["stock"] == 0)
+    продано = sum(int(it["qty"]) for oid in (oid_a, oid_b)
+                  for it in json.loads(db.get_order(oid)["items"]))
+    c("суммарно продано 3, а не 4", продано == 3)
+
+    _clean()
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
-    sys.exit(1 if run() else 0)
+    sys.exit(1 if (run() + run_flavor_not_doubled()
+                    + run_гонка_правки_не_продаёт_лишнее()) else 0)

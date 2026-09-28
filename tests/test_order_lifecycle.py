@@ -163,6 +163,155 @@ def run():
     return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails + c7.fails
 
 
+def _boom_after_marker(marker):
+    """Патчит db.connect: запрос СРАЗУ ПОСЛЕ того, где в SQL встретился marker,
+    взрывается — остальное в этой же транзакции не выполняется и не коммитится
+    (conn.rollback() в except). Так проверяем НАСТОЯЩИЙ откат «всё или ничего»,
+    а не гадаем номер запроса по счёту (он меняется от одной правки кода)."""
+    orig_connect = db.connect
+    state = {"armed": False}
+
+    class _КурсорСВзрывателем:
+        """sqlite3.Cursor не даёт подменить .execute на экземпляре (атрибут
+        только для чтения) — оборачиваем объект вместо патча метода."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, *a, **k):
+            if state["armed"]:
+                state["armed"] = False
+                raise RuntimeError("симулированный сбой базы")
+            if marker in sql:
+                state["armed"] = True
+            return self._real.execute(sql, *a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    def patched():
+        conn = orig_connect()
+        orig_cursor = conn.cursor
+        conn.cursor = lambda *a, **k: _КурсорСВзрывателем(orig_cursor(*a, **k))
+        return conn
+    db.connect = patched
+    return lambda: setattr(db, "connect", orig_connect)
+
+
+def run_атомарность_выдачи_и_отмены():
+    """Сбой БАЗЫ сразу после того, как статус в памяти транзакции сменился на
+    issued/canceled — но ДО коммита. Раньше статус коммитился первым же
+    отдельным запросом (set_order_status_if), и сбой в начислениях следом
+    оставлял заказ 'issued' без единого бонуса — а повтор отклонялся (409,
+    «не тот статус»), доделать было нечем. Теперь это одна транзакция: сбой
+    посередине откатывает ВСЁ, включая сам статус, и чистый повтор доводит
+    операцию до конца ровно один раз."""
+    as_admin()
+    c = Checker("H. Выдача: сбой посередине откатывает всё, повтор доводит до конца")
+    db.add_coins(CLIENT, -db.get_coins(CLIENT))
+    oid, pid = make_order("paid", price=100, qty=1)
+    before_coins = db.get_coins(CLIENT)
+
+    undo = _boom_after_marker("status = 'issued'")
+    try:
+        raised = False
+        try:
+            db.issue_order(oid, ["paid", "confirmed"])
+        except RuntimeError:
+            raised = True
+    finally:
+        undo()
+    c("сбой действительно произошёл", raised)
+    c("статус НЕ сменился — откат целиком, не наполовину", db.get_order(oid)["status"] == "paid")
+    c("кэшбэк не начислен (транзакция не коммитилась)", db.get_coins(CLIENT) == before_coins)
+
+    # Повтор — уже без сбоя — обязан довести до конца, а не получить 409
+    # («статус уже не тот»), как было раньше.
+    order2, _ = db.issue_order(oid, ["paid", "confirmed"])
+    c("повтор проходит", order2 is not None and db.get_order(oid)["status"] == "issued")
+    c("кэшбэк начислен ровно один раз", db.get_coins(CLIENT) > before_coins)
+    gained = db.get_coins(CLIENT) - before_coins
+    order3, _ = db.issue_order(oid, ["paid", "confirmed"])
+    c("повторная выдача уже выданного не проходит и не начисляет снова",
+      order3 is None and db.get_coins(CLIENT) == before_coins + gained)
+
+    c2 = Checker("I. Отмена: тот же сбой — тот же откат целиком")
+    oid2, pid2 = make_order("paid", price=50, qty=2, coins_used=10)
+    db.add_coins(CLIENT, 100)
+    before_coins2 = db.get_coins(CLIENT)
+    before_stock = db.get_product(pid2)["stock"]
+
+    undo = _boom_after_marker("status = 'canceled'")
+    try:
+        raised = False
+        try:
+            db.cancel_order(oid2, ["new", "paid", "confirmed"])
+        except RuntimeError:
+            raised = True
+    finally:
+        undo()
+    c2("сбой произошёл", raised)
+    c2("статус остался paid", db.get_order(oid2)["status"] == "paid")
+    c2("склад НЕ вернулся (транзакция не коммитилась)", db.get_product(pid2)["stock"] == before_stock)
+    c2("монеты НЕ вернулись", db.get_coins(CLIENT) == before_coins2)
+
+    canceled = db.cancel_order(oid2, ["new", "paid", "confirmed"])
+    c2("повтор проходит", canceled is not None and db.get_order(oid2)["status"] == "canceled")
+    c2("склад вернулся", db.get_product(pid2)["stock"] == before_stock + 2)
+    c2("монеты вернулись ровно один раз", db.get_coins(CLIENT) == before_coins2 + 10)
+
+    return c.fails + c2.fails
+
+
+def run_отказ_без_обмана_про_возврат():
+    """Сообщение об отказе не должно обещать возврат оплаты, которого не было.
+    Раньше «Монеты и оплата возвращены» уходило ВСЕГДА для причины «товара не
+    оказалось» — даже когда монет не тратили и денег никто не платил (наличные
+    до выдачи, карта без загруженного чека). Магазин и не делает автоматический
+    банковский возврат — обещать «уже вернули» нечестно."""
+    from partut.integrations import tgsend
+    c = Checker("J. Отказ: сообщение о возврате соответствует фактам")
+    as_admin()
+    sent = []
+    orig = tgsend.tg.send_message
+    tgsend.tg.send_message = lambda cid, text, **kw: sent.append(text)
+    def reject_out(oid):
+        r = client.post("/api/admin/order/status",
+                        json={"initData": "x", "id": oid, "action": "reject", "reason": "out"})
+        tgsend.дождаться_фона()   # уведомление уходит в фоне — дожидаемся, иначе sent пуст
+        return r
+    try:
+        # Наличные, ничего не платили — про возврат денег речи быть не должно.
+        oid, pid = make_order("paid")     # cash, coins_used=0
+        reject_out(oid)
+        text = sent[-1]
+        c("монеты не упомянуты (их и не было)", "Монеты" not in text)
+        c("про возврат денег ни слова (наличными ещё не платили)", "вернём" not in text and "возвращен" not in text)
+
+        # Монеты были — про них сказать обязаны (это правда: coin-баланс вернулся).
+        db.add_coins(CLIENT, 20)
+        oid2, pid2 = make_order("paid", coins_used=5)
+        reject_out(oid2)
+        text2 = sent[-1]
+        c("монеты упомянуты честно (они правда вернулись)", "Монеты возвращены" in text2)
+        c("про банковский возврат по-прежнему ни слова (наличные)", "вернём" not in text2)
+
+        # Карта БЕЗ чека — платежа ещё не было, обещать возврат тоже нельзя.
+        oid3 = db.create_order(CLIENT, "vasya", "minsk",
+                               [{"id": pid, "flavor": None, "name": "TestPod", "price": 10, "qty": 1}],
+                               10, "")
+        db.set_order_delivery(oid3, "Доставка", "", 0, "card", "", "")
+        db.change_stock(pid, -1)
+        db.set_order_status(oid3, "paid")
+        reject_out(oid3)
+        text3 = sent[-1]
+        c("карта без чека: про возврат денег не сказано", "вернём" not in text3)
+    finally:
+        tgsend.tg.send_message = orig
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
-    sys.exit(1 if run() else 0)
+    sys.exit(1 if (run() + run_атомарность_выдачи_и_отмены()
+                    + run_отказ_без_обмана_про_возврат()) else 0)

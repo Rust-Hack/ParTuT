@@ -49,8 +49,7 @@ _пауза_заказ = limits.Пауза(3)
 # и либо уходит, либо пишет в чат — а продавец отвечает то же самое руками.
 REJECT_REASONS = {
     "out": ("товара не оказалось в наличии",
-            "Простите — товар разобрали раньше, чем мы успели отложить ваш. "
-            "Монеты и оплата возвращены. Напишем, когда привезём снова."),
+            "Простите — товар разобрали раньше, чем мы успели отложить ваш."),
     "receipt": ("чек не подошёл",
                 "Оплата по чеку не нашлась. Проверьте, что перевод прошёл, и оформите заказ снова "
                 "— или пришлите чек нам в чат, разберёмся вместе."),
@@ -168,13 +167,20 @@ def api_order():
         # по остальному не рушим, тихо пропускаем эту позицию.
         if "hidden" in p.keys() and p["hidden"]:
             continue
+        known = ctx["variants"].get(pid, {})
         if flavor:
             # товар-модель со вкусами: остаток берём у нужного варианта
-            known = ctx["variants"].get(pid, {})
             if flavor not in known:
                 continue      # такого вкуса у товара нет вовсе — это не «разобрали»
             avail = int(known.get(flavor) or 0)
             name = f"{p['name']} — {flavor}"
+        elif known:
+            # У товара есть варианты, а вкус не выбран — списывать по общему
+            # остатку товара нельзя: он всего лишь СУММА остатков вариантов
+            # (см. синхронизацию в place_order/update_order_items), и списание
+            # мимо конкретного варианта расходится с ней при первом же заказе
+            # уже С вариантом — вместе они продают больше, чем есть на складе.
+            continue          # как «такого вкуса нет» — вариант выбрать обязательно
         else:
             avail = int(p["stock"] or 0)
             name = p["name"]
@@ -296,6 +302,26 @@ def api_order():
     # Карта → клиент грузит чек (статус 'new'). Наличные/такси → сразу продавцу,
     # но статус 'paid' = ЖДЁТ подтверждения продавца, а НЕ авто-подтверждается.
     needs_receipt = (payment == "card")
+
+    # Сумма могла измениться между тем, как покупатель открыл экран оплаты
+    # (владелец поднял цену, промокод/остаток обновились), и нажатием кнопки.
+    # Подменить итог с клиента и так нельзя — сервер всегда считает сам, — но
+    # молча оформлять НА ДРУГУЮ сумму без ведома покупателя нечестно: он видел
+    # одну цифру на кнопке, а заплатить может по другой. expected_total —
+    # то, что показывал клиент; если сервер насчитал иначе — не оформляем,
+    # спрашиваем подтверждение новой суммы явно.
+    preview_total = round(max(0.0, subtotal - round(spend * shopinfo.COIN_VALUE, 2) - promo_discount) + fee, 2)
+    expected_total = data.get("expected_total")
+    if expected_total is not None:
+        try:
+            изменилась = abs(float(expected_total) - preview_total) > 0.01
+        except (TypeError, ValueError):
+            изменилась = False
+        if изменилась:
+            return jsonify({"ok": False, "error": "price_changed",
+                            "total": preview_total, "subtotal": subtotal, "fee": fee,
+                            "message": f"Сумма изменилась: {preview_total:.2f} Br вместо "
+                                       f"{float(expected_total):.2f} Br. Проверьте заказ и подтвердите ещё раз."}), 409
 
     # Заказ, монеты и склад — одной транзакцией (один commit вместо десятка).
     try:
@@ -508,33 +534,12 @@ def _client_order_summary(order_id):
     return "\n".join(lines)
 
 
-def _reward_referrer(buyer_id, subtotal):
-    """Начислить пригласившему % от заказа + бонус за первый заказ, уведомить его.
-
-    subtotal — стоимость ТОЛЬКО товаров, без доставки (та же база, что у
-    кэшбэка и прогресса колеса): раньше здесь брали полный order["total"]
-    (с доставкой), и процент выходил выше, чем везде остальном в магазине,
-    без единой причины для этого отличия."""
-    rr = db.reward_referrer_for_order(buyer_id, subtotal)
-    if rr and rr["earned"] > 0:
-        extra = f" (+{rr['bonus']} 🪙 за первый заказ друга)" if rr["first"] else ""
-        tgsend.notify_client(rr["referrer"], f"🎉 Ваш реферал сделал заказ! +{rr['earned']} 🪙{extra}")
-
-
 def _order_item_count(o):
     """Сколько единиц товара в заказе (для прогресса колеса)."""
     try:
         return sum(int(it.get("qty", 0)) for it in json.loads(o["items"]))
     except (TypeError, ValueError):
         return 0
-
-
-def _order_subtotal(o):
-    """Стоимость ТОЛЬКО товаров (без доставки) — база для кэшбэка."""
-    try:
-        return sum(float(it.get("price", 0)) * int(it.get("qty", 0)) for it in json.loads(o["items"]))
-    except (TypeError, ValueError):
-        return float(o["total"] or 0)
 
 
 def _order_json(o, init_data=""):
@@ -544,6 +549,10 @@ def _order_json(o, init_data=""):
         items = json.loads(o["items"])
     except (TypeError, ValueError):
         items = []
+    # cost — закупочная цена, нужна только продавцу/владельцу (прибыль, отчёты).
+    # Эта же сериализация уходит и покупателю в его историю заказов — без
+    # вырезания он получил бы себестоимость и мог вычислить наценку.
+    items = [{k: v for k, v in it.items() if k != "cost"} for it in items]
     return {
         "id": o["id"],
         "user_id": o["user_id"],
@@ -673,29 +682,53 @@ def api_admin_order_status():
     elif action == "issued":
         # выдать можно только оплаченный (paid) или уже подтверждённый (confirmed) заказ,
         # но НЕ 'new' (неоплаченный картой) — иначе кэшбэк без оплаты.
-        if not db.set_order_status_if(oid, "issued", ["paid", "confirmed"]):   # применится один раз
+        # Статус + кэшбэк + колесо + бонус рефереру — атомарно, ОДНОЙ транзакцией
+        # (db.issue_order): раньше статус коммитился первым, а начисления —
+        # отдельными вызовами следом, и сбой между ними оставлял заказ выданным
+        # без единого бонуса, а повтор отклонялся («не тот статус»).
+        issued_order, referral_info = db.issue_order(oid, ["paid", "confirmed"])
+        if not issued_order:
             return jsonify({"ok": False, "error": "closed"}), 409
-        db.add_coins(client_id, int(_order_subtotal(order) * db.coins_per_byn()), "cashback")
-        # Прогресс колеса — от потраченного на ТОВАРЫ (без доставки), как и кэшбэк:
-        # платить призами за дорогу магазину незачем.
-        db.add_wheel_progress(client_id, _order_subtotal(order))
-        _reward_referrer(client_id, _order_subtotal(order))   # % и бонус пригласившему — та же база, что у кэшбэка
+        if referral_info and referral_info["earned"] > 0:
+            extra = (f" (+{referral_info['bonus']} 🪙 за первый заказ друга)"
+                     if referral_info["first"] else "")
+            tgsend.bg(tgsend.notify_client, referral_info["referrer"],
+                      f"🎉 Ваш реферал сделал заказ! +{referral_info['earned']} 🪙{extra}")
         tgsend.bg(tgsend.notify_client, client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
-        if not db.cancel_order(oid, OPEN):          # атомарно: canceled + возврат склада/монет
+        canceled = db.cancel_order(oid, OPEN)        # атомарно: canceled + возврат склада/монет
+        if not canceled:
             return jsonify({"ok": False, "error": "closed"}), 409
-        tgsend.bg(tgsend.notify_client, client_id, _reject_text(oid, data.get("reason"), data.get("note")))
+        tgsend.bg(tgsend.notify_client, client_id,
+                  _reject_text(oid, data.get("reason"), data.get("note"), canceled))
     else:
         return jsonify({"ok": False, "error": "bad_action"}), 400
     return jsonify({"ok": True})
 
 
-def _reject_text(oid, reason, note):
+def _reject_text(oid, reason, note, order=None):
     """Что придёт покупателю. Причина — из списка, чтобы формулировку не
-    сочиняли заново каждый раз, но приписку продавца тоже передаём."""
+    сочиняли заново каждый раз, но приписку продавца тоже передаём.
+
+    order — отменённый заказ (для честной приписки про возврат). Раньше
+    сообщение всегда говорило «монеты и оплата возвращены», даже когда монет
+    не тратили вовсе, а деньги никто не платил (наличные/такси на получении,
+    карта без загруженного чека — оплата ещё не подтверждена). Магазин не
+    делает автоматический банковский возврат — обещать «уже вернули» нечестно,
+    когда вернуть предстоит вручную, а когда платить и не начинали — говорить
+    про возврат вовсе не о чем."""
     head = f"Заказ #{oid} отклонён."
     body = REJECT_REASONS.get(reason, (None, None))[1] \
         or "Если это ошибка — напишите нам, разберёмся."
+    if reason == "out" and order is not None:
+        bits = []
+        if int(order["coins_used"] or 0) > 0:
+            bits.append("Монеты возвращены.")
+        # Деньги реально приходили, только если это карта И чек загружен —
+        # иначе это была отмена ДО оплаты, возвращать нечего.
+        if (order["payment_method"] or "") == "card" and order["receipt_file_id"]:
+            bits.append("Деньги за заказ вернём тем же переводом — напишем, когда сделаем.")
+        body = " ".join([body] + bits) if bits else body
     tail = (note or "").strip()[:200]
     return "\n\n".join(x for x in (head, body, tail) if x)
 

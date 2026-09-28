@@ -257,7 +257,114 @@ def run_способ_оплаты_можно_выключить():
         cache.bust()
 
 
+COST_CLIENT = 6168
+NOFLAVOR_CLIENT = 6169
+PRICE_CLIENT = 6170
+
+
+def run_себестоимость_не_уходит_покупателю():
+    """/api/orders — история заказов ПОКУПАТЕЛЯ. cost (закупочная цена) там
+    нужен только продавцу для отчётов, а покупателю в этом же ответе отдал бы
+    себестоимость и позволил посчитать наценку."""
+    c = Checker("Покупатель не видит закупочную цену в своих заказах")
+    as_user(COST_CLIENT, "costbuyer")
+    db.set_age_ok(COST_CLIENT)
+    pid = db.add_product("costcity", "pods", "CostPod", 60, 5, cost=30)
+    db.add_delivery_method("costcity", "Самовывоз", False, "", "ул. Тест", 0, True)
+    mid = db.get_delivery_methods("costcity")[-1]["id"]
+    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                        "payment_method": "cash", "items": [{"id": pid, "qty": 1}]})
+    c("заказ создан", (r.get_json() or {}).get("ok"))
+    c("в заказе на сервере cost всё же лежит (нужен для отчётов)",
+      "cost" in (db.get_order(r.get_json()["order_id"])["items"] or ""))
+
+    hist = client.post("/api/orders", json={"initData": "x"}).get_json()
+    items = (hist.get("orders") or [{}])[0].get("items") or []
+    c("позиция в истории есть", bool(items))
+    c("а закупочной цены в ней нет", all("cost" not in it for it in items))
+    return c.fails
+
+
+def run_вариант_обязателен():
+    """Товар с вариантами (вкусами) нельзя заказать БЕЗ вкуса — иначе списание
+    идёт по общему остатку (который сам есть лишь сумма вкусов), расходится с
+    учётом по вкусам, и та же полка продаётся дважды: один раз «в обход»
+    вариантов, второй — по ним. Числа как в отчёте аудита: 5 + 3 = 8 на полке."""
+    c = Checker("Заказ без обязательного варианта")
+    as_user(NOFLAVOR_CLIENT, "noflavorbuyer")
+    db.set_age_ok(NOFLAVOR_CLIENT)
+    db.add_delivery_method("noflavorcity", "Самовывоз", False, "", "ул. Тест", 0, True)
+    mid = db.get_delivery_methods("noflavorcity")[-1]["id"]
+    pid = db.add_product("noflavorcity", "disposable", "NoFlavorPod", 10, 0)
+    db.add_variant(pid, "Манго", 5)
+    db.add_variant(pid, "Мята", 3)
+    db.recalc_product_stock(pid)
+    c("на полке 8 (5+3)", db.get_product(pid)["stock"] == 8)
+
+    # Без flavor вовсе — сервер не должен списать «вообще что-нибудь».
+    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                        "payment_method": "cash", "items": [{"id": pid, "qty": 1}]})
+    d = r.get_json() or {}
+    c("заказ без вкуса не оформлен (корзина как будто пуста)",
+      not d.get("ok") and d.get("error") == "empty")
+    c("остаток не тронут", db.get_product(pid)["stock"] == 8)
+
+    # Теперь честно разбираем всё по вкусам — должно продаться РОВНО 8, не 9.
+    r1 = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                         "payment_method": "cash",
+                                         "items": [{"id": pid, "qty": 5, "flavor": "Манго"}]})
+    r2 = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                         "payment_method": "cash",
+                                         "items": [{"id": pid, "qty": 3, "flavor": "Мята"}]})
+    c("оба заказа по вкусам прошли", (r1.get_json() or {}).get("ok") and (r2.get_json() or {}).get("ok"))
+    c("остаток ушёл ровно в ноль, не в минус", db.get_product(pid)["stock"] == 0)
+    return c.fails
+
+
+def run_цена_изменилась_требует_подтверждения():
+    """Между тем, как покупатель открыл экран оплаты, и нажатием «Оформить»
+    цену могли поднять. Сервер и раньше считал сумму сам (подмену с клиента не
+    пропускал), но молча оформлял по новой цене — без единого слова покупателю.
+    Теперь при расхождении с expected_total заказ не создаётся, а сервер просит
+    подтвердить новую сумму явно."""
+    c = Checker("Изменение цены требует повторного согласия")
+    as_user(PRICE_CLIENT, "pricebuyer")
+    db.set_age_ok(PRICE_CLIENT)
+    pid = db.add_product("pricecity", "pods", "PricePod", 60, 5)
+    db.add_delivery_method("pricecity", "Самовывоз", False, "", "ул. Тест", 0, True)
+    mid = db.get_delivery_methods("pricecity")[-1]["id"]
+
+    # Покупатель видел 60 (открыл экран раньше), а сейчас на самом деле 90.
+    db.update_field(pid, "price", 90)
+    cache.bust()
+    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                        "payment_method": "cash", "expected_total": 60,
+                                        "items": [{"id": pid, "qty": 1}]})
+    d = r.get_json() or {}
+    c("заказ НЕ создан молча по новой цене", r.status_code == 409 and d.get("error") == "price_changed")
+    c("сервер называет настоящую сумму", abs(float(d.get("total", 0)) - 90) < 0.01)
+    c("склад не тронут", db.get_product(pid)["stock"] == 5)
+    c("заказов не появилось", len(db.get_orders(50, city="pricecity")) == 0)
+
+    # Подтвердил новую сумму — заказ проходит как обычно.
+    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                        "payment_method": "cash", "expected_total": d.get("total"),
+                                        "items": [{"id": pid, "qty": 1}]})
+    d2 = r.get_json() or {}
+    c("после подтверждения заказ создаётся", d2.get("ok") and abs(float(d2.get("total", 0)) - 90) < 0.01)
+
+    # Без expected_total (старый клиент / прочие вызовы) — проверка не мешает как раньше.
+    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                        "payment_method": "cash",
+                                        "items": [{"id": pid, "qty": 1}]})
+    c("без expected_total поведение прежнее", (r.get_json() or {}).get("ok"))
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(1 if (run() + run_монеты_ограничены_долей_заказа()
-                    + run_способ_оплаты_можно_выключить()) else 0)
+                    + run_способ_оплаты_можно_выключить()
+                    + run_себестоимость_не_уходит_покупателю()
+                    + run_вариант_обязателен()
+                    + run_цена_изменилась_требует_подтверждения()) else 0)

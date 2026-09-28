@@ -303,9 +303,20 @@ async function doSubmitOrder() {
       pickup_point_id: selPoint || undefined,
       promo_code: promoOff > 0 ? selPromo : undefined,
       comment: selComment.trim(), phone: selPhone.trim(),
-      payment_method: m.needs_payment ? selPayment : "none" }) });
+      payment_method: m.needs_payment ? selPayment : "none",
+      expected_total: delTotal }) });
     const d = await r.json();
     if (!d.ok) {
+      // Цена изменилась между открытием экрана и нажатием «Оформить» —
+      // сервер не оформил заказ молча по другой сумме. Спрашиваем явно:
+      // согласны на новую цену — отправляем ещё раз уже с ней.
+      if (d.error === "price_changed") {
+        submitting = false;
+        if (btn) { btn.disabled = false; btn.textContent = btnText; }
+        confirmMsg(d.message || `Цена изменилась: теперь ${(+d.total).toFixed(2)} Br. Оформить по новой цене?`,
+          () => { delTotal = d.total; doSubmitOrder(); });
+        return;
+      }
       const errs = { auth: "Откройте магазин из бота.", no_phone: "Для доставки нужен телефон.", age: "Нужно подтвердить 18+.", empty: "Корзина пуста.", multi_city: "Товары из разных точек.", bad_delivery: "Выберите способ получения.", no_address: "Введите адрес.", bad_payment: "Выберите оплату.",
                     no_point: "Выберите точку самовывоза.", bad_point: "Эта точка больше не работает — выберите другую.",
                     promo_unknown: "Такого промокода нет.", promo_used_up: "Промокод уже разобрали.",

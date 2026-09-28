@@ -2646,7 +2646,7 @@ from partut.db.orders import (                                          # noqa: 
     PromoGone, OutOfStock, ORDER_TOKEN_HOURS,                               # noqa: F401
     create_order, get_checkout_data, find_order_by_token, place_order,      # noqa: F401
     get_order, get_orders, get_orders_by_user, get_open_order,              # noqa: F401
-    seller_today, restore_order_stock, cancel_order, update_order_items,    # noqa: F401
+    seller_today, restore_order_stock, cancel_order, issue_order, update_order_items,    # noqa: F401
     stale_new_orders, touch_order_reminded, orders_needing_reminder,        # noqa: F401
     set_order_status, set_order_status_if, set_order_receipt,               # noqa: F401
     set_order_paid_amount, open_orders_with_product,                        # noqa: F401

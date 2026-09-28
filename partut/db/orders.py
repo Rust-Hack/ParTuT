@@ -393,25 +393,200 @@ def get_open_order(user_id):
 
 
 def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
-    """Атомарно отменяет заказ из разрешённых состояний: возврат склада + монет.
-    Возвращает order (для уведомления) или None, если уже закрыт/недопустимо."""
-    order = get_order(order_id)
-    if not order:
-        return None
-    if not set_order_status_if(order_id, "canceled", list(allowed)):
-        return None
-    restore_order_stock(order)
-    if order["coins_used"]:
-        db.add_coins(order["user_id"], order["coins_used"], "refund")
-    # Промокод возвращаем так же, как склад и монеты. Скидкой никто не
-    # воспользовался — значит и запас кода тратить не за что. Иначе код на три
-    # применения сгорал на отменённых заказах, и следующему покупателю магазин
-    # честно отвечал «разобрали», хотя не получил её ещё никто.
-    код = (order["promo_code"] or "") if "promo_code" in order.keys() else ""
-    скидка = float(order["promo_discount"] or 0) if "promo_discount" in order.keys() else 0.0
-    if код and скидка > 0:
-        db.release_promo(код)
+    """Атомарно отменяет заказ из разрешённых состояний: статус + возврат склада,
+    монет и промокода — ОДНОЙ транзакцией, как place_order.
+
+    Раньше это были четыре отдельных коммита (статус, склад, монеты, промокод).
+    Сбой посередине оставлял заказ 'canceled' без возврата — а повтор отклонялся:
+    set_order_status_if требует старый статус, а он уже сменился. Доделать
+    оставшееся было уже нечем. Возвращает order (для уведомления) или None,
+    если заказа нет / статус не из allowed."""
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        marks = ",".join(["%s"] * len(allowed))
+        if db.USE_PG:
+            cur.execute(db._q(f"SELECT * FROM orders WHERE id = %s AND status IN ({marks}) FOR UPDATE"),
+                        (order_id, *allowed))
+        else:
+            cur.execute("UPDATE orders SET id = id WHERE id = ?", (order_id,))
+            cur.execute(db._q(f"SELECT * FROM orders WHERE id = %s AND status IN ({marks})"),
+                        (order_id, *allowed))
+        order = cur.fetchone()
+        if not order:
+            conn.close()
+            return None
+        cur.execute(db._q("UPDATE orders SET status = 'canceled' WHERE id = %s"), (order_id,))
+
+        # Возврат склада (см. restore_order_stock) — та же логика, но внутри
+        # этой же транзакции, а не отдельными коммитами по функции на строку.
+        try:
+            items = json.loads(order["items"])
+        except (TypeError, ValueError):
+            items = []
+        touched_variants = set()
+        for it in items:
+            try:
+                qty = int(it.get("qty", 0))
+            except (TypeError, ValueError):
+                qty = 0
+            if qty <= 0:
+                continue
+            if it.get("flavor"):
+                cur.execute(db._q(f"UPDATE product_variants SET stock = {db.GREATEST}(0, stock + %s) "
+                               "WHERE product_id = %s AND flavor = %s"), (qty, it["id"], it["flavor"]))
+                touched_variants.add(it["id"])
+            else:
+                cur.execute(db._q(f"UPDATE products SET stock = {db.GREATEST}(0, stock + %s) WHERE id = %s"),
+                            (qty, it["id"]))
+        for pid in touched_variants:
+            cur.execute(db._q("""UPDATE products SET stock =
+                              (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                              WHERE id = %s"""), (pid, pid))
+
+        # Возврат монет.
+        coins_used = int(order["coins_used"] or 0)
+        if coins_used:
+            cur.execute(db._q(f"UPDATE users SET coins = {db.GREATEST}(0, COALESCE(coins, 0) + %s) "
+                           "WHERE user_id = %s"), (coins_used, order["user_id"]))
+
+        # Промокод возвращаем так же, как склад и монеты. Скидкой никто не
+        # воспользовался — значит и запас кода тратить не за что. Иначе код на
+        # три применения сгорал на отменённых заказах, и следующему покупателю
+        # магазин честно отвечал «разобрали», хотя не получил её ещё никто.
+        код = (order["promo_code"] or "") if "promo_code" in order.keys() else ""
+        скидка = float(order["promo_discount"] or 0) if "promo_discount" in order.keys() else 0.0
+        if код and скидка > 0:
+            cur.execute(db._q("UPDATE promos SET uses_left = uses_left + 1 "
+                              "WHERE code = %s AND uses_left IS NOT NULL"), (код,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    # Летопись монет — отдельным (уже не критичным) походом в базу, как и
+    # везде: если запись в coin_log не удалась, возврат самих монет уже применён.
+    if coins_used:
+        db.log_coins(order["user_id"], coins_used, "refund")
     return order
+
+
+def issue_order(order_id, allowed=("paid", "confirmed")):
+    """Атомарно выдаёт заказ: статус + кэшбэк + прогресс колеса + бонус
+    рефереру — ОДНОЙ транзакцией, как place_order/cancel_order.
+
+    Раньше статус коммитился первым (set_order_status_if), а начисления шли
+    следом отдельными вызовами. Сбой между ними оставлял заказ 'issued' без
+    единого бонуса — а повтор отклонялся: set_order_status_if требует старый
+    статус, а он уже сменился, доделать было уже нечем. Возвращает
+    (order, referral_info) или (None, None), если заказа нет / статус не из
+    allowed. referral_info — то же, что раньше отдавал reward_referrer_for_order
+    (для уведомления пригласившему), или None, если реферала нет."""
+    # Настройки — чистое чтение, вне транзакции: они не часть отката.
+    per_byn = db.coins_per_byn()
+    step = int(db.wheel_step())
+    bonus_first = db.referral_bonus()
+    now = db.shop_now().strftime("%Y-%m-%d %H:%M")
+
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        marks = ",".join(["%s"] * len(allowed))
+        if db.USE_PG:
+            cur.execute(db._q(f"SELECT * FROM orders WHERE id = %s AND status IN ({marks}) FOR UPDATE"),
+                        (order_id, *allowed))
+        else:
+            cur.execute("UPDATE orders SET id = id WHERE id = ?", (order_id,))
+            cur.execute(db._q(f"SELECT * FROM orders WHERE id = %s AND status IN ({marks})"),
+                        (order_id, *allowed))
+        order = cur.fetchone()
+        if not order:
+            conn.close()
+            return None, None
+        cur.execute(db._q("UPDATE orders SET status = 'issued' WHERE id = %s"), (order_id,))
+
+        try:
+            items = json.loads(order["items"])
+            subtotal = sum(float(it.get("price", 0)) * int(it.get("qty", 0)) for it in items)
+        except (TypeError, ValueError):
+            subtotal = float(order["total"] or 0)
+        user_id = order["user_id"]
+
+        # Строка покупателя обязана уже существовать (см. ensure_user) до правки coins/wheel.
+        if db.USE_PG:
+            cur.execute("INSERT INTO users (user_id, created_at) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING",
+                        (user_id, now))
+        else:
+            cur.execute("INSERT OR IGNORE INTO users (user_id, created_at) VALUES (?, ?)", (user_id, now))
+
+        # 1. Кэшбэк — % от суммы товаров (без доставки), как и везде.
+        cashback = int(subtotal * per_byn)
+        if cashback:
+            cur.execute(db._q(f"UPDATE users SET coins = {db.GREATEST}(0, COALESCE(coins, 0) + %s) "
+                           "WHERE user_id = %s"), (cashback, user_id))
+
+        # 2. Прогресс колеса — та же база, что у кэшбэка.
+        cur.execute(db._q("SELECT wheel_progress, wheel_spins FROM users WHERE user_id = %s"), (user_id,))
+        wrow = cur.fetchone()
+        prog = int((wrow["wheel_progress"] or 0) if wrow else 0) + int(subtotal)
+        spins = int((wrow["wheel_spins"] or 0) if wrow else 0)
+        while step > 0 and prog >= step:
+            prog -= step
+            spins += 1
+        cur.execute(db._q("UPDATE users SET wheel_progress = %s, wheel_spins = %s WHERE user_id = %s"),
+                    (prog, spins, user_id))
+
+        # 3. Бонус пригласившему — % от суммы + фикс за первый заказ друга.
+        referral_info = None
+        cur.execute(db._q("SELECT referred_by FROM users WHERE user_id = %s"), (user_id,))
+        urow = cur.fetchone()
+        ref = urow["referred_by"] if urow else None
+        if ref:
+            cur.execute(db._q("SELECT COUNT(*) AS c FROM users WHERE referred_by = %s AND ref_activated = 1"),
+                        (ref,))
+            active = cur.fetchone()["c"]
+            percent = db.ref_percent(active)
+            pct_coins = round(subtotal * percent)
+            earned = 0
+            if pct_coins > 0:
+                cur.execute(db._q(f"UPDATE users SET coins = {db.GREATEST}(0, COALESCE(coins, 0) + %s) "
+                               "WHERE user_id = %s"), (pct_coins, ref))
+                earned += pct_coins
+            # Условие — в самом UPDATE, не «прочитали-потом-написали»: см. set_ref_activated.
+            cur.execute(db._q("UPDATE users SET ref_activated = 1 "
+                           "WHERE user_id = %s AND COALESCE(ref_activated, 0) = 0"), (user_id,))
+            first = cur.rowcount > 0
+            bonus = bonus_first if first else 0
+            if first and bonus:
+                cur.execute(db._q(f"UPDATE users SET coins = {db.GREATEST}(0, COALESCE(coins, 0) + %s) "
+                               "WHERE user_id = %s"), (bonus, ref))
+                earned += bonus
+            if earned > 0:
+                cur.execute(db._q("UPDATE users SET ref_earned = COALESCE(ref_earned, 0) + %s "
+                               "WHERE user_id = %s"), (earned, ref))
+            referral_info = {"referrer": ref, "percent": percent, "pct_coins": pct_coins,
+                              "first": first, "bonus": bonus, "earned": earned}
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    # Летопись — отчётность, не работа магазина (см. log_coins): пишем уже
+    # после коммита, отдельным шагом, как и в cancel_order.
+    if cashback:
+        db.log_coins(user_id, cashback, "cashback")
+    if referral_info:
+        # Двумя отдельными строками, а не суммой: «история начислений» должна
+        # показать процент и фикс за первого друга как разные события, а не
+        # одно слитное число (как и раньше делали два отдельных add_coins).
+        if referral_info["pct_coins"] > 0:
+            db.log_coins(referral_info["referrer"], referral_info["pct_coins"], "referral", related_id=user_id)
+        if referral_info["first"] and referral_info["bonus"]:
+            db.log_coins(referral_info["referrer"], referral_info["bonus"], "referral", related_id=user_id)
+    return order, referral_info
 
 
 def update_order_items(order_id, quantities, coin_value):
@@ -458,25 +633,45 @@ def update_order_items(order_id, quantities, coin_value):
                 continue
             delta = now - was
             pid, flavor = it.get("id"), it.get("flavor")
-            if delta > 0:                   # добавить можно только то, что есть на полке
+            if delta > 0:
+                # Добавить можно только то, что есть на полке — списываем УСЛОВНО,
+                # одним запросом с «...WHERE stock >= сколько нужно» (как в
+                # place_order), а не «прочитали остаток, потом списали». Иначе
+                # правка ДВУХ РАЗНЫХ заказов на один и тот же товар читает одно и
+                # то же число, обе проверки проходят до чьего-либо коммита — и
+                # вместе заказы обещают больше, чем было физически.
                 if flavor:
-                    cur.execute(db._q("SELECT stock FROM product_variants WHERE product_id = %s AND flavor = %s"),
-                                (pid, flavor))
+                    cur.execute(db._q("UPDATE product_variants SET stock = stock - %s "
+                                   "WHERE product_id = %s AND flavor = %s AND stock >= %s"),
+                                (delta, pid, flavor, delta))
                 else:
-                    cur.execute(db._q("SELECT stock FROM products WHERE id = %s"), (pid,))
-                row = cur.fetchone()
-                have = int(row["stock"]) if row else 0
-                if have < delta:
+                    cur.execute(db._q("UPDATE products SET stock = stock - %s "
+                                   "WHERE id = %s AND stock >= %s"), (delta, pid, delta))
+                if cur.rowcount < 1:
+                    if flavor:
+                        cur.execute(db._q("SELECT stock FROM product_variants "
+                                       "WHERE product_id = %s AND flavor = %s"), (pid, flavor))
+                    else:
+                        cur.execute(db._q("SELECT stock FROM products WHERE id = %s"), (pid,))
+                    row = cur.fetchone()
+                    have = int(row["stock"]) if row else 0
                     return None, f"no_stock:{it.get('name', '')}:{have}"
-            if flavor:
-                cur.execute(db._q(f"UPDATE product_variants SET stock = {db.GREATEST}(0, stock - %s) "
-                               "WHERE product_id = %s AND flavor = %s"), (delta, pid, flavor))
-                cur.execute(db._q("""UPDATE products SET stock =
-                                  (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
-                                  WHERE id = %s"""), (pid, pid))
+                if flavor:
+                    cur.execute(db._q("""UPDATE products SET stock =
+                                      (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                                      WHERE id = %s"""), (pid, pid))
             else:
-                cur.execute(db._q(f"UPDATE products SET stock = {db.GREATEST}(0, stock - %s) WHERE id = %s"),
-                            (delta, pid))
+                # Возврат на склад (уменьшили количество) — гонки не боится,
+                # нехватки тут не бывает.
+                if flavor:
+                    cur.execute(db._q(f"UPDATE product_variants SET stock = {db.GREATEST}(0, stock - %s) "
+                                   "WHERE product_id = %s AND flavor = %s"), (delta, pid, flavor))
+                    cur.execute(db._q("""UPDATE products SET stock =
+                                      (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                                      WHERE id = %s"""), (pid, pid))
+                else:
+                    cur.execute(db._q(f"UPDATE products SET stock = {db.GREATEST}(0, stock - %s) WHERE id = %s"),
+                                (delta, pid))
             # Вкус уже вписан в название («Cuvie Plus — Арбуз») — второй раз
             # его приписывать незачем: это увидит и покупатель в сообщении, и
             # владелец в журнале.
