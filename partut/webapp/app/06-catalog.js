@@ -768,6 +768,10 @@ function renderEdit(p) {
         <button class="bigbtn" id="edSave" style="margin-top:10px">Сохранить</button>
       </div>`;
     if (isVar) { renderEditVariants(); bindVariantAdd(p.category); }
+    // Без вариантов остаток — обычный степпер qtyHtml('#edStock'), а его
+    // кнопки +/- нигде не навешивались: bindQty звался только в ветке isVar
+    // (для edVarList). Кнопки рисовались, но ничего не делали.
+    bindQty($("editView"));
     renderEditPoints(p, md);
     $("edToModel").onclick = () => {
       $("editView").classList.remove("show");
@@ -1167,11 +1171,17 @@ async function saveEdit(p) {
   // сохранение карточки — до десяти полных обменов с сервером подряд, по
   // секунде каждый на мобильной сети. «Сохраняю…» висело десять секунд.
   const поля = {}, имена = {};
+  let expectedStock = null;
   const upd = (field, value, что) => { поля[field] = value; имена[field] = что || field; };
   const отправитьПоля = async () => {
     if (!Object.keys(поля).length) return { ok: true };
+    // expected_stock — СОСЕД fields, а не поле товара: раньше он случайно
+    // попадал внутрь fields и сервер отвергал его как неизвестное поле,
+    // из-за чего отказывался сохраняться и настоящий новый остаток.
+    const тело = { initData, id: editId, fields: поля };
+    if (expectedStock !== null) тело.expected_stock = expectedStock;
     const r = await fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" },
-                                                         body: JSON.stringify({ initData, id: editId, fields: поля }) });
+                                                         body: JSON.stringify(тело) });
     const d = await r.json().catch(() => ({}));
     if (!d.ok) { отказы.push(назвать("правка товара", d)); return d; }
     // Сервер сохраняет всё, что прошло, и называет, что не прошло: отказ в
@@ -1211,7 +1221,7 @@ async function saveEdit(p) {
         // задевать остаток, который мог за это время честно продаться.
         if (Number(новыйОстаток) !== Number(editOrigStock)) {
           upd("stock", новыйОстаток, "остаток");
-          поля.expected_stock = editOrigStock;
+          expectedStock = editOrigStock;
         } else {
           новыйОстаток = null;
         }
