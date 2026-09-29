@@ -345,7 +345,7 @@ async function doSubmitOrder() {
     currentOrder = d;
     if (d.coins_used) bonus.coins = Math.max(0, (bonus.coins || 0) - d.coins_used);
     useCoins = false;
-    for (const k in cart) delete cart[k]; renderNav();   // заказ СОЗДАН — чистим корзину сразу (нет дублей)
+    for (const k in cart) delete cart[k]; сохранитьКорзину(); renderNav();   // заказ СОЗДАН — чистим корзину сразу (нет дублей)
     if (d.needs_receipt) {
       $("payTitle").textContent = `Оплата заказа #${d.order_id}`;
       const disc = d.discount ? `Списано ${d.coins_used} 🪙 (−${d.discount.toFixed(2)} Br)\n` : "";
@@ -447,7 +447,7 @@ $("receiptFile").onchange = async (e) => {
       $("payView").classList.remove("show");
       $("doneText").textContent = `Чек по заказу #${currentOrder.order_id} получен. Продавец подтвердит за ~${currentOrder.confirm_minutes} минут.`;
       $("doneView").classList.add("show");
-      for (const k in cart) delete cart[k]; renderNav();
+      for (const k in cart) delete cart[k]; сохранитьКорзину(); renderNav();
     } else alertMsg(d.message || "Не удалось отправить чек. Попробуйте ещё раз.");
     // Причину говорит сервер: «это не фото» и «файл слишком большой» лечатся
     // по-разному, а «попробуйте ещё раз» с тем же файлом не лечится вовсе.

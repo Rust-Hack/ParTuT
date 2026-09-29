@@ -153,7 +153,42 @@ const withUnit = (val, unit) => {
 };
 
 let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFilters = [], flavorFilters = [], sortMode = "default";
+// Корзина жила только в памяти вкладки: закрыл WebView до оплаты (обычное
+// дело на телефоне) — открыл заново, а собранное пропало без следа. Теперь
+// каждое изменение пишется в localStorage, а при следующем открытии
+// восстанавливается — но не вслепую: восстановитьКорзину() сверяет её с
+// живым каталогом, потому что пока приложение было закрыто, товар могли
+// раскупить или снять с продажи.
+const CART_KEY = "partut_cart_v1";
 const cart = {};
+function сохранитьКорзину() {
+  try { localStorage.setItem(CART_KEY, JSON.stringify({ city, items: cart })); }
+  catch (e) { /* приватный режим и т.п. — корзина просто не переживёт перезапуск */ }
+}
+function восстановитьКорзину() {
+  let сохранено;
+  try { сохранено = JSON.parse(localStorage.getItem(CART_KEY) || "null"); }
+  catch (e) { сохранено = null; }
+  // Корзина — по одной точке (см. switchCity): чужого города не восстанавливаем.
+  if (!сохранено || сохранено.city !== city || !сохранено.items) return;
+  const gone = [], short = [];
+  for (const [key, it] of Object.entries(сохранено.items)) {
+    const p = allProducts.find(x => x.id === it.product_id);
+    if (!p || p.hidden) continue;                          // товара больше нет вовсе — тихо не вернём
+    if (it.flavor && !hasVariants(p)) continue;             // у модели больше нет вариантов
+    const max = it.flavor ? variantStock(p, it.flavor) : p.stock;
+    if (max <= 0) { gone.push(p.name); continue; }
+    cart[key] = { product_id: it.product_id, flavor: it.flavor || null, qty: Math.min(it.qty, max) };
+    if (it.qty > max) short.push(p.name);
+  }
+  if (gone.length || short.length) {
+    const bits = [];
+    if (gone.length) bits.push(`разобрали: ${gone.join(", ")}`);
+    if (short.length) bits.push(`осталось меньше: ${short.join(", ")}`);
+    alertMsg("Корзина восстановлена, но кое-что изменилось — " + bits.join("; ") + ". Проверьте перед оформлением.");
+  }
+  сохранитьКорзину();   // пишем уже согласованное с полкой состояние
+}
 let useCoins = false;   // списывать ли монеты при оформлении
 // Избранное живёт на сервере (таблица favorites) — приходит в /api/me,
 // пополняется по нажатию сердечка. Раньше жило только в localStorage:
@@ -596,7 +631,12 @@ function recomputeCities() {
 }
 async function loadCatalog() {
   const [okL, okP] = await Promise.all([fetchLocations(), fetchProducts(), fetchCategories()]);
-  recomputeCities(); renderChips(); updateFilterBtn(); renderGrid();
+  recomputeCities();
+  // Каталог уже загружен — самое время сверить восстановленную корзину с ним,
+  // пока экран ещё не нарисован ни разу: renderGrid()/renderNav() ниже сразу
+  // покажут актуальное состояние, а не пустую корзину на долю секунды.
+  восстановитьКорзину();
+  renderChips(); updateFilterBtn(); renderGrid();
   fetchAlsoBought(); fetchFlavors();   // подсказки корзины и справочник вкусов — в фоне
   // Не подменяем "город без товаров" (легитимная пустота) на "сеть отвалилась":
   // сообщаем только когда сам запрос не дошёл, и не оставляем пустой экран молча.
@@ -931,6 +971,7 @@ function changeQty(id, delta, flavor = null) {
   const next = cur + delta;
   if (next <= 0) delete cart[key];
   else cart[key] = { product_id: id, flavor: flavor || null, qty: Math.min(next, max) };
+  сохранитьКорзину();
   renderGrid(); renderNav(); if (activeTab === "cart") renderCart();
 }
 async function toggleFav(id) {
@@ -966,6 +1007,7 @@ function switchCity(next, после) {
     const changed = next !== city;
     if (changed) { for (const k in cart) delete cart[k]; }
     city = next; $("pointName").textContent = city;
+    if (changed) сохранитьКорзину();   // новая точка — пустая корзина, и сохранённая тоже
     brandFilters = [];   // другая точка — другой набор брендов
     prefetchDelivery();  // заранее подтянем способы получения новой точки
     updateFilterBtn(); renderGrid(); renderNav();
@@ -1012,6 +1054,7 @@ function reconcileCart(d) {
     if (!k) continue;
     if (sh.left > 0) cart[k].qty = sh.left; else delete cart[k];
   }
+  сохранитьКорзину();
 }
 
 function renderCart() {

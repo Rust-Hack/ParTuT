@@ -168,6 +168,7 @@ function repeatOrder(o) {
   city = o.city; $("pointName").textContent = city;          // корзина привязана к одной точке
   for (const k in cart) delete cart[k];
   toAdd.forEach(a => { cart[cartKey(a.id, a.flavor)] = { product_id: a.id, flavor: a.flavor, qty: a.qty }; });
+  сохранитьКорзину();
   $("myOrdersView").classList.remove("show");
   updateFilterBtn(); renderGrid(); renderNav(); showTab("cart");
   if (unavail.length) alertMsg("Добавлено в корзину. Сейчас недоступно: " + unavail.join(", "));
