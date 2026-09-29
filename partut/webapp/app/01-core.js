@@ -394,7 +394,11 @@ document.querySelectorAll(".view").forEach(view => {
   let sx = 0, sy = 0, track = false;
   content.addEventListener("touchstart", (e) => {
     if (e.touches.length !== 1) { track = false; return; }
-    if (e.target.closest(".chips, input, textarea, select, .searchrow")) { track = false; return; }
+    // .upsell — карусель «Добавьте к заказу» в корзине: она сама скроллится
+    // горизонтально, и без исключения свайп по ней на отпускании пальца
+    // читался как свайп между вкладками — из Корзины улетало в Избранное
+    // (следующая вкладка по порядку NAV).
+    if (e.target.closest(".chips, input, textarea, select, .searchrow, .upsell")) { track = false; return; }
     sx = e.touches[0].clientX; sy = e.touches[0].clientY; track = true;
   }, { passive: true });
   content.addEventListener("touchend", (e) => {
