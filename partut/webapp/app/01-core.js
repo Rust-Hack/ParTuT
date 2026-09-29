@@ -170,14 +170,24 @@ const $ = (id) => document.getElementById(id);
 // Ответ, начатый в шапке страницы. Забираем его один раз: при повторном
 // обновлении витрины запрос делается заново, иначе мы бы вечно показывали
 // самые первые данные.
+// Сервер иногда отвечает не телом каталога, а телом ошибки (503 на всё том же
+// /api/products) — но это тоже валидный JSON, и .then(r => r.json()) с этим
+// соглашался молча. Дальше код разбирал ответ ОШИБКИ как список товаров, и
+// первый же .forEach падал необработанным исключением — каталог не просто
+// пустел, а вся отрисовка обрывалась, даже не долетев до собственного
+// сообщения «не удалось загрузить». Не 2xx — не тело каталога, а сбой.
+function _bootJson(r) {
+  if (!r.ok) throw new Error(`http ${r.status}`);
+  return r.json();
+}
 function bootFetch(key, url, opts) {
   const b = window.__boot;
   const started = b && b[key];
   if (started) {
     b[key] = null;
-    return started.then(r => r.json()).catch(() => fetch(url, opts).then(r => r.json()));
+    return started.then(_bootJson).catch(() => fetch(url, opts).then(_bootJson));
   }
-  return fetch(url, opts).then(r => r.json());
+  return fetch(url, opts).then(_bootJson);
 }
 
 function alertMsg(m) {
@@ -551,7 +561,15 @@ async function fetchProducts() {
   // try/catch — иначе обрыв сети роняет весь Promise.all в loadCatalog()
   // необработанным отказом: заставка уходит по страховочному таймеру, а
   // каталог остаётся пустым навсегда, без единого слова об ошибке.
-  try { allProducts = await bootFetch("products", "/api/products"); return true; }
+  try {
+    const список = await bootFetch("products", "/api/products");
+    // Форма ответа — тоже проверка, не только код: сервер, отвечающий 200 с
+    // чем-то, кроме списка, для нас не отличим от честной пустой витрины,
+    // а на самом деле это тоже сбой, который лучше показать, чем скрыть.
+    if (!Array.isArray(список)) return false;
+    allProducts = список;
+    return true;
+  }
   catch (e) { return false; }
 }
 

@@ -192,13 +192,26 @@ const OFILTERS = [
 $("ordersClose").onclick = () => { $("ordersView").classList.remove("show"); loadToday(); };
 $("ordersSearch").oninput = (e) => { ordersSearch = e.target.value; renderOrders(); };
 
+// Раньше сбой запроса (503, обрыв связи) и честное «заказов правда нет»
+// выглядели на экране ОДИНАКОВО: adminOrders = d.orders || [] тихо превращала
+// тело ошибки в пустой список. Продавец видел «Заказов нет» и не забирал
+// реально висящие заказы, думая, что работы нет вовсе.
+let ordersLoadFailed = false;
+
 async function loadAdminOrders() {
   $("ordersList").innerHTML = loaderHtml();
+  ordersLoadFailed = false;
   try {
     const r = await fetch("/api/admin/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+    if (!r.ok) throw new Error(`http ${r.status}`);
     const d = await r.json();
-    adminOrders = d.orders || [];
-  } catch (e) { adminOrders = []; }
+    if (!d.ok || !Array.isArray(d.orders)) throw new Error("bad_response");
+    adminOrders = d.orders;
+  } catch (e) {
+    // Список НЕ затираем: если это был просто повторный запрос (продавец
+    // обновил экран), пусть останутся последние известные заказы, а не пустота.
+    ordersLoadFailed = true;
+  }
   setBadge("ordBadge", adminOrders.filter(o => o.status === "paid").length);
   renderOrdersFilter();
   renderOrders();
@@ -261,6 +274,15 @@ function orderDeductions(o) {
 function renderOrders() {
   const list = adminOrders.filter(o => orderMatchesFilter(o) && orderMatchesSearch(o));
   if (!list.length) {
+    // Сбой загрузки — не то же самое, что честная пустота: тут не «работы
+    // нет», а «неизвестно, есть ли она», и сказать об этом надо прямо.
+    if (ordersLoadFailed) {
+      $("ordersList").innerHTML = `<p style="color:var(--hint)">Не удалось загрузить заказы — проверьте связь.</p>
+        <button class="closebtn" id="ordersRetry">Повторить</button>`;
+      const б = $("ordersRetry");
+      if (б) б.onclick = loadAdminOrders;
+      return;
+    }
     const msg = ordersSearch.trim() ? "Ничего не найдено." : "Заказов нет.";
     $("ordersList").innerHTML = `<p style="color:var(--hint)">${msg}</p>`; return;
   }
