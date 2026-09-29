@@ -2626,7 +2626,7 @@ from partut.db.customers import (                                       # noqa: 
 from partut.db.catalog import (                                         # noqa: E402
     get_products, get_product, get_all_products, add_product,               # noqa: F401
     hide_model_products, update_field, toggle_hit, delete_product,          # noqa: F401
-    change_stock,                                                           # noqa: F401
+    change_stock, update_stock_if,                                         # noqa: F401
     get_brands, get_brand, find_brand_by_name, count_products_of_brand,     # noqa: F401
     rename_brand_in_products, known_flavors, merge_duplicate_brands,        # noqa: F401
     add_brand, update_brand, delete_brand,                                  # noqa: F401
@@ -2635,6 +2635,7 @@ from partut.db.catalog import (                                         # noqa: 
     propagate_model, orphan_flavors, count_products_of_model, delete_model, # noqa: F401
     add_product_from_model,                                                 # noqa: F401
     get_variants, get_all_variants, add_variant, delete_variants,           # noqa: F401
+    replace_variants_if,                                                    # noqa: F401
     change_variant_stock, recalc_product_stock,                             # noqa: F401
 )
 

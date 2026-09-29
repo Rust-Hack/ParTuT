@@ -627,8 +627,23 @@ function renderAdminList() {
   $("adminList").querySelectorAll("[data-hide]").forEach(b => b.onclick = () => toggleHidden(+b.dataset.hide));
 }
 
+// Сверяет список вариантов с тем, что было при открытии формы — по составу
+// вкусов и остатку каждого. Порядок не важен, значение остатка сравниваем
+// как строку: и инпут, и сохранённое число дают одинаковый вид ("5").
+function вариантыСовпадают(a, b) {
+  if (a.length !== b.length) return false;
+  const карта = new Map(b.map(v => [v.flavor, String(v.stock)]));
+  return a.every(v => карта.get(v.flavor) === String(v.stock));
+}
+
 // ----- Редактор товара -----
+// editOrig* — снимок остатка НА МОМЕНТ ОТКРЫТИЯ формы. Раньше поле остатка
+// (или список вариантов) слалось на сервер целиком при КАЖДОМ сохранении, даже
+// если человек правил только цену. Пока форма открыта, кто-то мог успеть
+// купить товар — сервер тихо принимал устаревшее число как новое, и реальная
+// продажа исчезала со склада. Сверяем с этим снимком: не трогали — не шлём.
 let editId = null, editVariants = [], editPhotoFile = null, editCategory = null;
+let editOrigStock = null, editOrigVariants = [];
 $("editClose").onclick = () => $("editView").classList.remove("show");
 
 function openEdit(id) {
@@ -636,6 +651,8 @@ function openEdit(id) {
   editId = id;
   editCategory = p.category;
   editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock }));
+  editOrigStock = p.stock;
+  editOrigVariants = editVariants.map(v => ({ flavor: v.flavor, stock: v.stock }));
   editPhotoFile = null;
   // id > 0 — только дополнительные: главное фото меняется отдельным полем выше.
   editPhotos = (p.photos || []).filter(g => g.id);
@@ -1175,18 +1192,39 @@ async function saveEdit(p) {
     if (p.model_id) {
       upd("price", $("edPrice").value, "цена");
       upd("cost", $("edCost").value || 0, "закупка");
+      let новыйОстаток = null;
       if (isVar) {
         const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
         if (!variants.length) { alertMsg(`Оставьте хотя бы одно значение: ${catVariant(p.category)}.`); return; }
-        await послать("/api/admin/product/variants", { initData, id: editId, variants }, catVariantMany(p.category).toLowerCase());
+        // Не тронули список — не шлём: нечего сверять, нечего задевать чужую продажу.
+        if (!вариантыСовпадают(variants, editOrigVariants)) {
+          const d = await послать("/api/admin/product/variants",
+                                  { initData, id: editId, variants, expected: editOrigVariants },
+                                  catVariantMany(p.category).toLowerCase());
+          // Сохранили этой же формой второй раз подряд (без переоткрытия) —
+          // сверяем со свежим снимком, а не с тем, что было при первом открытии.
+          if (d.ok) editOrigVariants = variants.map(v => ({ flavor: v.flavor, stock: v.stock }));
+        }
       } else {
-        upd("stock", $("edStock").value, "остаток");
+        новыйОстаток = $("edStock").value;
+        // Поле не трогали — не шлём его вовсе: правка одной цены не должна
+        // задевать остаток, который мог за это время честно продаться.
+        if (Number(новыйОстаток) !== Number(editOrigStock)) {
+          upd("stock", новыйОстаток, "остаток");
+          поля.expected_stock = editOrigStock;
+        } else {
+          новыйОстаток = null;
+        }
       }
       // Города у товара с моделью правятся галочками ниже, а не селектом.
       // Два контрола об одном и том же всегда расходятся: селект предлагал
       // продавцу Турова все города, включая те, куда сервер его не пустит.
       upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»");
-      await отправитьПоля();
+      const итогПолей = await отправитьПоля();
+      if (новыйОстаток !== null && итогПолей.ok
+          && !(итогПолей.failed && итогПолей.failed.stock)) {
+        editOrigStock = Number(новыйОстаток);
+      }
       // Точки — уже после того, как своя карточка сохранена: если что-то из
       // них упадёт, правки цены и остатка всё равно на месте.
       //

@@ -129,6 +129,21 @@ def change_stock(product_id, delta):
     conn.close()
 
 
+def update_stock_if(product_id, new_stock, expected_stock):
+    """Ставит остаток В ТОЧНОСТИ new_stock, но только если он всё ещё тот, что
+    видел клиент (expected_stock) — иначе кто-то купил товар, пока была
+    открыта карточка, и слепая перезапись стёрла бы эту продажу со склада.
+    Возвращает True, если применилось."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("UPDATE products SET stock = %s WHERE id = %s AND stock = %s"),
+                (new_stock, product_id, expected_stock))
+    applied = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return applied
+
+
 def get_brands(category=None):
     """Бренды. category — фильтр «для этой категории»: бренд с пустой категорией
     общий (Vaporesso делает и поды, и картриджи) и попадает в любой список."""
@@ -527,6 +542,52 @@ def delete_variants(product_id):
     cur.execute(db._q("DELETE FROM product_variants WHERE product_id = %s"), (product_id,))
     conn.commit()
     conn.close()
+
+
+def replace_variants_if(product_id, variants, expected=None):
+    """Заменяет список вариантов товара целиком — ОДНОЙ транзакцией (удаление,
+    вставка новых и пересчёт общего остатка не расходятся, если что-то
+    упадёт посередине — раньше это были три отдельных коммита).
+
+    Если передан expected ({"flavor": ..., "stock": ...} по текущим вкусам) —
+    применяет замену, только пока фактические остатки совпадают с ним. Иначе
+    товар мог продаться, пока была открыта карточка, а замена всем списком
+    тихо стёрла бы эту продажу. Возвращает True, если применилось; False —
+    при конфликте (ничего не меняется).
+    """
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        # Блокировка строки товара — тот же приём, что и у заказов
+        # (update_order_items): держит два одновременных сохранения этой же
+        # карточки друг за другом, а не бок о бок.
+        if db.USE_PG:
+            cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (product_id,))
+        else:
+            cur.execute("UPDATE products SET id = id WHERE id = ?", (product_id,))
+        if expected is not None:
+            cur.execute(db._q("SELECT flavor, stock FROM product_variants WHERE product_id = %s"),
+                        (product_id,))
+            текущие = {r["flavor"]: int(r["stock"]) for r in cur.fetchall()}
+            снимок = {v["flavor"]: int(v["stock"]) for v in expected}
+            if снимок != текущие:
+                conn.rollback()
+                conn.close()
+                return False
+        cur.execute(db._q("DELETE FROM product_variants WHERE product_id = %s"), (product_id,))
+        for v in variants:
+            cur.execute(db._q("INSERT INTO product_variants (product_id, flavor, stock) VALUES (%s, %s, %s)"),
+                        (product_id, v["flavor"], max(0, int(v["stock"]))))
+        cur.execute(db._q("""UPDATE products SET stock =
+                          (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                          WHERE id = %s"""), (product_id, product_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return True
 
 
 def change_variant_stock(product_id, flavor, delta):
