@@ -988,6 +988,16 @@ function снятьЧерновикТочек() {
       flavors: флаги,
     };
   });
+  // Точки, где товар УЖЕ есть: там правится только «оставить/убрать» —
+  // снятая галочка помечает точку на удаление (см. собратьТочки). Раньше
+  // черновик хранил только .pointadd (новые точки), и добавление вкуса
+  // (которое зовёт обновитьБлокТочек → renderEditPoints → свежая разметка
+  // с checked по умолчанию) молча возвращало снятую галочку обратно.
+  узел.querySelectorAll(".pointrow[data-have]").forEach(блок => {
+    const чек = блок.querySelector(".pchk");
+    if (чек.disabled) return;   // своя точка — переключать нечего, всегда отмечена
+    черновик["have:" + блок.dataset.city] = { checked: чек.checked };
+  });
   return черновик;
 }
 
@@ -1014,6 +1024,12 @@ function применитьЧерновикТочек(черновик) {
       строка.querySelector(".pfchk").checked = ф.checked;
       строка.querySelector(".pfst").value = ф.stock;
     });
+  });
+  узел.querySelectorAll(".pointrow[data-have]").forEach(блок => {
+    const чек = блок.querySelector(".pchk");
+    if (чек.disabled) return;
+    const сохранено = черновик["have:" + блок.dataset.city];
+    if (сохранено) чек.checked = сохранено.checked;
   });
 }
 
