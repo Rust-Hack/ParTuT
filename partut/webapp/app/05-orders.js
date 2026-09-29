@@ -287,7 +287,16 @@ function renderOrders() {
     const msg = ordersSearch.trim() ? "Ничего не найдено." : "Заказов нет.";
     $("ordersList").innerHTML = `<p style="color:var(--hint)">${msg}</p>`; return;
   }
-  $("ordersList").innerHTML = list.map(o => {
+  // Список не пуст, но он мог остаться СТАРЫМ: ordersLoadFailed сохраняет
+  // прежние заказы вместо пустоты (см. выше), однако само по себе непустое
+  // «списком заказов» — это не то же самое, что «список актуален». Раньше
+  // это предупреждение показывалось только когда список был пуст, и сбой
+  // повторной загрузки на фоне непустого списка проходил незамеченным.
+  const баннерОшибки = ordersLoadFailed
+    ? `<div class="dwarn">⚠️ Не удалось обновить список — ниже прежние данные, возможно устаревшие.
+         <button class="closebtn" id="ordersRetry" style="margin-top:8px">Повторить</button></div>`
+    : "";
+  $("ordersList").innerHTML = баннерОшибки + list.map(o => {
     const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
     const items = (o.items || []).map(it =>
       `<div class="oitem"><span>${esc(имяПозиции(it))} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} Br</span></div>`).join("");
@@ -331,6 +340,7 @@ function renderOrders() {
       <div class="oacts">${acts}<button class="omsg" data-omsg="${o.user_id}" data-owho="${esc(who)}">✍️ Написать</button>${edit}<button class="omsg" data-ocomp="${o.id}" data-owho="${esc(who)}">🎁 Компенсация</button></div>
     </div>`;
   }).join("");
+  if (ordersLoadFailed) { const б = $("ordersRetry"); if (б) б.onclick = loadAdminOrders; }
   $("ordersList").querySelectorAll("[data-oact]").forEach(b => b.onclick = () => orderAction(+b.dataset.oid, b.dataset.oact));
   $("ordersList").querySelectorAll("[data-omsg]").forEach(b => b.onclick = () => openAdminMsg(+b.dataset.omsg, b.dataset.owho));
   $("ordersList").querySelectorAll("[data-oedit]").forEach(b => b.onclick = () => openOrderEdit(+b.dataset.oedit));
