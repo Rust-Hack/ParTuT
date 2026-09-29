@@ -1351,7 +1351,16 @@ async function saveEdit(p) {
       upd("price", $("edPrice").value, "цена");
       upd("cost", $("edCost").value || 0, "закупка");
       if (name) upd("name", name, "название");
-      await послать("/api/admin/product/variants", { initData, id: editId, variants }, catVariantMany(p.category).toLowerCase());
+      // Тот же приём, что и у товара с моделью (см. выше): не тронули
+      // список — не шлём, а тронули — шлём со снимком на момент открытия,
+      // иначе чужая продажа между открытием формы и сохранением тихо
+      // перезатирается устаревшим числом.
+      if (!вариантыСовпадают(variants, editOrigVariants)) {
+        const d = await послать("/api/admin/product/variants",
+                                { initData, id: editId, variants, expected: editOrigVariants },
+                                catVariantMany(p.category).toLowerCase());
+        if (d.ok) editOrigVariants = variants.map(v => ({ flavor: v.flavor, stock: v.stock }));
+      }
     } else {
       const nm = $("edName").value.trim();
       if (!nm) { alertMsg("Введите название."); return; }
@@ -1359,7 +1368,13 @@ async function saveEdit(p) {
       upd("name", nm, "название");
       upd("price", $("edPrice").value, "цена");
       upd("cost", $("edCost").value || 0, "закупка");
-      upd("stock", $("edStock").value, "остаток");
+      // Как и у товара с моделью: остаток шлём, только если его правда
+      // тронули, и со снимком на момент открытия формы.
+      const новыйОстаток = $("edStock").value;
+      if (Number(новыйОстаток) !== Number(editOrigStock)) {
+        upd("stock", новыйОстаток, "остаток");
+        expectedStock = editOrigStock;
+      }
       const brandName = pickerValue("edBrand");
       await ensureBrandExists(brandName);
       upd("brand", brandName, "бренд");
@@ -1371,7 +1386,13 @@ async function saveEdit(p) {
     await послать("/api/admin/product/specs", { initData, id: editId, specs }, "характеристики");
     upd("city", $("edCity").value, "точка");
     upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»");
-    await отправитьПоля();
+    const итогПолейЛегаси = await отправитьПоля();
+    // Сохранили этой же формой второй раз подряд без переоткрытия — сверяем
+    // со свежим снимком, а не с тем, что было при первом открытии.
+    if (expectedStock !== null && итогПолейЛегаси.ok
+        && !(итогПолейЛегаси.failed && итогПолейЛегаси.failed.stock)) {
+      editOrigStock = Number(поля.stock);
+    }
     if (editPhotoFile) {
       const fd = new FormData();
       fd.append("initData", initData); fd.append("id", editId); fd.append("file", editPhotoFile);
