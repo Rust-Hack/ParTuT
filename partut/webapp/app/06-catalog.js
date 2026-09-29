@@ -645,6 +645,10 @@ function вариантыСовпадают(a, b) {
 let editId = null, editVariants = [], editPhotoFile = null, editCategory = null;
 let editOrigStock = null, editOrigVariants = [];
 let editOrigPrice = null, editOrigCost = null, editOrigHit = null, editOrigPoints = null;
+// Только у товара без модели: там правятся название, категория, точка,
+// бренд, вкус и описание — у товара из «Ассортимента» этих полей в форме нет.
+let editOrigName = null, editOrigCat = null, editOrigCity = null, editOrigDesc = null,
+    editOrigBrand = null, editOrigFlavor = null;
 
 // Правда, только если что-то реально изменили с момента открытия формы.
 // Раньше «Закрыть» и «Открыть модель» уходили молча — набранная цена, вкус
@@ -652,7 +656,11 @@ let editOrigPrice = null, editOrigCost = null, editOrigHit = null, editOrigPoint
 // не было заметно, пока не открывал карточку заново.
 function формаИзменена() {
   if (!editId) return false;
-  const p = точкиТовар;
+  // Раньше брали точкиТовар — а её выставляет только renderEditPoints(), то
+  // есть только у товара с моделью. У товара без модели точкиТовар оставалась
+  // null (или вообще от ранее открытой чужой карточки), и проверка выходила
+  // ещё до сравнения цены: закрытие с несохранённой правкой уходило молча.
+  const p = shelf().find(x => x.id === editId);
   if (!p) return false;
   if ($("edPrice") && Number($("edPrice").value) !== Number(editOrigPrice)) return true;
   if ($("edCost") && ($("edCost").value || "") !== String(editOrigCost)) return true;
@@ -663,6 +671,14 @@ function формаИзменена() {
   } else if ($("edStock") && Number($("edStock").value) !== Number(editOrigStock)) {
     return true;
   }
+  // Поля, которые есть только в форме товара без модели.
+  if ($("edName") && $("edName").value.trim() !== editOrigName) return true;
+  if ($("edCat") && $("edCat").value !== editOrigCat) return true;
+  if ($("edCity") && $("edCity").value !== editOrigCity) return true;
+  if ($("edDesc") && $("edDesc").value.trim() !== editOrigDesc) return true;
+  if ($("edBrand") && pickerValue("edBrand") !== editOrigBrand) return true;
+  if ($("edFlavor") && pickerValue("edFlavor") !== editOrigFlavor) return true;
+  if (editPhotoFile) return true;
   if (editOrigPoints !== null && JSON.stringify(снятьЧерновикТочек()) !== editOrigPoints) return true;
   return false;
 }
@@ -683,6 +699,8 @@ function openEdit(id) {
   editOrigStock = p.stock;
   editOrigVariants = editVariants.map(v => ({ flavor: v.flavor, stock: v.stock }));
   editOrigPrice = p.price; editOrigCost = p.cost || ""; editOrigHit = !!p.is_hit;
+  editOrigName = p.name; editOrigCat = p.category; editOrigCity = p.city;
+  editOrigDesc = p.description || ""; editOrigBrand = p.brand || ""; editOrigFlavor = p.flavor || "";
   editPhotoFile = null;
   // id > 0 — только дополнительные: главное фото меняется отдельным полем выше.
   editPhotos = (p.photos || []).filter(g => g.id);
