@@ -644,7 +644,36 @@ function вариантыСовпадают(a, b) {
 // продажа исчезала со склада. Сверяем с этим снимком: не трогали — не шлём.
 let editId = null, editVariants = [], editPhotoFile = null, editCategory = null;
 let editOrigStock = null, editOrigVariants = [];
-$("editClose").onclick = () => $("editView").classList.remove("show");
+let editOrigPrice = null, editOrigCost = null, editOrigHit = null, editOrigPoints = null;
+
+// Правда, только если что-то реально изменили с момента открытия формы.
+// Раньше «Закрыть» и «Открыть модель» уходили молча — набранная цена, вкус
+// или заполненная вторая точка терялись без единого предупреждения, и это
+// не было заметно, пока не открывал карточку заново.
+function формаИзменена() {
+  if (!editId) return false;
+  const p = точкиТовар;
+  if (!p) return false;
+  if ($("edPrice") && Number($("edPrice").value) !== Number(editOrigPrice)) return true;
+  if ($("edCost") && ($("edCost").value || "") !== String(editOrigCost)) return true;
+  if ($("edHit") && $("edHit").checked !== editOrigHit) return true;
+  if (hasVariants(p)) {
+    const текущие = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
+    if (!вариантыСовпадают(текущие, editOrigVariants)) return true;
+  } else if ($("edStock") && Number($("edStock").value) !== Number(editOrigStock)) {
+    return true;
+  }
+  if (editOrigPoints !== null && JSON.stringify(снятьЧерновикТочек()) !== editOrigPoints) return true;
+  return false;
+}
+
+// Общее место для любого выхода из редактора: спросить, если есть что терять.
+function закрытьРедактор(закрыть) {
+  if (!формаИзменена()) { закрыть(); return; }
+  confirmMsg("Есть несохранённые изменения. Закрыть без сохранения?", закрыть);
+}
+
+$("editClose").onclick = () => закрытьРедактор(() => $("editView").classList.remove("show"));
 
 function openEdit(id) {
   const p = shelf().find(x => x.id === id); if (!p) return;
@@ -653,10 +682,13 @@ function openEdit(id) {
   editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock }));
   editOrigStock = p.stock;
   editOrigVariants = editVariants.map(v => ({ flavor: v.flavor, stock: v.stock }));
+  editOrigPrice = p.price; editOrigCost = p.cost || ""; editOrigHit = !!p.is_hit;
   editPhotoFile = null;
   // id > 0 — только дополнительные: главное фото меняется отдельным полем выше.
   editPhotos = (p.photos || []).filter(g => g.id);
   renderEdit(p);
+  // Снимок блока точек — уже ПОСЛЕ того, как renderEdit его отрисовал.
+  editOrigPoints = $("edPoints") ? JSON.stringify(снятьЧерновикТочек()) : null;
   $("editView").classList.add("show");
 }
 
@@ -773,10 +805,10 @@ function renderEdit(p) {
     // (для edVarList). Кнопки рисовались, но ничего не делали.
     bindQty($("editView"));
     renderEditPoints(p, md);
-    $("edToModel").onclick = () => {
+    $("edToModel").onclick = () => закрытьРедактор(() => {
       $("editView").classList.remove("show");
       openModels().then(() => editModel(p.model_id));
-    };
+    });
     $("edSave").onclick = () => saveEdit(p);
     return;
   }
@@ -1021,7 +1053,7 @@ function renderEditPoints(p, md) {
   });
   применитьЧерновикТочек(черновик);
 
-  узел.querySelectorAll("[data-gopoint]").forEach(b => b.onclick = () => openEdit(+b.dataset.gopoint));
+  узел.querySelectorAll("[data-gopoint]").forEach(b => b.onclick = () => закрытьРедактор(() => openEdit(+b.dataset.gopoint)));
 }
 
 // Вкусы одной точки: галочка «этот вкус тут есть» + количество.
