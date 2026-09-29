@@ -911,10 +911,67 @@ async function сделатьМоделью(p) {
   alertMsg("Готово ✅\n\nОписание уехало в «Ассортимент». Ниже появились точки продаж.");
 }
 
+// Снимок того, что уже введено в блоке точек, — ДО того как его перерисуют.
+// Добавление вкуса дёргает обновитьБлокТочек (список вариантов внизу должен
+// совпадать со списком наверху), а перерисовка раньше просто стирала галочки,
+// цену/закупку и введённые количества: человек отмечал точку, вводил цену —
+// добавил ещё вкус — и всё введённое молча пропадало, сохранить это было
+// нельзя, даже не заметив пропажи.
+function снятьЧерновикТочек() {
+  const узел = $("edPoints");
+  const черновик = {};
+  if (!узел) return черновик;
+  узел.querySelectorAll(".pointadd").forEach(блок => {
+    const флаги = {};
+    блок.querySelectorAll("[data-flavor]").forEach(строка => {
+      флаги[строка.dataset.flavor] = {
+        checked: строка.querySelector(".pfchk").checked,
+        stock: строка.querySelector(".pfst").value,
+      };
+    });
+    const поле = блок.querySelector(".pstock");
+    черновик[блок.dataset.city] = {
+      checked: блок.querySelector(".pchk").checked,
+      price: блок.querySelector(".pprice").value,
+      cost: блок.querySelector(".pcost").value,
+      stock: поле ? поле.value : null,
+      flavors: флаги,
+    };
+  });
+  return черновик;
+}
+
+// Возвращает то, что было в снимке, поверх свежей разметки. Новый вкус,
+// которого в снимке ещё не было, остаётся с тем же значением по умолчанию
+// (отмечен, 0) — восстанавливать там нечего.
+function применитьЧерновикТочек(черновик) {
+  const узел = $("edPoints");
+  if (!узел) return;
+  узел.querySelectorAll(".pointadd").forEach(блок => {
+    const сохранено = черновик[блок.dataset.city];
+    if (!сохранено) return;
+    const чек = блок.querySelector(".pchk");
+    чек.checked = сохранено.checked;
+    блок.querySelector(".pbody").style.display = сохранено.checked ? "" : "none";
+    блок.querySelector(".pprice").value = сохранено.price;
+    блок.querySelector(".pcost").value = сохранено.cost;
+    if (сохранено.checked) renderPointFlavors(блок, блок.dataset.city);
+    const поле = блок.querySelector(".pstock");
+    if (поле && сохранено.stock !== null) поле.value = сохранено.stock;
+    блок.querySelectorAll("[data-flavor]").forEach(строка => {
+      const ф = сохранено.flavors[строка.dataset.flavor];
+      if (!ф) return;
+      строка.querySelector(".pfchk").checked = ф.checked;
+      строка.querySelector(".pfst").value = ф.stock;
+    });
+  });
+}
+
 function renderEditPoints(p, md) {
   точкиТовар = p; точкиМодель = md;
   const узел = $("edPoints");
   if (!узел) return;
+  const черновик = снятьЧерновикТочек();
   const мой = myScope();
   const вкусы = editPointList();
   editPointFlavors = {};
@@ -962,6 +1019,7 @@ function renderEditPoints(p, md) {
       if (чек.checked) renderPointFlavors(блок, город);
     };
   });
+  применитьЧерновикТочек(черновик);
 
   узел.querySelectorAll("[data-gopoint]").forEach(b => b.onclick = () => openEdit(+b.dataset.gopoint));
 }
