@@ -703,18 +703,13 @@
       <div class="ochips chiprow" id="admLocChips"></div>
       <div class="ochips chiprow" id="admStockChips"></div>
       <div class="ochips chiprow" id="admCatChips"></div>
-      <!-- Сколько товаров показано и крупный завоз разом: без него каждая
-           позиция партии — отдельный тап «Записать». У товара со вкусами
-           остаток свой на каждый вкус — для него кнопка «по вкусам ›» в окно
-           склада, там строка на вкус. -->
+      <!-- Сколько товаров показано и приём поставки: несколько товаров и
+           их вариантов одним «Провести» (экран #supplyView ниже). -->
       <div class="listbar">
         <span class="listcount" id="admCount"></span>
-        <button class="barbtn" id="batchModeBtn">📦 Массовый приход</button>
+        <button class="barbtn" id="supplyOpen">📦 Приём поставки</button>
       </div>
       <div id="adminList"></div>
-      <div id="batchBar" style="display:none;position:sticky;bottom:8px;margin-top:10px">
-        <button class="bigbtn" id="batchSave">Записать приход</button>
-      </div>
     </div>
   </div>
 
@@ -727,6 +722,28 @@
     <div class="card-block">
       <input id="stockPickSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
       <div id="stockPickList"></div>
+    </div>
+  </div>
+
+  <!-- Приём поставки: одна точка, несколько товаров и их вариантов, одно
+       «Провести». Раньше завоз был «Массовым приходом» в списке, где товар со
+       вкусами открывал своё окно склада, закупки и итога не было, а набранное
+       пропадало с закрытием приложения. Черновик теперь живёт в телефоне
+       вместе с ключами операций: свернул приложение, пропала связь — ничего
+       не потеряно и дважды не запишется. -->
+  <div class="view ontop" id="supplyView">
+    <div class="viewhead"><h2>📦 Приём поставки</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="supplyClose">‹ Назад</button></div>
+    <div class="sect dlvtop">
+      <div class="ochips chiprow" id="dlvPoints"></div>
+      <div class="dlvscope" id="dlvScope"></div>
+      <input id="dlvFind" class="admsearch" placeholder="🔍 Какой товар привезли?" autocomplete="off">
+      <div id="dlvFound"></div>
+    </div>
+    <div id="dlvDoc"></div>
+    <div class="dlvbar" id="dlvBar">
+      <div class="dlvsum" id="dlvSum"></div>
+      <button class="bigbtn" id="dlvPost">Провести поставку</button>
     </div>
   </div>
 

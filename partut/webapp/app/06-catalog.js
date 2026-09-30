@@ -524,100 +524,6 @@ function renderStockPick() {
   });
 }
 
-// ----- Массовый приход: несколько товаров одним запросом -----
-// Раньше завоз партии из пятнадцати позиций был пятнадцатью отдельными
-// «Записать». Товар со вкусами идёт через окно склада — там строка на каждый
-// вкус, и всё тоже одним «Записать».
-let batchMode = false;
-// Введённое — по товару, отдельно от разметки: смена фильтра или поиск
-// перерисовывают список и раньше стирали набранные числа.
-let batchDraft = {}, batchTokens = {}, batchErrors = {};
-// Товар -> что уже записано раньше («Приход +10»), когда сервер узнал ключ
-// прошлой попытки, а число с тех пор поменяли (см. то же в окне склада).
-let batchConflicts = {};
-$("batchModeBtn").onclick = () => {
-  batchMode = !batchMode;
-  $("batchModeBtn").classList.toggle("active", batchMode);
-  // Рядом со строкой «Впишите, сколько привезли» короткое «Отменить» ясно
-  // само: длинное «Отменить массовый приход» на узком телефоне не влезало.
-  $("batchModeBtn").textContent = batchMode ? "✕ Отменить" : "📦 Массовый приход";
-  $("batchBar").style.display = batchMode ? "" : "none";
-  if (!batchMode) { batchDraft = {}; batchTokens = {}; batchErrors = {}; batchConflicts = {}; }
-  renderAdminList();
-};
-function batchItems() {
-  return Object.entries(batchDraft)
-    .map(([id, v]) => ({ id: +id, qty: Number(String(v).trim()) }))
-    .filter(x => String(batchDraft[x.id]).trim() !== "");
-}
-$("batchSave").onclick = () => batchЗаписать(false);
-
-async function batchЗаписать(подтверждено) {
-  const items = batchItems();
-  if (!items.length) { alertMsg("Впишите количество хотя бы для одного товара."); return; }
-  const кривые = items.filter(x => !Number.isInteger(x.qty) || x.qty <= 0);
-  if (кривые.length) {
-    кривые.forEach(x => { batchErrors[x.id] = "Проверьте число."; });
-    renderAdminList(); return;
-  }
-  // По товару уже записано раньше — новая запись только осознанно.
-  const уже = items.filter(x => batchConflicts[x.id]);
-  if (уже.length && !подтверждено) {
-    const имя = (id) => (shelf().find(p => p.id === id) || { name: "товар" }).name;
-    confirmMsg(уже.map(x => `«${имя(x.id)}»: уже записано ${batchConflicts[x.id]}.`).join("\n")
-               + "\n\nЗаписать новые числа отдельной операцией?", () => batchЗаписать(true));
-    return;
-  }
-  // Ключ попытки у каждой строки — пока по ней не пришёл ответ: ответ
-  // потерялся, нажали ещё раз — сервер не запишет приход второй раз.
-  items.forEach(x => { if (!batchTokens[x.id]) batchTokens[x.id] = новыйКлючОперации(); x.token = batchTokens[x.id]; });
-  const btn = $("batchSave");
-  btn.disabled = true; btn.textContent = "Записываю…";
-  try {
-    const r = await fetch("/api/admin/stock/move/batch", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData, reason: "in", items }) });
-    const d = await r.json().catch(() => ({}));
-    // 5xx — сервер споткнулся посередине: часть строк могла записаться. Это
-    // тот же «исход неизвестен», что и обрыв сети, — ключи строк сохраняем.
-    if (r.status >= 500) throw new Error("server_error");
-    // Отказ всей пачке (права, пустой список): не записано ничего, ключи отработали.
-    if (!r.ok || !d.ok) { batchTokens = {}; alertMsg(d.message || "Не удалось записать приход."); return; }
-    let записано = 0;
-    (d.done || []).forEach(x => {
-      const id = items[x.index] && items[x.index].id; if (id === undefined) return;
-      delete batchDraft[id]; delete batchTokens[id]; delete batchErrors[id]; delete batchConflicts[id]; записано++;
-    });
-    const провалы = Object.entries(d.failed || {});
-    провалы.forEach(([i, f]) => {
-      const id = items[+i] && items[+i].id; if (id === undefined) return;
-      delete batchTokens[id];
-      if (f.error === "token_reused") {
-        // Прошлая попытка уже проведена — число из поля не повторяем, иначе
-        // следующий тап записал бы его как новый приход.
-        const р = f.recorded;
-        batchConflicts[id] = р ? `приход ${р.delta > 0 ? "+" : ""}${р.delta}` : "операция";
-        delete batchDraft[id]; delete batchErrors[id];
-        return;
-      }
-      batchErrors[id] = f.message || ОТКАЗЫ[f.error] || "Не записано.";
-    });
-    await refreshProducts();
-    if (!провалы.length) {
-      batchMode = false; $("batchModeBtn").classList.remove("active");
-      $("batchModeBtn").textContent = "📦 Массовый приход"; $("batchBar").style.display = "none";
-    }
-    renderAdminList();
-    alertMsg(провалы.length
-      ? `Записано ${записано}, не прошло ${провалы.length} — причина у каждой строки, числа на месте.`
-      : `Готово ✅ Приход записан по ${записано} ${plural(записано, "товару", "товарам", "товарам")}.`);
-  } catch (e) {
-    // Ответа нет: запись могла и пройти. Ключи строк не меняем — повторное
-    // нажатие сервер узнает и второй раз не запишет.
-    const что = e && e.message === "server_error" ? "Сервер ответил ошибкой." : текстСбоя(e);
-    alertMsg(что + "\n\nЧисла на месте. Нажмите «Записать приход» ещё раз — дважды не запишется.");
-  } finally { btn.disabled = false; btn.textContent = "Записать приход"; }
-}
-
 // Перерисовка списка (после правки цены, прихода, обновления с сервера) не
 // должна уносить человека к началу: поиск и фильтры живут в переменных и
 // переживают её сами, а положение прокрутки — нет, его держим здесь.
@@ -650,8 +556,7 @@ function нарисоватьСписокТоваров() {
   });
   // Сколько показано — и заодно видно, что отбор включён: «3 товара» при
   // забытом фильтре читались бы как «на точке всего три».
-  счёт.textContent = batchMode ? "Впишите, сколько привезли"
-    : list.length === свои.length ? `${свои.length} ${plural(свои.length, "товар", "товара", "товаров")}`
+  счёт.textContent = list.length === свои.length ? `${свои.length} ${plural(свои.length, "товар", "товара", "товаров")}`
     : `Показано ${list.length} из ${свои.length}`;
   if (!list.length) {
     const msg = admStockFilter === "out" ? "Ничего не кончилось — на всех точках есть остаток."
@@ -664,14 +569,6 @@ function нарисоватьСписокТоваров() {
   // сообщает, а место под сведения на узком телефоне дорого.
   const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
   $("adminList").innerHTML = list.map(p => строкаТовара(p, сТочкой)).join("");
-  if (batchMode) {
-    $("adminList").querySelectorAll("[data-batchqty]").forEach(inp => inp.oninput = () => {
-      batchDraft[+inp.dataset.batchqty] = inp.value;
-      delete batchErrors[+inp.dataset.batchqty];
-    });
-    $("adminList").querySelectorAll("[data-batchvar]").forEach(b => b.onclick = () => openStockMove(+b.dataset.batchvar, "in"));
-    return;                      // в этом режиме действуют не кнопки, а поля выше
-  }
   $("adminList").querySelectorAll("[data-price]").forEach(b => b.onclick = () => открытьЦену(+b.dataset.price));
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
@@ -681,7 +578,7 @@ function нарисоватьСписокТоваров() {
 // «3 вкуса», «4 цвета», «2 сопротивления» — словом категории, а не безликим
 // «3 варианта»: у жидкости владелец думает вкусами, у пода — расцветками.
 // Слово он задаёт в категории сам; склоняем известные, остальное — «варианты».
-// Последняя форма — для кнопки «Приход по вкусам ›» в массовом приходе.
+// Последняя форма — для «Всем показанным вкусам» в приёме поставки.
 const ФОРМЫ_ВАРИАНТА = { "вкус": ["вкус", "вкуса", "вкусов", "вкусам"], "цвет": ["цвет", "цвета", "цветов", "цветам"],
   "сопротивление": ["сопротивление", "сопротивления", "сопротивлений", "сопротивлениям"] };
 const формыВарианта = (p) => ФОРМЫ_ВАРИАНТА[String(catVariant(p.category) || "").trim().toLowerCase()]
@@ -725,12 +622,9 @@ function строкаТовара(p, сТочкой) {
   const снят = p.hidden ? `<span class="tagbadge offtag">снят с витрины</span>` : "";
   // Цена-кнопка. Пока по цене есть сомнение (ответ не пришёл, запрос в
   // пути), строка так и говорит: число может быть уже неправдой, нажатие
-  // сверит его с сервером. В массовом приходе речь о количествах — там цена
-  // просто видна.
+  // сверит его с сервером.
   const сомнение = ценаСомнительна(p.id);
-  const цена = batchMode
-    ? `<span class="pricetext">${(+p.price).toFixed(2)} Br</span>`
-    : `<button type="button" class="pricetap${сомнение ? " unsure" : ""}" data-price="${p.id}"
+  const цена = `<button type="button" class="pricetap${сомнение ? " unsure" : ""}" data-price="${p.id}"
          aria-label="${сомнение ? "Цена не подтверждена — нажмите, чтобы сверить" : "Изменить цену"}">${(+p.price).toFixed(2)} Br</button>`;
   // Действия — снизу и с подписями: «📦 Склад» и «✏️ Карточка» нужны
   // каждый день. Редкие — «снять с витрины» и «удалить» — в меню «⋯»:
@@ -741,24 +635,13 @@ function строкаТовара(p, сТочкой) {
       <button type="button" class="actbtn" data-edit="${p.id}">✏️ Карточка</button>
       <button type="button" class="actbtn more" data-more="${p.id}" aria-label="Ещё: снять с витрины, удалить">⋯</button>
     </div>`;
-  // В массовом приходе — поле количества вместо кнопок действий. Товар со
-  // вкусами: остаток у него свой на каждый вкус, и одна цифра «+N» не
-  // сказала бы, какому, — для него кнопка в окно склада, где строка на вкус.
-  const приход = hasVariants(p)
-    ? `<div class="prodacts batch"><button type="button" class="actbtn" data-batchvar="${p.id}">📦 Приход по ${формыВарианта(p)[3]} ›</button></div>`
-    : `<div class="prodacts batch"><label for="batchqty${p.id}">Приход, шт</label>
-         <input id="batchqty${p.id}" type="number" min="0" inputmode="numeric" placeholder="+0" data-batchqty="${p.id}"
-             value="${esc(batchDraft[p.id] ?? "")}"></div>`;
-  const ошибка = (batchConflicts[p.id]
-      ? `<div class="dwarn" style="margin-top:8px">Уже записано раньше: ${esc(batchConflicts[p.id])}. Если привезли ещё — впишите, сколько добавить.</div>` : "")
-    + (batchErrors[p.id] ? `<div class="dwarn" style="margin-top:8px">${esc(batchErrors[p.id])}</div>` : "");
   return `<div class="admrow prodrow${p.hidden ? " off" : ""}">
       <div class="prodtop">
         <div class="prodhead"><div class="prodname">${esc(p.name)}</div><div class="prodstock">${остаток}</div></div>
         ${цена}
       </div>
       ${снят || детали ? `<div class="prodmeta">${снят}${снят && детали ? " " : ""}${детали}</div>` : ""}
-      ${batchMode ? приход + ошибка : действия}
+      ${действия}
     </div>`;
 }
 

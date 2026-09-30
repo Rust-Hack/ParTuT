@@ -1080,8 +1080,6 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
    быть уже неправдой — строка говорит об этом, а нажатие сверит с сервером. */
 .pricetap.unsure { background: transparent; box-shadow: inset 0 0 0 1.5px var(--warn); }
 .pricetap.unsure::after { content: "?"; font-weight: 800; color: var(--warn); }
-.pricetext { flex: 0 0 auto; padding-top: 1px; font-size: 16px; font-weight: 800;
-  font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .prodacts { display: grid; grid-template-columns: 1fr 1fr 44px; gap: 8px; margin-top: 12px; }
 .actbtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; min-width: 0;
@@ -1089,12 +1087,6 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
   font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; touch-action: manipulation; }
 .actbtn:active { filter: brightness(.94); }
 .actbtn.more { padding: 0; font-size: 18px; letter-spacing: 1px; }
-/* Массовый приход: вместо действий — поле количества. */
-.prodacts.batch { display: flex; align-items: center; gap: 10px; }
-.prodacts.batch .actbtn { flex: 1; }
-.prodacts.batch label { color: var(--hint); font-size: 13.5px; font-weight: 600; }
-.prodacts.batch input { width: 96px; min-height: 44px; padding: 8px; border-radius: 12px; border: 1px solid var(--line);
-  background: var(--surface); color: var(--text); font-size: 16px; text-align: center; }
 /* Узкий телефон (320–359 px): поля экрана и карточки поуже, подписи
    кнопок помельче — «✏️ Карточка» и «⋯» остаются в одной строке, а
    область нажатия не уменьшается. */
@@ -1109,3 +1101,65 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 .pricescope { color: var(--hint); font-size: 13.5px; margin: -6px 0 12px; }
 .pricenow { font-size: 15px; margin: 0 0 10px; font-variant-numeric: tabular-nums; }
 .pricenow b { font-size: 18px; }
+
+/* ============================================================
+   Приём поставки (#supplyView): точка, поиск, карточки товаров
+   со строками вариантов и итог внизу.
+   ============================================================ */
+.sect.dlvtop { padding: 14px 16px 6px; }
+.dlvscope { color: var(--hint); font-size: 13.5px; line-height: 1.45; margin: 0 0 10px; }
+.dlvhint { color: var(--hint); font-size: 13px; margin: 6px 0 8px; }
+/* Найденное — строки-кнопки: весь ряд нажимается, «＋» подсказывает действие. */
+.dlvfound { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 0;
+  border: none; border-top: 1px solid var(--line); background: none; color: var(--text);
+  text-align: left; font: inherit; cursor: pointer; touch-action: manipulation; }
+.dlvfname { flex: 1; min-width: 0; font-weight: 700; font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.dlvfname small { display: block; color: var(--hint); font-weight: 400; font-size: 12.5px; margin-top: 2px; }
+.dlvfound b { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft);
+  color: var(--accent); display: inline-flex; align-items: center; justify-content: center; font-size: 20px; }
+/* Карточка товара в поставке */
+.sect.dlvcard { padding: 12px 16px 6px; }
+.dlvhead { display: flex; align-items: flex-start; gap: 10px; }
+.dlvname { flex: 1; min-width: 0; font-weight: 800; font-size: 16px; line-height: 1.3; padding-top: 8px; overflow-wrap: anywhere; }
+.dlvname small { display: block; color: var(--hint); font-weight: 600; font-size: 12.5px; margin-top: 2px; }
+.dlvhead .iconbtn { width: 40px; height: 40px; }
+.dlvcost { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 10px 0 4px; }
+.dlvcost label { color: var(--hint); font-size: 13.5px; font-weight: 600; }
+.dlvcost input { width: 104px; min-height: 40px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+.dlvwas { color: var(--warn); font-size: 12.5px; font-weight: 700; }
+.dlvvfind { margin: 8px 0 4px; }
+/* «Всем показанным» — над строками вариантов: подпись с числом строк, под
+   ней поле и «Вписать». Сколько строк получит число — написано прямо. */
+.dlvall { display: grid; grid-template-columns: 96px auto; justify-content: start; align-items: center; gap: 6px 8px;
+  margin: 8px 0 2px; padding: 10px 0; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line); }
+.dlvall label { grid-column: 1 / -1; color: var(--hint); font-size: 13.5px; font-weight: 700; }
+.dlvall input { width: 100%; min-height: 44px; padding: 8px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--text); font-size: 16px; font-weight: 700; text-align: center; }
+.dlvall .barbtn { min-height: 44px; }
+/* Строка варианта: название и «есть N» слева, поле «+шт» справа. */
+.dlvrow { display: grid; grid-template-columns: 1fr 96px; align-items: center; gap: 4px 12px;
+  padding: 10px 0; border-top: 1px solid var(--line); }
+.dlvrow:first-child { border-top: none; }
+.dlvvar { min-width: 0; font-weight: 600; font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.dlvvar small { display: block; color: var(--hint); font-weight: 400; font-size: 12.5px; margin-top: 1px; }
+.dlvrow input { width: 100%; min-height: 44px; padding: 8px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--text); font-size: 17px; font-weight: 700; text-align: center;
+  font-variant-numeric: tabular-nums; }
+.dlvrow input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.dlvrow.bad input { border-color: var(--danger); }
+.dlvrow input:disabled, .dlvcost input:disabled { opacity: .55; }
+.dlverr { grid-column: 1 / -1; color: var(--danger); font-size: 13px; font-weight: 600; }
+/* Проведённая строка — отметкой вместо поля: второй раз её не отправить. */
+.dlvrow.done .dlvvar { opacity: .7; }
+.dlvok { justify-self: end; color: var(--accent); font-weight: 800; font-size: 16px; text-align: right;
+  font-variant-numeric: tabular-nums; }
+.dlvok small { display: block; color: var(--hint); font-weight: 600; font-size: 11.5px; }
+/* Итог и «Провести» — всегда под рукой, внизу экрана. */
+.dlvbar { position: sticky; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); margin-top: 6px;
+  display: grid; gap: 8px; padding: 12px; border-radius: 16px; background: var(--surface);
+  box-shadow: 0 -2px 18px rgba(8, 40, 48, .12), var(--shadow); }
+.dlvsum { font-size: 14px; font-weight: 700; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.dlvsum.done { color: var(--accent); }
+.dlvbar .bigbtn { margin: 0; }
+html[data-theme="dark"] .dlvbar { border: 1px solid rgba(95,242,242,.22); box-shadow: 0 -2px 18px rgba(0,0,0,.5); }

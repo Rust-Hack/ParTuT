@@ -532,6 +532,7 @@ async function openProducts() {
   if (_adminBoot) await _adminBoot;
   renderAdmFilters();
   renderAdminList();
+  обновитьКнопкуПоставки();                              // напомнить о непроведённом черновике
   $("productsView").classList.add("show");
   выбранныеЧипыВВиду();                                  // размеры появились только сейчас
 }
