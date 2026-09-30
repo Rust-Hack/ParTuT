@@ -526,41 +526,73 @@ function renderStockPick() {
 
 // ----- Массовый приход: несколько товаров одним запросом -----
 // Раньше завоз партии из пятнадцати позиций был пятнадцатью отдельными
-// «Записать». Варианты со вкусами не входят: остаток у них свой на каждый
-// вкус, качественно то же самое действие делает редактор товара.
+// «Записать». Товар со вкусами идёт через окно склада — там строка на каждый
+// вкус, и всё тоже одним «Записать».
 let batchMode = false;
+// Введённое — по товару, отдельно от разметки: смена фильтра или поиск
+// перерисовывают список и раньше стирали набранные числа.
+let batchDraft = {}, batchTokens = {}, batchErrors = {};
 $("batchModeBtn").onclick = () => {
   batchMode = !batchMode;
   $("batchModeBtn").classList.toggle("active", batchMode);
   $("batchModeBtn").textContent = batchMode ? "✕ Отменить массовый приход" : "📦 Массовый приход";
   $("batchBar").style.display = batchMode ? "" : "none";
+  if (!batchMode) { batchDraft = {}; batchTokens = {}; batchErrors = {}; }
   renderAdminList();
 };
 function batchItems() {
-  return [...document.querySelectorAll("[data-batchqty]")]
-    .map(inp => ({ id: +inp.dataset.batchqty, qty: parseInt(inp.value, 10) || 0 }))
-    .filter(x => x.qty > 0);
+  return Object.entries(batchDraft)
+    .map(([id, v]) => ({ id: +id, qty: Number(String(v).trim()) }))
+    .filter(x => String(batchDraft[x.id]).trim() !== "");
 }
 $("batchSave").onclick = async () => {
   const items = batchItems();
   if (!items.length) { alertMsg("Впишите количество хотя бы для одного товара."); return; }
+  const кривые = items.filter(x => !Number.isInteger(x.qty) || x.qty <= 0);
+  if (кривые.length) {
+    кривые.forEach(x => { batchErrors[x.id] = "Проверьте число."; });
+    renderAdminList(); return;
+  }
+  // Ключ попытки у каждой строки — пока по ней не пришёл ответ: ответ
+  // потерялся, нажали ещё раз — сервер не запишет приход второй раз.
+  items.forEach(x => { if (!batchTokens[x.id]) batchTokens[x.id] = новыйКлючОперации(); x.token = batchTokens[x.id]; });
   const btn = $("batchSave");
   btn.disabled = true; btn.textContent = "Записываю…";
   try {
     const r = await fetch("/api/admin/stock/move/batch", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ initData, reason: "in", items }) });
-    const d = await r.json();
-    const провалы = Object.keys(d.failed || {}).length;
-    if (!d.ok) { alertMsg("Не удалось записать приход."); return; }
+    const d = await r.json().catch(() => ({}));
+    // 5xx — сервер споткнулся посередине: часть строк могла записаться. Это
+    // тот же «исход неизвестен», что и обрыв сети, — ключи строк сохраняем.
+    if (r.status >= 500) throw new Error("server_error");
+    // Отказ всей пачке (права, пустой список): не записано ничего, ключи отработали.
+    if (!r.ok || !d.ok) { batchTokens = {}; alertMsg(d.message || "Не удалось записать приход."); return; }
+    let записано = 0;
+    (d.done || []).forEach(x => {
+      const id = items[x.index] && items[x.index].id; if (id === undefined) return;
+      delete batchDraft[id]; delete batchTokens[id]; delete batchErrors[id]; записано++;
+    });
+    const провалы = Object.entries(d.failed || {});
+    провалы.forEach(([i, f]) => {
+      const id = items[+i] && items[+i].id; if (id === undefined) return;
+      delete batchTokens[id];
+      batchErrors[id] = f.message || ОТКАЗЫ[f.error] || "Не записано.";
+    });
     await refreshProducts();
-    batchMode = false; $("batchModeBtn").classList.remove("active");
-    $("batchModeBtn").textContent = "📦 Массовый приход"; $("batchBar").style.display = "none";
+    if (!провалы.length) {
+      batchMode = false; $("batchModeBtn").classList.remove("active");
+      $("batchModeBtn").textContent = "📦 Массовый приход"; $("batchBar").style.display = "none";
+    }
     renderAdminList();
-    alertMsg(провалы
-      ? `Записано ${(d.done || []).length}, не прошло ${провалы} — проверьте эти позиции отдельно.`
-      : `Готово ✅ Приход записан по ${(d.done || []).length} ${plural((d.done || []).length, "товару", "товарам", "товарам")}.`);
-  } catch (e) { alertMsg(текстСбоя(e)); }
-  finally { btn.disabled = false; btn.textContent = "Записать приход"; }
+    alertMsg(провалы.length
+      ? `Записано ${записано}, не прошло ${провалы.length} — причина у каждой строки, числа на месте.`
+      : `Готово ✅ Приход записан по ${записано} ${plural(записано, "товару", "товарам", "товарам")}.`);
+  } catch (e) {
+    // Ответа нет: запись могла и пройти. Ключи строк не меняем — повторное
+    // нажатие сервер узнает и второй раз не запишет.
+    const что = e && e.message === "server_error" ? "Сервер ответил ошибкой." : текстСбоя(e);
+    alertMsg(что + "\n\nЧисла на месте. Нажмите «Записать приход» ещё раз — дважды не запишется.");
+  } finally { btn.disabled = false; btn.textContent = "Записать приход"; }
 };
 
 function renderAdminList() {
@@ -600,50 +632,58 @@ function renderAdminList() {
         <button class="iconbtn" data-hide="${p.id}" title="${p.hidden ? 'Вернуть на витрину' : 'Снять с витрины'}">${p.hidden ? '👁' : '🚫'}</button>
         <button class="iconbtn" data-edit="${p.id}">✏️</button>
         <button class="iconbtn danger" data-del="${p.id}">🗑</button></div>`;
-    // В массовом приходе — поле количества вместо кнопок действий. Модели со
-    // вкусами сюда не входят: остаток у них свой на каждый вкус, для них
-    // это поле бессмысленно — цифра «стало N» не сказала бы, какому вкусу.
+    // В массовом приходе — поле количества вместо кнопок действий. Товар со
+    // вкусами: остаток у него свой на каждый вкус, и одна цифра «+N» не
+    // сказала бы, какому, — для него кнопка в окно склада, где строка на вкус.
+    const ошибка = batchErrors[p.id] ? `<div class="dwarn" style="flex-basis:100%;margin-top:4px">${esc(batchErrors[p.id])}</div>` : "";
     const batchTail = hasVariants(p)
-      ? `<span style="color:var(--hint);font-size:12px">через ✏️ редактор</span></div>`
+      ? `<button class="closebtn" data-batchvar="${p.id}" style="width:auto;padding:8px 10px;margin:0">по вкусам ›</button></div>`
       : `<input type="number" min="0" inputmode="numeric" placeholder="+шт" data-batchqty="${p.id}"
-             style="width:64px;text-align:center"></div>`;
+             value="${esc(batchDraft[p.id] ?? "")}" style="width:64px;text-align:center">${ошибка}</div>`;
     const фото = p.photo_url ? "фото ✓" : "без фото";
     const хит = p.is_hit ? " · 🔥" : "";
+    // «В заказах» — рядом с остатком: товар ещё на полке, но уже обещан.
+    // Без этого числа полка и список не сходились, и казалось, что лишнее.
+    const обещано = p.reserved ? ` (+${p.reserved} в заказах)` : "";
     if (hasVariants(p)) {
       // товар-модель: цену/вкусы/остаток правим в редакторе (✏️), но ВИДНО
       // цену должно быть здесь: за ней в этот список и заходят чаще всего.
-      return `<div class="admrow">
-        <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.variants.length} вк · ${p.stock} шт · ${фото}${хит}</small>${marks}</div>
+      return `<div class="admrow" style="flex-wrap:wrap">
+        <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.variants.length} вк · ${p.stock} шт${обещано} · ${фото}${хит}</small>${marks}</div>
         ${batchMode ? batchTail : tail}`;
     }
-    return `<div class="admrow">
-      <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт · ${фото}${хит}</small>${marks}</div>
+    return `<div class="admrow" style="flex-wrap:wrap">
+      <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт${обещано} · ${фото}${хит}</small>${marks}</div>
       ${batchMode ? batchTail : tail}`;
   }).join("");
-  if (batchMode) return;         // в этом режиме действуют не иконки, а data-batchqty выше
+  if (batchMode) {
+    $("adminList").querySelectorAll("[data-batchqty]").forEach(inp => inp.oninput = () => {
+      batchDraft[+inp.dataset.batchqty] = inp.value;
+      delete batchErrors[+inp.dataset.batchqty];
+    });
+    $("adminList").querySelectorAll("[data-batchvar]").forEach(b => b.onclick = () => openStockMove(+b.dataset.batchvar, "in"));
+    return;                      // в этом режиме действуют не иконки, а поля и кнопки выше
+  }
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
   $("adminList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => delAdminRow(+b.dataset.del));
   $("adminList").querySelectorAll("[data-hide]").forEach(b => b.onclick = () => toggleHidden(+b.dataset.hide));
 }
 
-// Сверяет список вариантов с тем, что было при открытии формы — по составу
-// вкусов и остатку каждого. Порядок не важен, значение остатка сравниваем
-// как строку: и инпут, и сохранённое число дают одинаковый вид ("5").
-function вариантыСовпадают(a, b) {
-  if (a.length !== b.length) return false;
-  const карта = new Map(b.map(v => [v.flavor, String(v.stock)]));
-  return a.every(v => карта.get(v.flavor) === String(v.stock));
-}
-
 // ----- Редактор товара -----
-// editOrig* — снимок остатка НА МОМЕНТ ОТКРЫТИЯ формы. Раньше поле остатка
-// (или список вариантов) слалось на сервер целиком при КАЖДОМ сохранении, даже
-// если человек правил только цену. Пока форма открыта, кто-то мог успеть
-// купить товар — сервер тихо принимал устаревшее число как новое, и реальная
-// продажа исчезала со склада. Сверяем с этим снимком: не трогали — не шлём.
+// Остаток в карточке не правится вовсе — ни числом, ни списком вкусов с
+// числами. Раньше правился, и любое сохранение (даже одной цены) могло
+// вернуть на полку то, что купили, пока форма была открыта; а само изменение
+// шло мимо истории склада. Теперь число меняет только «📦 Склад», а карточка
+// показывает его и ведёт туда.
+//
+// editOrig* — поля НА МОМЕНТ ОТКРЫТИЯ формы. Шлём только то, что человек
+// правда поменял, и вместе со снимком: если поле за это время поменял кто-то
+// другой, сервер не перезапишет чужую правку, а скажет о ней.
 let editId = null, editVariants = [], editPhotoFile = null, editCategory = null;
-let editOrigStock = null, editOrigVariants = [];
+// Состав вариантов меняется отдельно от их остатков: новые — с первым
+// приходом, убираемые — отметкой. Сохраняются вместе с карточкой.
+let editAdds = [], editRemoves = new Set();
 let editOrigPrice = null, editOrigCost = null, editOrigHit = null, editOrigPoints = null;
 // Только у товара без модели: там правятся название, категория, точка,
 // бренд, вкус и описание — у товара из «Ассортимента» этих полей в форме нет.
@@ -662,15 +702,10 @@ function формаИзменена() {
   // ещё до сравнения цены: закрытие с несохранённой правкой уходило молча.
   const p = shelf().find(x => x.id === editId);
   if (!p) return false;
-  if ($("edPrice") && Number($("edPrice").value) !== Number(editOrigPrice)) return true;
+  if ($("edPrice") && Number(String($("edPrice").value).replace(",", ".")) !== Number(editOrigPrice)) return true;
   if ($("edCost") && ($("edCost").value || "") !== String(editOrigCost)) return true;
   if ($("edHit") && $("edHit").checked !== editOrigHit) return true;
-  if (hasVariants(p)) {
-    const текущие = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
-    if (!вариантыСовпадают(текущие, editOrigVariants)) return true;
-  } else if ($("edStock") && Number($("edStock").value) !== Number(editOrigStock)) {
-    return true;
-  }
+  if (editAdds.length || editRemoves.size) return true;
   // Поля, которые есть только в форме товара без модели.
   if ($("edName") && $("edName").value.trim() !== editOrigName) return true;
   if ($("edCat") && $("edCat").value !== editOrigCat) return true;
@@ -695,9 +730,8 @@ function openEdit(id) {
   const p = shelf().find(x => x.id === id); if (!p) return;
   editId = id;
   editCategory = p.category;
-  editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock }));
-  editOrigStock = p.stock;
-  editOrigVariants = editVariants.map(v => ({ flavor: v.flavor, stock: v.stock }));
+  editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock, reserved: v.reserved || 0 }));
+  editAdds = []; editRemoves = new Set();
   editOrigPrice = p.price; editOrigCost = p.cost || ""; editOrigHit = !!p.is_hit;
   editOrigName = p.name; editOrigCat = p.category; editOrigCity = p.city;
   editOrigDesc = p.description || ""; editOrigBrand = p.brand || ""; editOrigFlavor = p.flavor || "";
@@ -727,6 +761,36 @@ function editPhotoBlock(p) {
     </div>
 `;
 }
+// Остаток в карточке — только для чтения, с дверью в склад. Раньше здесь было
+// поле с числом, и сохранение карточки ставило его поверх склада: чужая
+// продажа, случившаяся пока форма открыта, возвращалась на полку, а само
+// изменение шло мимо истории. Склад открывается поверх карточки — введённое
+// в карточке никуда не девается.
+function остатокВКарточке(p) {
+  return `<label style="margin-top:14px">Остаток</label>
+    <div class="dnote" id="edStockLine" style="margin:0 0 6px">${строкаОстатка(p)}</div>
+    <button type="button" class="closebtn" id="edStockOps">📦 Приход, списание, пересчёт</button>`;
+}
+function строкаОстатка(p) {
+  return `свободно <b>${p.stock}</b> шт` + (p.reserved ? ` · ещё ${p.reserved} в невыданных заказах` : "")
+    + (hasVariants(p) ? ` · по вариантам — в окне склада` : "");
+}
+function bindОстатокВКарточке(p) {
+  if ($("edStockOps")) $("edStockOps").onclick = () => openStockMove(p.id);
+}
+// Окно склада закрылось поверх открытой карточки — числа в карточке устарели.
+// Обновляем только их: набранные цена, вкусы и точки остаются как были.
+function обновитьОстатокВКарточке() {
+  if (!editId || !$("editView").classList.contains("show")) return;
+  const p = shelf().find(x => x.id === editId);
+  if (!p) return;
+  const свежие = new Map((p.variants || []).map(v => [v.flavor, v]));
+  editVariants = editVariants.map(v => свежие.has(v.flavor)
+    ? { ...v, stock: свежие.get(v.flavor).stock, reserved: свежие.get(v.flavor).reserved || 0 } : v);
+  if ($("edStockLine")) $("edStockLine").innerHTML = строкаОстатка(p);
+  if ($("edVarList")) renderEditVariants();
+}
+
 function editHitBlock(p) {
   return `<div class="chk" style="margin-top:12px"><input type="checkbox" id="edHit" ${p.is_hit ? 'checked' : ''}>
     <label for="edHit" style="margin:0">🔥 Отметить как «Хит»</label></div>`;
@@ -809,7 +873,8 @@ function renderEdit(p) {
         </div>
         ${isVar ? `<label>${esc(catVariantMany(p.category))} и остаток</label><div id="edVarList"></div>
           ${variantAddRowHtml(p.category, md ? md.flavors : [])}`
-          : `<label>Остаток (шт.)</label>${qtyHtml(p.stock, 'id="edStock"')}`}
+          : ""}
+        ${остатокВКарточке(p)}
         ${editHitBlock(p)}
         <label style="margin-top:18px">Точки продаж</label>
         <div id="edPoints"></div>
@@ -818,10 +883,8 @@ function renderEdit(p) {
         <button class="bigbtn" id="edSave" style="margin-top:10px">Сохранить</button>
       </div>`;
     if (isVar) { renderEditVariants(); bindVariantAdd(p.category); }
-    // Без вариантов остаток — обычный степпер qtyHtml('#edStock'), а его
-    // кнопки +/- нигде не навешивались: bindQty звался только в ветке isVar
-    // (для edVarList). Кнопки рисовались, но ничего не делали.
     bindQty($("editView"));
+    bindОстатокВКарточке(p);
     renderEditPoints(p, md);
     $("edToModel").onclick = () => закрытьРедактор(() => {
       $("editView").classList.remove("show");
@@ -842,8 +905,8 @@ function renderEdit(p) {
         <div class="rowf">
           <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
           <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
-          <div><label>Остаток (шт.)</label>${qtyHtml(p.stock, 'id="edStock"')}</div>
         </div>
+        ${остатокВКарточке(p)}
         <label>Бренд</label>${pickerHtml("edBrand", p.brand || "", brandNames(p.category), "+ Новый бренд…")}
         <label>Вкус (если есть)</label>${pickerHtml("edFlavor", p.flavor || "", knownFlavors, "+ Новый вкус…")}
         <div id="edSpecs">${specFieldsHtml(p.category, p.specs, "eds_")}</div>
@@ -854,9 +917,7 @@ function renderEdit(p) {
         <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
       </div>`;
     bindEditPhoto(); renderEditGallery();
-    // Кнопки –/+ оживляем после отрисовки: разметку собрал qtyHtml,
-    // обработчики вешаются здесь. Вкусы биндятся отдельно — они перерисовываются.
-    bindQty($("editView"));
+    bindОстатокВКарточке(p);
     // Товар без модели: кнопка «Сделать моделью» — единственный путь к точкам.
     if ($("edToModelNew")) $("edToModelNew").onclick = () => сделатьМоделью(p);
     bindPicker("edBrand"); bindPicker("edFlavor");
@@ -881,6 +942,7 @@ function renderEdit(p) {
       <label>${esc(catVariantMany(p.category))} и остаток</label>
       <div id="edVarList"></div>
       ${variantAddRowHtml(p.category, avail)}
+      ${остатокВКарточке(p)}
       ${editHitBlock(p)}
       ${editPhotoBlock(p)}
       ${toModelBlock()}
@@ -889,9 +951,8 @@ function renderEdit(p) {
   renderEditVariants();
   bindVariantAdd(p.category);
   bindEditPhoto(); renderEditGallery();
-  // Кнопки –/+ оживляем после отрисовки: разметку собрал qtyHtml,
-  // обработчики вешаются здесь. Вкусы биндятся отдельно — они перерисовываются.
   bindQty($("editView"));
+  bindОстатокВКарточке(p);
   // Товар без модели: кнопка «Сделать моделью» — единственный путь к точкам.
   if ($("edToModelNew")) $("edToModelNew").onclick = () => сделатьМоделью(p);
   $("edSave").onclick = () => saveEdit(p);
@@ -909,15 +970,15 @@ function renderEdit(p) {
 let editPointFlavors = {};     // город -> [вкусы], выбранные для этой точки
 
 function editPointList() {
-  // Вкусы берём ИЗ КАРТОЧКИ, прямо с экрана (editVariants), а не из сохранённой
-  // модели. Три причины, и все три — найденные грабли:
+  // Вкусы берём ИЗ КАРТОЧКИ, прямо с экрана, а не из сохранённой модели.
+  // Три причины, и все три — найденные грабли:
   //
   //  • добавил вкус вверху — он тут же виден внизу, а не после сохранения;
-  //  • верх и низ экрана говорят об одном товаре одинаково: если наверху
-  //    «Остаток» числом, то и внизу число, а не список вкусов;
+  //  • верх и низ экрана говорят об одном товаре одинаково;
   //  • своя кнопка «Добавить вкус» в блоке становится не нужна — а третье
   //    место, где заводят вкусы, это ровно то, из-за чего списки разошлись.
-  return editVariants.map(v => String(v.flavor || "").trim()).filter(Boolean);
+  return [...editVariants.filter(v => !editRemoves.has(v.flavor)).map(v => v.flavor), ...editAdds.map(a => a.flavor)]
+    .map(f => String(f || "").trim()).filter(Boolean);
 }
 
 let точкиТовар = null, точкиМодель = null;
@@ -1139,49 +1200,99 @@ function собратьТочки() {
 // (корзина, заказ, склад, выгрузка) она живёт как обычный «вкус», без единой
 // правки в этих местах.
 function variantAddRowHtml(category, flavorOptions) {
+  // Новый вариант приходит сразу с первым приходом: «Манго, 6 шт» — одним
+  // действием, и этот приход ложится в историю склада, как любой другой.
+  const сколько = `<input id="edNewQty" inputmode="numeric" placeholder="приход, шт" style="width:96px;flex:0 0 96px">`;
   if (!catTwoAxis(category)) {
     return `<div style="display:flex;gap:8px;margin-top:10px">
-      <input id="edNewFlavor" placeholder="Добавить: ${esc(catVariant(category).toLowerCase())}" style="flex:1" list="edFlavorOpts">
+      <input id="edNewFlavor" placeholder="Добавить: ${esc(catVariant(category).toLowerCase())}" style="flex:1;min-width:0" list="edFlavorOpts">
       <datalist id="edFlavorOpts">${flavorOptions.map(f => `<option value="${esc(f)}">`).join("")}</datalist>
+      ${сколько}
       <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
-    </div>`;
+    </div>
+    <div class="dnote" style="margin:4px 0 0">Можно вставить сразу список — через запятую или с новой строки.</div>`;
   }
   // Подсказка для первого измерения — то, что уже вводили для этого же товара:
   // одну и ту же крепость иначе пришлось бы перепечатывать на каждой строке.
-  const axis1Opts = [...new Set(editVariants.map(v => String(v.flavor || "").split(AXIS_SEP)[0]).filter(Boolean))];
-  return `<div style="display:flex;gap:8px;margin-top:10px">
-    <input id="edNewAxis1" placeholder="${esc(catVariant2(category))}" style="flex:1" list="edAxis1Opts">
+  const axis1Opts = [...new Set(editPointList().map(f => String(f).split(AXIS_SEP)[0]).filter(Boolean))];
+  return `<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+    <input id="edNewAxis1" placeholder="${esc(catVariant2(category))}" style="flex:1;min-width:90px" list="edAxis1Opts">
     <datalist id="edAxis1Opts">${axis1Opts.map(a => `<option value="${esc(a)}">`).join("")}</datalist>
-    <input id="edNewAxis2" placeholder="${esc(catVariant(category))}" style="flex:1" list="edFlavorOpts">
+    <input id="edNewAxis2" placeholder="${esc(catVariant(category))}" style="flex:1;min-width:90px" list="edFlavorOpts">
     <datalist id="edFlavorOpts">${flavorOptions.map(f => `<option value="${esc(f)}">`).join("")}</datalist>
+    ${сколько}
     <button class="iconbtn ok" id="edAddFlavor" style="width:auto;padding:0 16px">＋</button>
   </div>`;
 }
 function bindVariantAdd(category) {
+  // Однострочное поле при вставке склеивает строки в одну — «Манго Мята
+  // Вишня» стал бы одним вкусом. Список построчно превращаем в список через
+  // запятую прямо при вставке.
+  const поле = $("edNewFlavor");
+  if (поле) поле.onpaste = (e) => {
+    const текст = (e.clipboardData || window.clipboardData || { getData: () => "" }).getData("text") || "";
+    if (!/[\r\n]/.test(текст)) return;
+    e.preventDefault();
+    const список = текст.split(/[\r\n]+/).map(x => x.trim()).filter(Boolean).join(", ");
+    поле.value = [поле.value.trim(), список].filter(Boolean).join(", ");
+  };
   $("edAddFlavor").onclick = () => {
-    let v;
+    let имена;
     if (catTwoAxis(category)) {
       const a1 = $("edNewAxis1").value.trim(), a2 = $("edNewAxis2").value.trim();
       if (!a1 || !a2) { alertMsg(`Заполните и «${catVariant2(category)}», и «${catVariant(category)}».`); return; }
-      v = a1 + AXIS_SEP + a2;
+      имена = [a1 + AXIS_SEP + a2];
     } else {
-      v = $("edNewFlavor").value.trim();
-      if (!v) return;
+      // Список через запятую или построчно: пять вкусов поставки — одна
+      // вставка, а не пять нажатий «＋».
+      имена = $("edNewFlavor").value.split(/[,;\n]/).map(x => x.trim()).filter(Boolean);
+      if (!имена.length) return;
     }
-    if (!editVariants.some(x => x.flavor === v)) editVariants.push({ flavor: v, stock: 0 });
+    const сырое = String($("edNewQty").value || "").trim();
+    const штук = сырое === "" ? 0 : Number(сырое);
+    if (!Number.isInteger(штук) || штук < 0) { alertMsg("Приход — целое число штук (или пусто, если пока ноль)."); return; }
+    const уже = [];
+    имена.forEach(имя => {
+      const низ = имя.toLowerCase();
+      const был = editVariants.find(v => v.flavor.toLowerCase() === низ);
+      if (был && editRemoves.has(был.flavor)) { editRemoves.delete(был.flavor); return; }   // передумал убирать
+      if (был || editAdds.some(a => a.flavor.toLowerCase() === низ)) { уже.push(имя); return; }
+      editAdds.push({ flavor: имя, qty: штук });
+    });
+    if (catTwoAxis(category)) { $("edNewAxis2").value = ""; } else { $("edNewFlavor").value = ""; }
+    $("edNewQty").value = "";
     renderEditVariants();
+    if (уже.length) alertMsg(`Уже есть: ${уже.join(", ")}. Приход по заведённому варианту записывают в «📦 Склад».`);
   };
 }
 
 function renderEditVariants() {
-  $("edVarList").innerHTML = editVariants.length
-    ? editVariants.map((v, i) => `<div class="admrow"><div class="an">${esc(v.flavor)}</div>
-        ${qtyHtml(v.stock, `class="edvst" data-i="${i}"`)}
-        <button class="iconbtn danger" data-vdel="${i}">✕</button></div>`).join("")
+  const строки = editVariants.map(v => {
+    const уберём = editRemoves.has(v.flavor);
+    const есть = `${v.stock} шт` + (v.reserved ? ` · в заказах ${v.reserved}` : "");
+    return `<div class="admrow" style="${уберём ? "opacity:.55" : ""}"><div class="an">${esc(v.flavor)}
+        <small>${уберём ? `будет убран${+v.stock > 0 ? ` — остаток ${v.stock} шт спишется` : ""}` : есть}</small></div>
+      <button class="iconbtn${уберём ? "" : " danger"}" data-vrm="${esc(v.flavor)}" title="${уберём ? "Не убирать" : "Убрать вариант"}">${уберём ? "↩︎" : "✕"}</button></div>`;
+  }).concat(editAdds.map((a, i) => `<div class="admrow"><div class="an">${esc(a.flavor)}
+        <small>новый · ${a.qty ? `приход ${a.qty} шт` : "пока без остатка"}</small></div>
+      <button class="iconbtn danger" data-vadd="${i}" title="Не добавлять">✕</button></div>`));
+  $("edVarList").innerHTML = строки.length ? строки.join("")
     : `<p style="color:var(--hint)">Нет значений «${esc(catVariant(editCategory))}» — добавьте ниже.</p>`;
-  $("edVarList").querySelectorAll(".edvst").forEach(inp => inp.oninput = () => { editVariants[+inp.dataset.i].stock = inp.value; });
-  bindQty($("edVarList"));
-  $("edVarList").querySelectorAll("[data-vdel]").forEach(b => b.onclick = () => { editVariants.splice(+b.dataset.vdel, 1); renderEditVariants(); });
+  $("edVarList").querySelectorAll("[data-vrm]").forEach(b => b.onclick = () => {
+    const f = b.dataset.vrm;
+    const v = editVariants.find(x => x.flavor === f);
+    // Под невыданные заказы вариант не убрать: отмена такого заказа вернула бы
+    // товар варианту, которого больше нет. Говорим сразу, а не при сохранении.
+    if (!editRemoves.has(f) && v && v.reserved) {
+      alertMsg(`«${f}»: ${v.reserved} шт в невыданных заказах. Уберите вариант после их выдачи или отмены.`);
+      return;
+    }
+    if (editRemoves.has(f)) editRemoves.delete(f); else editRemoves.add(f);
+    renderEditVariants();
+  });
+  $("edVarList").querySelectorAll("[data-vadd]").forEach(b => b.onclick = () => {
+    editAdds.splice(+b.dataset.vadd, 1); renderEditVariants();
+  });
   // Блок точек живёт на тех же вкусах — перерисовываем и его, иначе внизу
   // останется список, которого наверху уже нет.
   if (typeof обновитьБлокТочек === "function") обновитьБлокТочек();
@@ -1261,16 +1372,53 @@ async function завершитьПравку(p, убрать, отказы) {
   }
 
   await refreshProducts();
-  $("editView").classList.remove("show");
   const беды = (отказы || []).length ? "Не сохранилось — " + (отказы || []).join("; ") : "";
   const строки = [беды, текст].filter(Boolean).join("\n");
+  // Не всё сохранилось — карточка остаётся открытой с введённым: закрыть её
+  // значило бы выбросить работу человека вместе с ошибкой. Точки
+  // перерисовываем по свежим данным (заведённая только что точка теперь
+  // «есть», а не «завести»), остальной ввод остаётся как был.
+  if (беды) {
+    const свежий = shelf().find(x => x.id === p.id);
+    if (свежий && $("edPoints")) renderEditPoints(свежий, точкиМодель);
+    обновитьОстатокВКарточке();
+    alertMsg("⚠️ Сохранено не всё\n\n" + строки + "\n\nВведённое осталось в карточке — проверьте и сохраните ещё раз.");
+    return;
+  }
+  $("editView").classList.remove("show");
   // «Сохранено» пишем только если всё и правда сохранилось. Половина работы,
   // объявленная успехом, — это ошибка, которую заметят через неделю по цифрам.
   alertMsg(строки ? (беды ? "⚠️ Сохранено не всё\n\n" : "Сохранено ✅\n\n") + строки
                   : "Сохранено ✅");
 }
 
-async function saveEdit(p) {
+// То же ли это значение поля, что было при открытии: «20», 20 и «20,0» — одно
+// и то же, иначе сохранение слало бы нетронутую цену и ловило бы «конфликт»
+// с самим собой.
+function тоЖеПоле(поле, стало, было) {
+  if (поле === "price" || поле === "cost") {
+    const n = (x) => Number(String(x ?? "").replace(",", ".").trim() || 0);
+    return n(стало) === n(было);
+  }
+  if (поле === "is_hit") return !!Number(стало) === !!Number(было);
+  return String(стало ?? "").trim() === String(было ?? "").trim();
+}
+
+// Поле сохранено (или его поменял кто-то другой) — снимок «каким было»
+// переезжает на новое значение. См. отправитьПоля в saveEdit.
+function запомнитьКакБыло(поле, значение) {
+  if (поле === "price") editOrigPrice = значение;
+  else if (поле === "cost") editOrigCost = значение || "";
+  else if (поле === "is_hit") editOrigHit = !!Number(значение);
+  else if (поле === "name") editOrigName = значение;
+  else if (поле === "category") editOrigCat = значение;
+  else if (поле === "city") editOrigCity = значение;
+  else if (поле === "description") editOrigDesc = значение;
+  else if (поле === "brand") editOrigBrand = значение;
+  else if (поле === "flavor") editOrigFlavor = значение;
+}
+
+async function saveEdit(p, подтверждено) {
   const isVar = hasVariants(p);
   // Ответы сервера ПРОВЕРЯЕМ. Раньше их не смотрели вовсе: сервер отказывал —
   // «нельзя перенести туда, где товар уже есть», — а экран говорил
@@ -1285,32 +1433,51 @@ async function saveEdit(p) {
     cost_required: "не указана закупочная цена",
     bad_input: "поле заполнено неверно",
     bad_value: "значение введено неверно — проверьте, что это число",
-    bad_price: "цена должна быть больше нуля",
     bad_id: "товар не найден",
     not_found: "товар не найден",
   };
   const назвать = (что, d) => `${что}: ${(d && (d.message || ЛЮДСКИ[d.error])) || "не сохранилось"}`;
 
-  // Поля копим и отправляем ОДНИМ запросом. Раньше каждое поле шло своим:
-  // сохранение карточки — до десяти полных обменов с сервером подряд, по
-  // секунде каждый на мобильной сети. «Сохраняю…» висело десять секунд.
-  const поля = {}, имена = {};
-  let expectedStock = null;
-  const upd = (field, value, что) => { поля[field] = value; имена[field] = что || field; };
+  // Состав вариантов: не оставить товар пустым и не убрать молча то, что
+  // лежит на полке. Спрашиваем ДО любой отправки — отменить списание нечем.
+  if (isVar && !editPointList().length) {
+    alertMsg(`Оставьте хотя бы одно значение: ${catVariant(p.category)}.`);
+    return;
+  }
+  const сОстатком = editVariants.filter(v => editRemoves.has(v.flavor) && +v.stock > 0);
+  if (сОстатком.length && !подтверждено) {
+    confirmMsg(`Убрать ${сОстатком.map(v => `«${v.flavor}» (${v.stock} шт)`).join(", ")}? `
+               + `Остаток спишется пересчётом до нуля и останется в истории склада.`,
+               () => saveEdit(p, true));
+    return;
+  }
+
+  // Поля копим и отправляем ОДНИМ запросом. Шлём только то, что человек правда
+  // поменял, и вместе с тем, каким поле было при открытии: если его за это
+  // время поменял кто-то другой, сервер не затрёт чужую правку, а скажет о ней.
+  const поля = {}, имена = {}, ожидали = {};
+  const upd = (field, value, что, было) => {
+    if (было !== undefined && тоЖеПоле(field, value, было)) return;
+    поля[field] = value; имена[field] = что || field;
+    if (было !== undefined) ожидали[field] = было;
+  };
   const отправитьПоля = async () => {
     if (!Object.keys(поля).length) return { ok: true };
-    // expected_stock — СОСЕД fields, а не поле товара: раньше он случайно
-    // попадал внутрь fields и сервер отвергал его как неизвестное поле,
-    // из-за чего отказывался сохраняться и настоящий новый остаток.
-    const тело = { initData, id: editId, fields: поля };
-    if (expectedStock !== null) тело.expected_stock = expectedStock;
     const r = await fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" },
-                                                         body: JSON.stringify(тело) });
+      body: JSON.stringify({ initData, id: editId, fields: поля, expected: ожидали }) });
     const d = await r.json().catch(() => ({}));
     if (!d.ok) { отказы.push(назвать("правка товара", d)); return d; }
     // Сервер сохраняет всё, что прошло, и называет, что не прошло: отказ в
     // цене не повод потерять только что вписанное описание.
     for (const [field, беда] of Object.entries(d.failed || {})) отказы.push(назвать(имена[field] || field, беда));
+    // Снимок полей — туда, где они теперь есть. Сохранённое — новым значением,
+    // иначе повторное «Сохранить» ловило бы конфликт с самим собой. Чужая
+    // правка (конфликт) — тем, что сейчас на сервере: человек её увидел, и
+    // следующее сохранение его значения будет уже осознанным.
+    (d.saved || []).forEach(f => запомнитьКакБыло(f, поля[f]));
+    for (const [f, беда] of Object.entries(d.failed || {})) {
+      if (беда && беда.error === "conflict") запомнитьКакБыло(f, беда.current);
+    }
     return d;
   };
   const послать = async (адрес, тело, что) => {
@@ -1320,47 +1487,31 @@ async function saveEdit(p) {
     if (!d.ok) отказы.push(назвать(что, d));
     return d;
   };
+  // Новые варианты — с первым приходом, убранные — со списанием остатка.
+  // Числа у заведённых вариантов тут не меняются: это работа склада, и потому
+  // продажа, случившаяся пока карточка открыта, этому сохранению не мешает.
+  const сменитьСостав = async () => {
+    if (!editAdds.length && !editRemoves.size) return;
+    const d = await послать("/api/admin/product/variants/change",
+      { initData, id: editId, add: editAdds, remove: [...editRemoves], writeoff: сОстатком.length > 0 },
+      catVariantMany(p.category).toLowerCase());
+    if (d.ok) { editAdds = []; editRemoves = new Set(); }
+  };
+
   $("edSave").disabled = true; $("edSave").textContent = "Сохраняю…";
   try {
     // Товар из ассортимента: сохраняем только то, что своё у этой точки.
     if (p.model_id) {
-      upd("price", $("edPrice").value, "цена");
-      upd("cost", $("edCost").value || 0, "закупка");
-      let новыйОстаток = null;
-      if (isVar) {
-        const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
-        if (!variants.length) { alertMsg(`Оставьте хотя бы одно значение: ${catVariant(p.category)}.`); return; }
-        // Не тронули список — не шлём: нечего сверять, нечего задевать чужую продажу.
-        if (!вариантыСовпадают(variants, editOrigVariants)) {
-          const d = await послать("/api/admin/product/variants",
-                                  { initData, id: editId, variants, expected: editOrigVariants },
-                                  catVariantMany(p.category).toLowerCase());
-          // Сохранили этой же формой второй раз подряд (без переоткрытия) —
-          // сверяем со свежим снимком, а не с тем, что было при первом открытии.
-          if (d.ok) editOrigVariants = variants.map(v => ({ flavor: v.flavor, stock: v.stock }));
-        }
-      } else {
-        новыйОстаток = $("edStock").value;
-        // Поле не трогали — не шлём его вовсе: правка одной цены не должна
-        // задевать остаток, который мог за это время честно продаться.
-        if (Number(новыйОстаток) !== Number(editOrigStock)) {
-          upd("stock", новыйОстаток, "остаток");
-          expectedStock = editOrigStock;
-        } else {
-          новыйОстаток = null;
-        }
-      }
+      upd("price", $("edPrice").value, "цена", editOrigPrice);
+      upd("cost", $("edCost").value || 0, "закупка", editOrigCost || 0);
       // Города у товара с моделью правятся галочками ниже, а не селектом.
       // Два контрола об одном и том же всегда расходятся: селект предлагал
       // продавцу Турова все города, включая те, куда сервер его не пустит.
-      upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»");
-      const итогПолей = await отправитьПоля();
-      if (новыйОстаток !== null && итогПолей.ok
-          && !(итогПолей.failed && итогПолей.failed.stock)) {
-        editOrigStock = Number(новыйОстаток);
-      }
+      upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»", editOrigHit ? 1 : 0);
+      await отправитьПоля();
+      if (isVar) await сменитьСостав();
       // Точки — уже после того, как своя карточка сохранена: если что-то из
-      // них упадёт, правки цены и остатка всё равно на месте.
+      // них упадёт, правки цены и состава всё равно на месте.
       //
       // Снятая галочка убирает товар с точки НАСОВСЕМ, вместе с её остатком и
       // историей склада. Спрашиваем до, а не после: отменить это нечем.
@@ -1377,67 +1528,51 @@ async function saveEdit(p) {
     }
     const specs = collectSpecs("edSpecs");
     if (isVar) {
-      const variants = editVariants.filter(v => v.flavor).map(v => ({ flavor: v.flavor, stock: v.stock || "0" }));
-      if (!variants.length) { alertMsg(`Оставьте хотя бы одно значение: ${catVariant(p.category)}.`); return; }
       // У одноразок число затяжек — часть названия модели («Elf Bar 6000»).
       const name = (p.category === "disposable" && specs.volume)
         ? [p.brand, specs.volume].filter(x => x && x !== "0").join(" ") : (p.brand || p.name);
-      upd("price", $("edPrice").value, "цена");
-      upd("cost", $("edCost").value || 0, "закупка");
-      if (name) upd("name", name, "название");
-      // Тот же приём, что и у товара с моделью (см. выше): не тронули
-      // список — не шлём, а тронули — шлём со снимком на момент открытия,
-      // иначе чужая продажа между открытием формы и сохранением тихо
-      // перезатирается устаревшим числом.
-      if (!вариантыСовпадают(variants, editOrigVariants)) {
-        const d = await послать("/api/admin/product/variants",
-                                { initData, id: editId, variants, expected: editOrigVariants },
-                                catVariantMany(p.category).toLowerCase());
-        if (d.ok) editOrigVariants = variants.map(v => ({ flavor: v.flavor, stock: v.stock }));
-      }
+      upd("price", $("edPrice").value, "цена", editOrigPrice);
+      upd("cost", $("edCost").value || 0, "закупка", editOrigCost || 0);
+      if (name) upd("name", name, "название", editOrigName);
     } else {
       const nm = $("edName").value.trim();
       if (!nm) { alertMsg("Введите название."); return; }
-      upd("category", $("edCat").value, "категория");
-      upd("name", nm, "название");
-      upd("price", $("edPrice").value, "цена");
-      upd("cost", $("edCost").value || 0, "закупка");
-      // Как и у товара с моделью: остаток шлём, только если его правда
-      // тронули, и со снимком на момент открытия формы.
-      const новыйОстаток = $("edStock").value;
-      if (Number(новыйОстаток) !== Number(editOrigStock)) {
-        upd("stock", новыйОстаток, "остаток");
-        expectedStock = editOrigStock;
-      }
+      upd("category", $("edCat").value, "категория", editOrigCat);
+      upd("name", nm, "название", editOrigName);
+      upd("price", $("edPrice").value, "цена", editOrigPrice);
+      upd("cost", $("edCost").value || 0, "закупка", editOrigCost || 0);
       const brandName = pickerValue("edBrand");
       await ensureBrandExists(brandName);
-      upd("brand", brandName, "бренд");
-      upd("flavor", pickerValue("edFlavor"), "вкус");
-      upd("description", $("edDesc").value.trim(), "описание");
+      upd("brand", brandName, "бренд", editOrigBrand);
+      upd("flavor", pickerValue("edFlavor"), "вкус", editOrigFlavor);
+      upd("description", $("edDesc").value.trim(), "описание", editOrigDesc);
     }
     // Характеристики сохраняем одним запросом — сервер сам разложит крепость
     // и объём по своим колонкам, а остальное в JSON.
     await послать("/api/admin/product/specs", { initData, id: editId, specs }, "характеристики");
-    upd("city", $("edCity").value, "точка");
-    upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»");
-    const итогПолейЛегаси = await отправитьПоля();
-    // Сохранили этой же формой второй раз подряд без переоткрытия — сверяем
-    // со свежим снимком, а не с тем, что было при первом открытии.
-    if (expectedStock !== null && итогПолейЛегаси.ok
-        && !(итогПолейЛегаси.failed && итогПолейЛегаси.failed.stock)) {
-      editOrigStock = Number(поля.stock);
-    }
+    upd("city", $("edCity").value, "точка", editOrigCity);
+    upd("is_hit", $("edHit").checked ? 1 : 0, "отметка «Хит»", editOrigHit ? 1 : 0);
+    await отправитьПоля();
+    if (isVar) await сменитьСостав();
     if (editPhotoFile) {
       const fd = new FormData();
       fd.append("initData", initData); fd.append("id", editId); fd.append("file", editPhotoFile);
       const r = await fetch("/api/admin/photo", { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
-      if (!d.ok) отказы.push(назвать("фото", d));
+      if (!d.ok) отказы.push(назвать("фото", d)); else editPhotoFile = null;
     }
     await refreshProducts();
+    // «Сохранено» пишем только если всё и правда сохранилось. Не сохранилось —
+    // карточка остаётся открытой с введённым: закрыть её значило бы выбросить
+    // работу человека вместе с ошибкой.
+    if (отказы.length) {
+      обновитьОстатокВКарточке();
+      alertMsg("⚠️ Сохранено не всё\n\nНе сохранилось — " + отказы.join("; ")
+               + "\n\nВведённое осталось в карточке — проверьте и сохраните ещё раз.");
+      return;
+    }
     $("editView").classList.remove("show");
-    alertMsg(отказы.length ? "⚠️ Сохранено не всё\n\nНе сохранилось — " + отказы.join("; ")
-                           : "Сохранено ✅");
+    alertMsg("Сохранено ✅");
   } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
 }

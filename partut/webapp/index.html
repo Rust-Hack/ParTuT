@@ -296,7 +296,8 @@
     </div>
   </div>
 
-  <!-- Склад: приход и списание -->
+  <!-- Склад: приход, списание, пересчёт. Единственное место, где меняется
+       остаток: у каждого изменения — причина, автор, дата и запись в истории. -->
   <div class="view ontop" id="stockView">
     <div class="viewhead"><h2>📦 Склад</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="stockClose">‹ Назад</button></div>
@@ -307,17 +308,13 @@
       <label style="margin-top:16px">Что произошло</label>
       <div id="stockReasons"></div>
 
-      <div id="stockFlavorWrap" style="display:none">
-        <label>Вкус</label>
-        <select id="stockFlavor"></select>
-      </div>
-
+      <!-- Все варианты сразу, строкой на каждый: поставка из пяти вкусов —
+           одно «Записать», а не пять заходов с выбором вкуса из списка. -->
       <label id="stockQtyLabel">Сколько штук</label>
-      <span class="qty" data-min="1">
-        <button type="button" class="qtybtn" data-qty="-1">−</button>
-        <input id="stockQty" inputmode="numeric" placeholder="1">
-        <button type="button" class="qtybtn" data-qty="1">+</button></span>
-      <div class="dnote" id="stockQtyNote" style="margin:6px 0 0;display:none"></div>
+      <input id="stockFind" class="admsearch" placeholder="🔍 Найти вариант" style="display:none">
+      <div id="stockRows"></div>
+      <!-- Пересчёт при невыданных заказах: что именно посчитали. -->
+      <div id="stockOrders" style="display:none"></div>
 
       <div id="stockCostWrap">
         <label>Закупочная цена за штуку (Br)</label>
@@ -328,7 +325,8 @@
       <label>Примечание</label>
       <input id="stockNote" placeholder="номер накладной, кто пересчитывал…">
 
-      <button class="bigbtn" id="stockSave" style="margin-top:16px">Записать</button>
+      <div id="stockSum" class="dnote" style="margin:10px 0 0"></div>
+      <button class="bigbtn" id="stockSave" style="margin-top:12px">Записать</button>
     </div>
     <div id="stockLog"></div>
   </div>
@@ -675,8 +673,8 @@
         <div class="ochips" id="admLocChips"></div>
         <div class="ochips" id="admStockChips"></div>
         <!-- Крупный завоз разом: без этого каждая позиция партии — отдельный
-             тап «Записать». Варианты со вкусами сюда не входят: у них остаток
-             свой на каждый вкус, для них есть редактор товара (✏️). -->
+             тап «Записать». У товара со вкусами остаток свой на каждый вкус —
+             для него кнопка «по вкусам ›» в окно склада, там строка на вкус. -->
         <button class="closebtn" id="batchModeBtn" style="margin:8px 0">📦 Массовый приход</button>
         <div id="adminList"></div>
         <div id="batchBar" style="display:none;position:sticky;bottom:8px;margin-top:10px">

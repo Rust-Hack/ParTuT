@@ -1620,46 +1620,73 @@ function показатьСохранённое(отправили, легло, 
     : "Сохранено ✅");
 }
 
-// ----- Склад: приход и списание -----
-// Раньше остаток правили числом в редакторе, и на вопрос «куда делось» ответа
-// не было. Теперь каждое изменение — с причиной, автором и датой.
+// ----- Склад: приход, списание, пересчёт -----
+// Единственное место, где меняется остаток. Раньше его правили ещё и числом в
+// карточке товара, и на вопрос «куда делось» ответа не было. Теперь каждое
+// изменение — с причиной, автором и датой, а карточка ведёт сюда.
 const STOCK_REASONS = { in: "Приход", broken: "Брак или бой", expired: "Просрочка",
                         lost: "Недостача", gift: "Подарок или образец", fix: "Пересчёт" };
 let stockProduct = null, stockReason = "in";
-$("stockClose").onclick = () => $("stockView").classList.remove("show");
+// Что вписано в строки — по ключу строки (вкус; у товара без вкусов — "").
+// Живёт отдельно от разметки: перерисовка (смена причины, поиск по вкусам)
+// не должна стирать уже набранное.
+let stockDraft = {};
+// Ключ попытки у каждой строки — пока по ней не пришёл ответ. Ответ потерялся
+// в плохой сети, человек нажал ещё раз — сервер узнаёт ключ и второй раз не
+// записывает. Новый ключ строка получает только после ответа по ней.
+let stockTokens = {};
+let stockErrors = {};            // ключ строки -> отказ сервера, показываем рядом со строкой
+let stockOrders = [];            // невыданные заказы с этим товаром — для пересчёта
+let stockCounted = null;         // что посчитали при пересчёте: null — не ответили, "free" | "all"
+let stockOrderPick = new Set();  // заказы, чей отложенный товар вошёл в насчитанное
 
-function openStockMove(id) {
-  stockProduct = shelf().find(p => p.id === id);
-  if (!stockProduct) return;
-  stockReason = "in";
+$("stockClose").onclick = () => {
+  $("stockView").classList.remove("show");
+  // Склад мог открыться поверх карточки товара — пусть она покажет свежие числа.
+  обновитьОстатокВКарточке();
+};
+$("stockFind").oninput = () => renderStockRows();
+
+// crypto.randomUUID есть не во всех WebView Телеграма — запасной путь попроще.
+function новыйКлючОперации() {
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, ""); } catch (e) {}
+  return (Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)).slice(0, 40);
+}
+
+function openStockMove(id, reason) {
+  const p = shelf().find(x => x.id === id);
+  if (!p) return;
+  // Другой товар — чистый лист. Тот же — набранное остаётся: закрыл окно,
+  // чтобы глянуть заказ, вернулся — числа на месте.
+  if (!stockProduct || stockProduct.id !== id) {
+    stockDraft = {}; stockTokens = {}; stockErrors = {};
+    $("stockCost").value = ""; $("stockNote").value = "";
+  }
+  stockProduct = p;
+  stockReason = reason || "in";
+  stockCounted = null; stockOrderPick = new Set(); stockOrders = [];
+  $("stockFind").value = "";
   $("stockView").classList.add("show");
-  $("stockName").textContent = stockProduct.name;
-  $("stockNow").textContent = `${stockProduct.city} · сейчас ${stockProduct.stock} шт`;
-  $("stockQty").value = ""; $("stockCost").value = ""; $("stockNote").value = "";
-  // Кнопки –/+ у количества. Минимум 1: приход или списание нуля штук —
-  // это не операция, а промах, и сохранять его незачем.
-  bindQty($("stockView"));
-
-  // У товара со вкусами склад ведётся по каждому вкусу отдельно.
-  const вкусы = stockProduct.variants || [];
-  $("stockFlavorWrap").style.display = вкусы.length ? "" : "none";
-  $("stockFlavor").innerHTML = вкусы.map(v => `<option value="${esc(v.flavor)}">${esc(v.flavor)} · ${v.stock} шт</option>`).join("");
-
+  renderStockHead();
   renderStockReasons();
-  // Пересчёт считает разницу от выбранного вкуса — смена вкуса меняет и её.
-  $("stockFlavor").onchange = applyStockMode;
-  $("stockQty").oninput = () => { if (stockReason === "fix") stockПоказатьРазницу(); };
   loadStockLog(id);
 }
 
-// Сколько сейчас числится по той полке, о которой идёт речь: у товара со
-// вкусами — по выбранному вкусу, иначе по товару целиком.
-function stockСейчас() {
-  const вкусы = (stockProduct && stockProduct.variants) || [];
-  if (!вкусы.length) return +(stockProduct ? stockProduct.stock : 0);
-  const выбран = $("stockFlavor").value;
-  const v = вкусы.find(x => x.flavor === выбран);
-  return +(v ? v.stock : 0);
+// Сколько свободно и сколько обещано в невыданных заказах. Второе число —
+// ради пересчёта: на полке лежит больше, чем «свободно», и это не находка.
+function renderStockHead() {
+  const p = stockProduct;
+  $("stockName").textContent = p.name;
+  $("stockNow").textContent = `${p.city} · свободно ${p.stock} шт`
+    + (p.reserved ? ` · ещё ${p.reserved} в невыданных заказах` : "");
+}
+
+// Строки операции: по строке на вариант, у товара без вариантов — одна.
+function stockСтроки() {
+  const p = stockProduct;
+  const вкусы = p.variants || [];
+  if (!вкусы.length) return [{ key: "", flavor: "", stock: +p.stock, reserved: +(p.reserved || 0) }];
+  return вкусы.map(v => ({ key: v.flavor, flavor: v.flavor, stock: +v.stock, reserved: +(v.reserved || 0) }));
 }
 
 function renderStockReasons() {
@@ -1671,35 +1698,106 @@ function renderStockReasons() {
   // Закупочная цена нужна только при приходе — в остальных случаях
   // спрашивать её незачем.
   $("stockCostWrap").style.display = stockReason === "in" ? "" : "none";
-  applyStockMode();
+  // Пересчёт спрашивает РЕЗУЛЬТАТ, остальные причины — количество. Считать
+  // разницу в уме — работа для машины, и на ней же ошибаются.
+  $("stockQtyLabel").textContent = stockReason === "fix" ? "Сколько насчитали" : "Сколько штук";
+  renderStockRows();
+  renderStockOrders();
 }
 
-// Пересчёт спрашивает РЕЗУЛЬТАТ, остальные причины — количество. Считать
-// разницу в уме — работа для машины, и на ней же ошибаются: минус вместо
-// плюса виден только назавтра, по недостаче.
-function applyStockMode() {
-  const пересчёт = stockReason === "fix";
-  const было = stockСейчас();
-  $("stockQtyLabel").textContent = пересчёт ? "Сколько получилось при пересчёте" : "Сколько штук";
-  $("stockQtyNote").style.display = пересчёт ? "" : "none";
-  const поле = $("stockQty");
-  поле.closest(".qty").dataset.min = пересчёт ? "0" : "1";
-  if (пересчёт) {
-    if (!поле.value) поле.value = было;
-    stockПоказатьРазницу();
-  } else if (String(поле.value) === String(было)) {
-    поле.value = "";
-  }
+function renderStockRows() {
+  const q = ($("stockFind").value || "").trim().toLowerCase();
+  const строки = stockСтроки();
+  $("stockFind").style.display = строки.length > 8 ? "" : "none";
+  $("stockRows").innerHTML = строки.filter(s => !q || s.flavor.toLowerCase().includes(q)).map(s => {
+    const есть = `свободно ${s.stock}` + (s.reserved ? ` · в заказах ${s.reserved}` : "");
+    const отказ = stockErrors[s.key]
+      ? `<div class="dwarn" style="flex-basis:100%;margin-top:4px">${esc(stockErrors[s.key])}</div>` : "";
+    return `<div class="admrow" data-srow="${esc(s.key)}" style="flex-wrap:wrap">
+      <div class="an">${s.flavor ? esc(s.flavor) : esc(stockProduct.name)}<small>${есть}</small>
+        <small class="srowprev"></small></div>
+      ${qtyHtml(esc(stockDraft[s.key] ?? ""), `class="srowqty" placeholder="шт"`, 0)}
+      ${отказ}</div>`;
+  }).join("");
+  bindQty($("stockRows"));
+  $("stockRows").querySelectorAll(".srowqty").forEach(поле => поле.oninput = () => {
+    const ключ = поле.closest("[data-srow]").dataset.srow;
+    stockDraft[ключ] = поле.value;
+    delete stockErrors[ключ];       // исправил — старый отказ больше не про эту строку
+    stockПредпросмотр();
+  });
+  stockПредпросмотр();
 }
 
-function stockПоказатьРазницу() {
-  const было = stockСейчас();
-  const стало = parseInt($("stockQty").value, 10);
-  if (isNaN(стало)) { $("stockQtyNote").textContent = `Сейчас числится ${было} шт.`; return; }
-  const d = стало - было;
-  $("stockQtyNote").textContent = d === 0
-    ? `Числится ${было} шт — сходится, записывать нечего.`
-    : `Числится ${было} шт → станет ${стало} шт (${d > 0 ? "+" : ""}${d}).`;
+// Сколько отложенного под заказы посчитано в этой строке (при пересчёте).
+function stockПосчитаноПодЗаказы(flavor) {
+  if (stockCounted !== "all") return 0;
+  return stockOrders.filter(z => stockOrderPick.has(z.order_id) && (z.flavor || "") === flavor)
+                    .reduce((n, z) => n + z.qty, 0);
+}
+
+// Под каждой строкой — чем она станет, до того как нажали «Записать».
+function stockПредпросмотр() {
+  let штук = 0, строк = 0;
+  stockСтроки().forEach(s => {
+    const узел = $("stockRows").querySelector(`[data-srow="${CSS.escape(s.key)}"] .srowprev`);
+    const сырое = String(stockDraft[s.key] ?? "").trim();
+    if (!узел) return;
+    if (!сырое) { узел.textContent = ""; return; }
+    const n = Number(сырое);
+    if (!Number.isInteger(n) || n < 0) { узел.textContent = "проверьте число"; return; }
+    строк++;
+    if (stockReason === "in") {
+      штук += n;
+      узел.textContent = `станет ${s.stock + n}`;
+    } else if (stockReason === "fix") {
+      const цель = n - stockПосчитаноПодЗаказы(s.flavor);
+      const d = Math.max(0, цель) - s.stock;
+      узел.textContent = цель < 0 ? `не хватает ${-цель} под заказы`
+        : d === 0 ? "сходится — записывать нечего"
+        : `свободно станет ${цель} (${d > 0 ? "+" : ""}${d})`;
+    } else {
+      штук += n;
+      узел.textContent = n > s.stock ? `свободно только ${s.stock}` : `станет ${s.stock - n}`;
+    }
+  });
+  const цена = parseFloat(String($("stockCost").value || "").replace(",", "."));
+  $("stockSum").textContent = !строк ? ""
+    : stockReason === "fix" ? `Строк к записи: ${строк}.`
+    : `Строк: ${строк} · всего ${штук} шт` + (stockReason === "in" && цена > 0 ? ` · на ${(штук * цена).toFixed(2)} Br` : "");
+}
+$("stockCost").oninput = () => stockПредпросмотр();
+
+// Пересчёт при невыданных заказах. Заказ снимает товар с остатка сразу, а с
+// полки он уходит только при выдаче: самовывоз лежит на точке, а с курьером
+// уже уехал, хотя выданным ещё не отмечен. Угадывать за продавца нельзя —
+// поэтому он отвечает сам, что посчитал.
+function renderStockOrders() {
+  const box = $("stockOrders");
+  const нужен = stockReason === "fix" && stockOrders.length > 0;
+  box.style.display = нужен ? "" : "none";
+  if (!нужен) return;
+  const всего = stockOrders.reduce((n, z) => n + z.qty, 0);
+  box.innerHTML = `
+    <label style="margin-top:14px">Под невыданные заказы отложено ${всего} шт. Что вы посчитали?</label>
+    <button class="opt ${stockCounted === "free" ? "active" : ""}" data-sc="free">Только свободный товар — отложенное не считал</button>
+    <button class="opt ${stockCounted === "all" ? "active" : ""}" data-sc="all">Всё, что лежит на точке, — вместе с отложенным</button>
+    ${stockCounted !== "all" ? "" : `
+      <div class="dnote" style="margin:2px 0 4px">Отметьте заказы, чей товар вы посчитали. Уехавшее с курьером не отмечайте — его на точке нет.</div>
+      ${stockOrders.map(z => `<label class="chk" style="margin-top:6px"><input type="checkbox" data-so="${z.order_id}" ${stockOrderPick.has(z.order_id) ? "checked" : ""}>
+        <span>№${z.order_id} · ${esc(z.method || "способ не указан")}${z.flavor ? ` · ${esc(z.flavor)}` : ""} · ${z.qty} шт</span></label>`).join("")}`}`;
+  box.querySelectorAll("[data-sc]").forEach(b => b.onclick = () => {
+    stockCounted = b.dataset.sc;
+    // «Всё на точке» — значит отложенное посчитано; снять галочку нужно
+    // только с того, что уехало.
+    if (stockCounted === "all" && !stockOrderPick.size) stockOrders.forEach(z => stockOrderPick.add(z.order_id));
+    renderStockOrders(); stockПредпросмотр();
+  });
+  box.querySelectorAll("[data-so]").forEach(ch => ch.onchange = () => {
+    const id = +ch.dataset.so;
+    if (ch.checked) stockOrderPick.add(id); else stockOrderPick.delete(id);
+    stockПредпросмотр();
+  });
 }
 
 async function loadStockLog(id) {
@@ -1707,6 +1805,10 @@ async function loadStockLog(id) {
   try {
     const r = await fetch("/api/admin/stock/moves", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
     const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error("stock_moves");
+    // Сначала заказы: без них вопрос при пересчёте задать нечем.
+    stockOrders = d.reserved_orders || [];
+    renderStockOrders(); stockПредпросмотр();
     const moves = d.moves || [];
     if (!moves.length) { $("stockLog").innerHTML = `<div class="card-block"><p style="color:var(--hint);margin:0">Движений пока не было.</p></div>`; return; }
     const rows = moves.map(m => {
@@ -1717,33 +1819,98 @@ async function loadStockLog(id) {
         <b style="color:${цвет}">${знак} шт</b></div>`;
     }).join("");
     $("stockLog").innerHTML = `<div class="stathead">История движений</div><div class="statlist">${rows}</div>`;
-  } catch (e) { /* журнал не критичен — молчим */ }
+  } catch (e) {
+    // История — не главное, но заказы для пересчёта — главное: без них
+    // вопрос «что посчитали» задать нечем, и пересчёт вышел бы вслепую.
+    $("stockLog").innerHTML = `<div class="card-block"><p style="color:var(--hint);margin:0">История не загрузилась. Пересчёт при невыданных заказах сейчас не проверить — откройте окно заново.</p></div>`;
+    stockOrders = null;
+  }
 }
 
 $("stockSave").onclick = async () => {
-  const qty = parseInt($("stockQty").value, 10);
-  if (isNaN(qty) || qty < 0) { alertMsg("Укажите количество."); return; }
-  if (stockReason === "fix") {
-    if (qty === stockСейчас()) { alertMsg("Столько и числится — записывать нечего."); return; }
-  } else if (qty <= 0) { alertMsg("Укажите количество."); return; }
-  const body = { initData, id: stockProduct.id, qty, reason: stockReason,
-                 cost: stockReason === "in" ? $("stockCost").value : "",
-                 note: $("stockNote").value,
-                 flavor: (stockProduct.variants || []).length ? $("stockFlavor").value : "" };
+  const строки = stockСтроки().filter(s => String(stockDraft[s.key] ?? "").trim() !== "");
+  if (!строки.length) {
+    alertMsg(stockReason === "fix" ? "Впишите, сколько насчитали." : "Впишите количество хотя бы в одну строку.");
+    return;
+  }
+  let плохо = false;
+  строки.forEach(s => {
+    const n = Number(String(stockDraft[s.key]).trim());
+    if (!Number.isInteger(n) || n < 0 || (stockReason !== "fix" && n === 0)) { stockErrors[s.key] = "Проверьте число."; плохо = true; }
+  });
+  if (плохо) { renderStockRows(); return; }
+  if (stockReason === "fix" && stockOrders === null) {
+    alertMsg("Не загрузились невыданные заказы — без них пересчёт не проверить. Закройте окно и откройте снова.");
+    return;
+  }
+  if (stockReason === "fix" && stockOrders.length && !stockCounted) {
+    alertMsg("Отметьте, считали ли вы товар, отложенный под невыданные заказы: от этого зависит, сколько останется свободным.");
+    return;
+  }
+  const items = строки.map(s => {
+    if (!stockTokens[s.key]) stockTokens[s.key] = новыйКлючОперации();
+    const item = { id: stockProduct.id, qty: Number(String(stockDraft[s.key]).trim()), token: stockTokens[s.key] };
+    if (s.flavor) item.flavor = s.flavor;
+    if (stockReason === "in") item.cost = $("stockCost").value;
+    if (stockReason === "fix") {
+      // Сколько было свободно, когда человек считал: пришёл заказ или отмена
+      // — сервер откажет, и пересчёт не вернёт на полку проданное.
+      item.expected = s.stock;
+      item.counted_orders = stockCounted === "all"
+        ? stockOrders.filter(z => stockOrderPick.has(z.order_id) && (z.flavor || "") === s.flavor).map(z => z.order_id)
+        : [];
+    }
+    return item;
+  });
   const btn = $("stockSave");
   btn.disabled = true; btn.textContent = "Записываю…";
   try {
-    const r = await fetch("/api/admin/stock/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const d = await r.json();
-    if (!d.ok) { alertMsg(d.message || "Не удалось записать движение."); return; }
+    const r = await fetch("/api/admin/stock/move/batch", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData, reason: stockReason, note: $("stockNote").value, items }) });
+    const d = await r.json().catch(() => ({}));
+    // 5xx — сервер споткнулся посередине: часть строк могла записаться. Это
+    // тот же «исход неизвестен», что и обрыв сети, — ключи строк сохраняем.
+    if (r.status >= 500) throw new Error("server_error");
+    if (!r.ok || !d.ok) {
+      // Отказ всей пачке целиком (права, пустой список): ни одна строка не
+      // записана, ключи можно выдать заново.
+      stockTokens = {};
+      alertMsg(d.message || ОТКАЗЫ[d.error] || "Не удалось записать.");
+      return;
+    }
+    let записано = 0, повторов = 0;
+    (d.done || []).forEach(x => {
+      const s = строки[x.index]; if (!s) return;
+      delete stockTokens[s.key]; delete stockDraft[s.key]; delete stockErrors[s.key];
+      if (x.replay) повторов++; else записано++;
+    });
+    const провалы = Object.entries(d.failed || {});
+    провалы.forEach(([i, f]) => {
+      const s = строки[+i]; if (!s) return;
+      delete stockTokens[s.key];       // ответ по строке пришёл — ключ отработал
+      stockErrors[s.key] = f.message || ОТКАЗЫ[f.error] || "Не записано.";
+    });
     await refreshProducts();
     stockProduct = shelf().find(p => p.id === stockProduct.id) || stockProduct;
-    $("stockNow").textContent = `${stockProduct.city} · сейчас ${d.stock} шт`;
-    $("stockQty").value = ""; $("stockNote").value = "";
+    // Заказы и остатки могли измениться — вопрос про отложенное задаём заново.
+    stockCounted = null; stockOrderPick = new Set();
+    renderStockHead(); renderStockRows();
     await loadStockLog(stockProduct.id);
-    toast(`${STOCK_REASONS[stockReason]}: остаток ${d.stock} шт`);
-  } catch (e) { alertMsg(текстСбоя(e)); }
-  finally { btn.disabled = false; btn.textContent = "Записать"; }
+    if (!провалы.length) $("stockNote").value = "";
+    if (провалы.length) {
+      alertMsg(`Записано строк: ${записано + повторов}. Не записано: ${провалы.length} — причина под каждой строкой, введённое на месте.`);
+    } else {
+      // Повтор узнан — говорим прямо: человек нажимал дважды и должен знать,
+      // что второй раз ничего не записалось.
+      toast(`${STOCK_REASONS[stockReason]}: записано строк ${записано + повторов}`
+            + (повторов ? ` · ${повторов} ${plural(повторов, "строка уже была записана", "строки уже были записаны", "строк уже были записаны")} раньше, второй раз — нет` : ""));
+    }
+  } catch (e) {
+    // Ответа нет: запись могла и пройти. Ключи строк НЕ меняем — повторное
+    // нажатие с теми же ключами сервер узнает и второй раз не запишет.
+    const что = e && e.message === "server_error" ? "Сервер ответил ошибкой." : текстСбоя(e);
+    alertMsg(что + "\n\nВведённое на месте. Нажмите «Записать» ещё раз — дважды не запишется.");
+  } finally { btn.disabled = false; btn.textContent = "Записать"; }
 };
 
 // ----- Промокоды -----
