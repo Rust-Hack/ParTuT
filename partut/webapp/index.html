@@ -694,23 +694,28 @@
       </div>
     </details>
 
-    <details class="sect" open>
-      <summary class="secthead">Список товаров</summary>
-      <div class="sectbody">
-        <input id="admSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
-        <div class="ochips" id="admCatChips"></div>
-        <div class="ochips" id="admLocChips"></div>
-        <div class="ochips" id="admStockChips"></div>
-        <!-- Крупный завоз разом: без этого каждая позиция партии — отдельный
-             тап «Записать». У товара со вкусами остаток свой на каждый вкус —
-             для него кнопка «по вкусам ›» в окно склада, там строка на вкус. -->
-        <button class="closebtn" id="batchModeBtn" style="margin:8px 0">📦 Массовый приход</button>
-        <div id="adminList"></div>
-        <div id="batchBar" style="display:none;position:sticky;bottom:8px;margin-top:10px">
-          <button class="bigbtn" id="batchSave">Записать приход</button>
-        </div>
+    <!-- Список товаров. Фильтры — ряды в одну строку с прокруткой вбок:
+         раньше они переносились на семь строк, и на первом экране телефона
+         помещалось полтора товара. Сворачивать список было незачем — у него
+         больше нет заголовка-гармошки. -->
+    <div class="sect prodlist">
+      <input id="admSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
+      <div class="ochips chiprow" id="admLocChips"></div>
+      <div class="ochips chiprow" id="admStockChips"></div>
+      <div class="ochips chiprow" id="admCatChips"></div>
+      <!-- Сколько товаров показано и крупный завоз разом: без него каждая
+           позиция партии — отдельный тап «Записать». У товара со вкусами
+           остаток свой на каждый вкус — для него кнопка «по вкусам ›» в окно
+           склада, там строка на вкус. -->
+      <div class="listbar">
+        <span class="listcount" id="admCount"></span>
+        <button class="barbtn" id="batchModeBtn">📦 Массовый приход</button>
       </div>
-    </details>
+      <div id="adminList"></div>
+      <div id="batchBar" style="display:none;position:sticky;bottom:8px;margin-top:10px">
+        <button class="bigbtn" id="batchSave">Записать приход</button>
+      </div>
+    </div>
   </div>
 
   <!-- Что завозим: список моделей с подсказкой, где каждая уже стоит.

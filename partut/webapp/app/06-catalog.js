@@ -538,7 +538,9 @@ let batchConflicts = {};
 $("batchModeBtn").onclick = () => {
   batchMode = !batchMode;
   $("batchModeBtn").classList.toggle("active", batchMode);
-  $("batchModeBtn").textContent = batchMode ? "✕ Отменить массовый приход" : "📦 Массовый приход";
+  // Рядом со строкой «Впишите, сколько привезли» короткое «Отменить» ясно
+  // само: длинное «Отменить массовый приход» на узком телефоне не влезало.
+  $("batchModeBtn").textContent = batchMode ? "✕ Отменить" : "📦 Массовый приход";
   $("batchBar").style.display = batchMode ? "" : "none";
   if (!batchMode) { batchDraft = {}; batchTokens = {}; batchErrors = {}; batchConflicts = {}; }
   renderAdminList();
@@ -626,13 +628,18 @@ function renderAdminList() {
   if (вид) вид.scrollTop = y;
 }
 
+// ----- Список товаров -----
 function нарисоватьСписокТоваров() {
-  if (!shelf().length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
+  const счёт = $("admCount");
+  if (!shelf().length) {
+    счёт.textContent = "";
+    $("adminList").innerHTML = `<p class="listempty">Товаров пока нет.</p>`; return;
+  }
   const q = (admSearch || "").trim().toLowerCase();
-  const list = shelf().filter(p => {
-    // Продавец точки ведёт свою точку — чужие товары ему не показываем даже
-    // на чтение: правки по ним сервер отклонит, а список только путает.
-    if (myScope() && p.city !== myScope()) return false;
+  // Продавец точки ведёт свою точку — чужие товары ему не показываем даже
+  // на чтение: правки по ним сервер отклонит, а список только путает.
+  const свои = shelf().filter(p => !myScope() || p.city === myScope());
+  const list = свои.filter(p => {
     if (admCatFilter !== "all" && p.category !== admCatFilter) return false;
     if (admLocFilter !== "all" && p.city !== admLocFilter) return false;
     const st = stockState(p);
@@ -641,68 +648,22 @@ function нарисоватьСписокТоваров() {
     if (q && !(`${p.name} ${p.brand || ""} ${p.flavor || ""}`.toLowerCase().includes(q))) return false;
     return true;
   });
+  // Сколько показано — и заодно видно, что отбор включён: «3 товара» при
+  // забытом фильтре читались бы как «на точке всего три».
+  счёт.textContent = batchMode ? "Впишите, сколько привезли"
+    : list.length === свои.length ? `${свои.length} ${plural(свои.length, "товар", "товара", "товаров")}`
+    : `Показано ${list.length} из ${свои.length}`;
   if (!list.length) {
     const msg = admStockFilter === "out" ? "Ничего не кончилось — на всех точках есть остаток."
               : admStockFilter === "need" ? "Завозить нечего: везде больше " + LOW_STOCK + " шт."
               : "Ничего не найдено.";
-    $("adminList").innerHTML = `<p style="color:var(--hint)">${msg}</p>`; return;
+    $("adminList").innerHTML = `<p class="listempty">${msg}</p>`; return;
   }
-  $("adminList").innerHTML = list.map(p => {
-    // Закончившийся товар и число ждущих — то, ради чего в этот список
-    // заходят чаще всего: он отвечает на вопрос «что срочно завезти».
-    const st = stockState(p);
-    const out = st === "out" ? `<span class="tagbadge out">нет</span>`
-              : st === "low" ? `<span class="tagbadge warn">осталось ${p.stock}</span>` : "";
-    const wait = p.waiting ? `<span class="tagbadge warn">ждут ${p.waiting}</span>` : "";
-    const fav = p.favored ? `<span class="tagbadge">♥ ${p.favored}</span>` : "";
-    const off = p.hidden ? `<span class="tagbadge">снят с витрины</span>` : "";
-    const marks = (out || wait || fav || off) ? `<div class="admmarks">${out}${wait}${fav}${off}</div>` : "";
-    // Действия — снизу и с подписями: «📦 Склад» и «✏️ Карточка» нужны
-    // каждый день. Редкие — «снять с витрины» и «удалить» — в меню «⋯»:
-    // удаление уносит остаток, историю и отзывы, и держать его в одном
-    // касании от правки цены нельзя. Раньше все четыре стояли квадратами
-    // справа и съедали половину ширины строки.
-    const действия = `<button type="button" class="actbtn" data-move="${p.id}">📦 Склад</button>
-        <button type="button" class="actbtn" data-edit="${p.id}">✏️ Карточка</button>
-        <button type="button" class="actbtn more" data-more="${p.id}" aria-label="Ещё: снять с витрины, удалить">⋯</button>`;
-    // В массовом приходе — поле количества вместо кнопок действий. Товар со
-    // вкусами: остаток у него свой на каждый вкус, и одна цифра «+N» не
-    // сказала бы, какому, — для него кнопка в окно склада, где строка на вкус.
-    const ошибка = (batchConflicts[p.id]
-        ? `<div class="dwarn" style="margin-top:8px">Уже записано раньше: ${esc(batchConflicts[p.id])}. Если привезли ещё — впишите, сколько добавить.</div>` : "")
-      + (batchErrors[p.id] ? `<div class="dwarn" style="margin-top:8px">${esc(batchErrors[p.id])}</div>` : "");
-    const приход = hasVariants(p)
-      ? `<button type="button" class="actbtn" data-batchvar="${p.id}">📦 Приход по вкусам ›</button>`
-      : `<span style="color:var(--hint);font-size:13px">Приход, шт</span>
-         <input type="number" min="0" inputmode="numeric" placeholder="+0" data-batchqty="${p.id}"
-             value="${esc(batchDraft[p.id] ?? "")}">`;
-    // Неразрывные пробелы внутри кусков: «без фото» или «+3 в заказах»,
-    // разорванные переносом по словам, читаются как мусор.
-    const нр = (t) => String(t).replace(/ /g, "&nbsp;");
-    const фото = p.photo_url ? нр("фото ✓") : нр("без фото");
-    const хит = p.is_hit ? ` · ${нр("🔥 хит")}` : "";
-    // «В заказах» — рядом с остатком: товар ещё на полке, но уже обещан.
-    // Без этого числа полка и список не сходились, и казалось, что лишнее.
-    const обещано = p.reserved ? ` · <span class="resv">${нр(`+${p.reserved} в заказах`)}</span>` : "";
-    // Цена — кнопка справа от названия: за ней в этот список и заходят
-    // чаще всего, и путь к ней не должен идти через всю карточку. В
-    // массовом приходе речь о количествах — там цена просто видна. Пока по
-    // цене есть сомнение (ответ не пришёл, запрос в пути), строка так и
-    // говорит: число может быть уже неправдой, нажатие сверит его с сервером.
-    const цена = batchMode
-      ? `<span class="pricetap nopen" style="background:none;padding:0">${(+p.price).toFixed(2)} Br</span>`
-      : `<button type="button" class="pricetap${ценаСомнительна(p.id) ? " unsure" : ""}" data-price="${p.id}"
-           aria-label="${ценаСомнительна(p.id) ? "Цена не подтверждена — нажмите, чтобы сверить" : "Изменить цену"}">${(+p.price).toFixed(2)} Br</button>`;
-    const вариантов = hasVariants(p)
-      ? `${нр(`${p.variants.length} ${plural(p.variants.length, "вариант", "варианта", "вариантов")}`)} · ` : "";
-    return `<div class="admrow prodrow">
-      <div class="prodtop"><div class="prodname">${esc(p.name)}</div>${цена}</div>
-      <div class="prodmeta">${esc(p.city)} · ${вариантов}${нр(`${p.stock} шт`)}${обещано} · ${фото}${хит}</div>
-      ${marks}
-      <div class="prodacts">${batchMode ? приход : действия}</div>
-      ${batchMode ? ошибка : ""}
-    </div>`;
-  }).join("");
+  // Точку пишем в строке, только когда в списке все точки сразу. Выбран один
+  // город или продавец ведёт свою точку — «Минск» в каждой строке ничего не
+  // сообщает, а место под сведения на узком телефоне дорого.
+  const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
+  $("adminList").innerHTML = list.map(p => строкаТовара(p, сТочкой)).join("");
   if (batchMode) {
     $("adminList").querySelectorAll("[data-batchqty]").forEach(inp => inp.oninput = () => {
       batchDraft[+inp.dataset.batchqty] = inp.value;
@@ -716,6 +677,92 @@ function нарисоватьСписокТоваров() {
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
   $("adminList").querySelectorAll("[data-more]").forEach(b => b.onclick = () => открытьЕщё(+b.dataset.more));
 }
+
+// «3 вкуса», «4 цвета», «2 сопротивления» — словом категории, а не безликим
+// «3 варианта»: у жидкости владелец думает вкусами, у пода — расцветками.
+// Слово он задаёт в категории сам; склоняем известные, остальное — «варианты».
+// Последняя форма — для кнопки «Приход по вкусам ›» в массовом приходе.
+const ФОРМЫ_ВАРИАНТА = { "вкус": ["вкус", "вкуса", "вкусов", "вкусам"], "цвет": ["цвет", "цвета", "цветов", "цветам"],
+  "сопротивление": ["сопротивление", "сопротивления", "сопротивлений", "сопротивлениям"] };
+const формыВарианта = (p) => ФОРМЫ_ВАРИАНТА[String(catVariant(p.category) || "").trim().toLowerCase()]
+  || ["вариант", "варианта", "вариантов", "вариантам"];
+function вариантовСтрокой(p) {
+  const n = p.variants.length, [один, два, пять] = формыВарианта(p);
+  return `${n} ${plural(n, один, два, пять)}`;
+}
+
+// Строка товара. Сверху — название, под ним остаток; справа — цена-кнопка:
+// за ней в этот список заходят чаще всего. Ниже — второстепенное (точка,
+// варианты, «хит», кто ждёт) и действия с подписями.
+function строкаТовара(p, сТочкой) {
+  // Неразрывные пробелы внутри кусков: «без фото» или «в заказах 3»,
+  // разорванные переносом по словам, читаются как мусор.
+  const нр = (t) => String(t).replace(/ /g, "&nbsp;");
+  const st = stockState(p);
+  // Остаток — словами: сколько можно продать и сколько уже обещано в
+  // невыданных заказах. Раньше было «12 шт · +3 в заказах», и «+3» читалось
+  // как «ещё три сверху». Кончилось или мало — цветом и словом, а не только
+  // цветом: цвет на солнце и у дальтоника не различить.
+  const обещано = p.reserved ? ` · ${нр("в заказах")}&nbsp;<b>${p.reserved}</b>` : "";
+  const остаток = st === "out"
+    ? `<span class="stk out">${p.reserved ? "Свободных нет" : "Нет в наличии"}</span>${обещано}`
+    : `<span class="stk ${st}">Свободно&nbsp;<b>${p.stock}</b>&nbsp;шт${st === "low" ? " · мало" : ""}</span>${обещано}`;
+  // Второстепенное — отдельной строкой под остатком и только то, что есть:
+  // впихнуть всё в одну строку узкого телефона — значит сделать нечитаемым.
+  // Словами, а не значками: «♥ 2» без подсказки не расшифровать.
+  const детали = [
+    // Сколько человек подписались на поступление — прямой повод завезти,
+    // поэтому первым.
+    p.waiting ? `<span class="warnc">${нр(`ждут поступления ${p.waiting}`)}</span>` : "",
+    сТочкой ? esc(p.city) : "",
+    hasVariants(p) ? нр(вариантовСтрокой(p)) : "",
+    p.is_hit ? нр("🔥 хит") : "",
+    p.favored ? нр(`в избранном ${p.favored}`) : "",
+    p.photo_url ? "" : нр("без фото"),
+  ].filter(Boolean).join(" · ");
+  // Снятый с витрины — плашкой перед сведениями: это состояние товара, а не
+  // ещё одна подробность в ряду.
+  const снят = p.hidden ? `<span class="tagbadge offtag">снят с витрины</span>` : "";
+  // Цена-кнопка. Пока по цене есть сомнение (ответ не пришёл, запрос в
+  // пути), строка так и говорит: число может быть уже неправдой, нажатие
+  // сверит его с сервером. В массовом приходе речь о количествах — там цена
+  // просто видна.
+  const сомнение = ценаСомнительна(p.id);
+  const цена = batchMode
+    ? `<span class="pricetext">${(+p.price).toFixed(2)} Br</span>`
+    : `<button type="button" class="pricetap${сомнение ? " unsure" : ""}" data-price="${p.id}"
+         aria-label="${сомнение ? "Цена не подтверждена — нажмите, чтобы сверить" : "Изменить цену"}">${(+p.price).toFixed(2)} Br</button>`;
+  // Действия — снизу и с подписями: «📦 Склад» и «✏️ Карточка» нужны
+  // каждый день. Редкие — «снять с витрины» и «удалить» — в меню «⋯»:
+  // удаление уносит остаток, историю и отзывы, и держать его в одном
+  // касании от правки цены нельзя.
+  const действия = `<div class="prodacts">
+      <button type="button" class="actbtn" data-move="${p.id}">📦 Склад</button>
+      <button type="button" class="actbtn" data-edit="${p.id}">✏️ Карточка</button>
+      <button type="button" class="actbtn more" data-more="${p.id}" aria-label="Ещё: снять с витрины, удалить">⋯</button>
+    </div>`;
+  // В массовом приходе — поле количества вместо кнопок действий. Товар со
+  // вкусами: остаток у него свой на каждый вкус, и одна цифра «+N» не
+  // сказала бы, какому, — для него кнопка в окно склада, где строка на вкус.
+  const приход = hasVariants(p)
+    ? `<div class="prodacts batch"><button type="button" class="actbtn" data-batchvar="${p.id}">📦 Приход по ${формыВарианта(p)[3]} ›</button></div>`
+    : `<div class="prodacts batch"><label for="batchqty${p.id}">Приход, шт</label>
+         <input id="batchqty${p.id}" type="number" min="0" inputmode="numeric" placeholder="+0" data-batchqty="${p.id}"
+             value="${esc(batchDraft[p.id] ?? "")}"></div>`;
+  const ошибка = (batchConflicts[p.id]
+      ? `<div class="dwarn" style="margin-top:8px">Уже записано раньше: ${esc(batchConflicts[p.id])}. Если привезли ещё — впишите, сколько добавить.</div>` : "")
+    + (batchErrors[p.id] ? `<div class="dwarn" style="margin-top:8px">${esc(batchErrors[p.id])}</div>` : "");
+  return `<div class="admrow prodrow${p.hidden ? " off" : ""}">
+      <div class="prodtop">
+        <div class="prodhead"><div class="prodname">${esc(p.name)}</div><div class="prodstock">${остаток}</div></div>
+        ${цена}
+      </div>
+      ${снят || детали ? `<div class="prodmeta">${снят}${снят && детали ? " " : ""}${детали}</div>` : ""}
+      ${batchMode ? приход + ошибка : действия}
+    </div>`;
+}
+
+// ----- /Список товаров -----
 
 // Меню «⋯» у строки товара: снять с витрины (или вернуть) и удалить.
 // Сами действия — прежние (toggleHidden, delAdminRow с их вопросами), меню

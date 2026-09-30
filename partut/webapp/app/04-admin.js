@@ -506,8 +506,24 @@ function renderAdmFilters() {
     b.onclick = () => { admLocFilter = b.dataset.al; renderAdmFilters(); renderAdminList(); });
   $("admStockChips").querySelectorAll("[data-as]").forEach(b =>
     b.onclick = () => { admStockFilter = b.dataset.as; renderAdmFilters(); renderAdminList(); });
+  выбранныеЧипыВВиду();
 }
 $("admSearch").oninput = () => { admSearch = $("admSearch").value; renderAdminList(); };
+
+// Ряды фильтров листаются вбок, и выбранный чип может оказаться за краем:
+// «Аксессуары» в конце ряда или «Надо завезти», выбранный с главного экрана
+// управления. Отбор, которого не видно, хуже отбора, которого нет, — список
+// молча короче, а почему, непонятно. Докручиваем ряд до выбранного.
+function выбранныеЧипыВВиду() {
+  ["admLocChips", "admStockChips", "admCatChips"].forEach(id => {
+    const ряд = $(id), чип = ряд.querySelector(".ochip.active");
+    if (!чип || !ряд.clientWidth) return;              // экран ещё скрыт — размеров нет
+    const р = ряд.getBoundingClientRect(), ч = чип.getBoundingClientRect();
+    const поле = 32;                                    // чтобы чип не прятался под растушёвку края
+    if (ч.left < р.left + поле) ряд.scrollLeft -= р.left + поле - ч.left;
+    else if (ч.right > р.right - поле) ряд.scrollLeft += ч.right - (р.right - поле);
+  });
+}
 
 async function openProducts() {
   // Список читает shelf() — тот самый adminProducts, который заводит
@@ -517,6 +533,7 @@ async function openProducts() {
   renderAdmFilters();
   renderAdminList();
   $("productsView").classList.add("show");
+  выбранныеЧипыВВиду();                                  // размеры появились только сейчас
 }
 $("productsClose").onclick = () => $("productsView").classList.remove("show");
 
