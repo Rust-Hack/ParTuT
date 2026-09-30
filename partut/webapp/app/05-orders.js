@@ -157,11 +157,15 @@ function orderTracker(status) {
   </div>`;
 }
 function repeatOrder(o, подтверждено) {
-  const unavail = [], toAdd = [];
+  const unavail = [], toAdd = [], меньше = [];
   (o.items || []).forEach(it => {
     const p = allProducts.find(x => x.id === it.id);
     const avail = p ? (it.flavor ? variantStock(p, it.flavor) : p.stock) : 0;
     if (!p || avail <= 0) { unavail.push(esc(имяПозиции(it))); return; }
+    // Осталось меньше, чем было в заказе, — кладём, сколько есть, и говорим
+    // об этом прямо (BR-02): «повторить» не должно молча менять состав.
+    // Другой вкус вместо кончившегося не подставляем.
+    if (it.qty > avail) меньше.push(`${esc(имяПозиции(it))} — ${avail} из ${it.qty}`);
     toAdd.push({ id: p.id, flavor: it.flavor || null, qty: Math.min(it.qty, avail) });
   });
   if (!toAdd.length) { alertMsg("Эти товары сейчас недоступны."); return; }
@@ -175,13 +179,18 @@ function repeatOrder(o, подтверждено) {
       + `Заменить их товарами из этого заказа?${точка}`, () => repeatOrder(o, true));
     return;
   }
-  city = o.city; $("pointName").textContent = city;          // корзина привязана к одной точке
-  for (const k in cart) delete cart[k];
-  toAdd.forEach(a => { cart[cartKey(a.id, a.flavor)] = { product_id: a.id, flavor: a.flavor, qty: a.qty }; });
-  сохранитьКорзину();
+  // Корзина заказа и его точка — той же дорогой, что обычная смена точки:
+  // выбор запоминается, и после перезапуска приложение откроется на этой
+  // точке с этой корзиной (BR-01). Заказ сам не оформляется.
+  const новая = {};
+  toAdd.forEach(a => { новая[cartKey(a.id, a.flavor)] = { product_id: a.id, flavor: a.flavor, qty: a.qty }; });
+  перейтиНаТочку(o.city, новая);
   $("myOrdersView").classList.remove("show");
-  updateFilterBtn(); renderGrid(); renderNav(); showTab("cart");
-  if (unavail.length) alertMsg("Добавлено в корзину. Сейчас недоступно: " + unavail.join(", "));
+  showTab("cart");
+  const изменения = [];
+  if (меньше.length) изменения.push("Меньше, чем в заказе, — больше нет в наличии: " + меньше.join(", "));
+  if (unavail.length) изменения.push("Сейчас недоступно: " + unavail.join(", "));
+  if (изменения.length) alertMsg("Добавлено в корзину. " + изменения.join(". ") + ".");
 }
 
 // ============ Заказы (управление продавцом) ============

@@ -492,6 +492,7 @@ async function start() {
     // Сохранённый город подставляем ДО recomputeCities(): иначе она увидит
     // пустой city и молча возьмёт первую точку по сортировке, как раньше.
     city = me.city || city;
+    применитьЖдущуюТочку();
     renderNav();
     // Сначала каталог (первый экран), бонусы прогреваем в фоне ПОСЛЕ него.
     // Заставку убираем сразу, как только есть что показать: каталог загружен,
@@ -659,7 +660,9 @@ async function fetchLocations() {
 }
 function recomputeCities() {
   cityList = locations.map(l => l.name);   // точки берём из базы (даже пустые)
-  if (!cityList.includes(city)) city = cityList[0] || null;
+  // Точки больше нет (закрылась, пока приложение было свёрнуто) — к той, что
+  // помнит сервер, и только потом к первой по списку.
+  if (!cityList.includes(city)) city = (me && cityList.includes(me.city) ? me.city : cityList[0]) || null;
   $("pointName").textContent = city || "Выбери точку";
 }
 async function loadCatalog() {
@@ -864,7 +867,12 @@ function sortProducts(list) {
 function searchText(p) {
   const характеристики = Object.values(p.specs || {})
     .filter(v => v !== null && v !== undefined && String(v).trim() !== "").map(String);
-  return [p.name, p.brand, ...flavorsOf(p), ...характеристики].filter(Boolean).join(" ").toLowerCase();
+  // «0,8» и «0.8» — одно и то же сопротивление: у числа в характеристиках и
+  // в названии варианта («0,6 Ом») ищем обе записи. Название модели не
+  // трогаем — там разные записи могут значить разные устройства.
+  const обеЗаписи = (v) => [v, v.replace(/(\d),(\d)/g, "$1.$2"), v.replace(/(\d)\.(\d)/g, "$1,$2")];
+  return [p.name, p.brand, ...[...flavorsOf(p), ...характеристики].flatMap(обеЗаписи)]
+    .filter(Boolean).join(" ").toLowerCase();
 }
 // «xros3» и «XROS 3» — одно и то же: пробелы в модели пишут как придётся.
 function ищетсяВ(текст, запрос) {
@@ -1054,24 +1062,60 @@ $("searchInput").oninput = (e) => {
 // Две копии этой логики разошлись бы на первой же правке, а расходиться тут
 // нечему: город решает, что на витрине, что в корзине и куда поедет заказ.
 // после — что доделать на экране, с которого позвали.
-function switchCity(next, после) {
-  const перейти = () => {
-    const changed = next !== city;
-    if (changed) { for (const k in cart) delete cart[k]; }
-    city = next; $("pointName").textContent = city;
-    if (changed) сохранитьКорзину();   // новая точка — пустая корзина, и сохранённая тоже
+// ----- Смена точки -----
+// Одна дорога смены точки: активная (city), запомненная (me.city и сервер) и
+// корзина меняются вместе. Раньше «Повторить заказ» с другой точки менял
+// только city: после перезапуска приложение открывалось на прежней точке, и
+// собранная корзина не восстанавливалась (BR-01).
+//
+// Сервер может не принять выбор — пропала связь, сбой. Тогда выбор ждёт в
+// телефоне и досылается при следующем запуске: иначе приложение открылось бы
+// на старой точке, а корзина новой молча пропала бы.
+const ТОЧКА_ЖДЁТ = "partut_city_pending_v1";
+function запомнитьТочку(next) {
+  try { localStorage.setItem(ТОЧКА_ЖДЁТ, next); } catch (e) { /* без хранилища — просто без досылки */ }
+  const снять = () => { try { if (localStorage.getItem(ТОЧКА_ЖДЁТ) === next) localStorage.removeItem(ТОЧКА_ЖДЁТ); } catch (e) {} };
+  return fetch("/api/set-city", { method: "POST", headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ initData, city: next }) })
+    .then(r => r.json().catch(() => null).then(d => {
+      // Запомнил — ждать нечего. Отказал (такой точки больше нет) — тоже:
+      // досылать бессмысленно. 5xx и недочитанный ответ — досылаем потом.
+      if (r.ok && d && d.ok) { снять(); if (me) me.city = next; }
+      else if (r.status >= 400 && r.status < 500) снять();
+    }))
+    .catch(() => { /* выбор ждёт в телефоне и дошлётся при следующем запуске */ });
+}
+// При запуске: выбор, который сервер не успел запомнить, — главнее того, что
+// помнит сервер: он сделан позже. Показываем его и досылаем.
+function применитьЖдущуюТочку() {
+  let ждёт = null;
+  try { ждёт = localStorage.getItem(ТОЧКА_ЖДЁТ); } catch (e) {}
+  if (!ждёт || !me || !me.city) return;
+  if (ждёт === me.city) { try { localStorage.removeItem(ТОЧКА_ЖДЁТ); } catch (e) {} return; }
+  city = ждёт;
+  запомнитьТочку(ждёт);
+}
+// новаяКорзина — что положить в корзину новой точки (повтор заказа); без
+// неё смена точки начинает корзину с чистого листа.
+function перейтиНаТочку(next, новаяКорзина) {
+  const changed = next !== city;
+  if (changed || новаяКорзина) { for (const k in cart) delete cart[k]; }
+  if (новаяКорзина) Object.assign(cart, новаяКорзина);
+  city = next; $("pointName").textContent = city;
+  if (changed || новаяКорзина) сохранитьКорзину();
+  if (changed) {
     brandFilters = [];   // другая точка — другой набор брендов
     prefetchDelivery();  // заранее подтянем способы получения новой точки
-    updateFilterBtn(); renderGrid(); renderNav();
     // Сохраняем и здесь, не только при первом выборе на входе: иначе
     // «запомненный город» переставал быть правдой при первой же смене точки.
-    if (changed && me) {
-      me.city = next;
-      fetch("/api/set-city", { method: "POST", headers: { "Content-Type": "application/json" },
-                               body: JSON.stringify({ initData, city: next }) }).catch(() => {});
-    }
-    if (после) после();
-  };
+    if (me) { me.city = next; запомнитьТочку(next); }
+  }
+  updateFilterBtn(); renderGrid(); renderNav();
+}
+// ----- /Смена точки -----
+
+function switchCity(next, после) {
+  const перейти = () => { перейтиНаТочку(next); if (после) после(); };
   // Спрашиваем только когда есть что терять: корзина собирается по одной точке.
   if (next !== city && Object.keys(cart).length)
     confirmMsg("Сменить город? Корзина очистится: заказ собирается по одной точке.", перейти);
