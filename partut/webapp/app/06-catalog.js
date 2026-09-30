@@ -823,7 +823,9 @@ async function сохранитьЦену() {
     // Заголовки и тело ответа приходят отдельно, и связь может оборваться
     // между ними. Недочитанный ответ — не «не сохранилось», а «не знаем».
     let d;
-    try { d = await r.json(); } catch (e) { throw new НеизвестныйИсход("Ответ сервера оборвался."); }
+    try { d = await r.json(); } catch (e) {
+      throw new НеизвестныйИсход(e && e.name === "AbortError" ? "Сервер не ответил вовремя." : "Ответ сервера оборвался.");
+    }
     if (!d || typeof d !== "object") throw new НеизвестныйИсход("Ответ сервера не разобрать.");
     if (d.ok !== true) {
       // Отказ — только когда сервер назвал причину: тогда он точно ничего не
@@ -1672,6 +1674,8 @@ function запомнитьКакБыло(поле, значение) {
   else if (поле === "flavor") editOrigFlavor = значение;
 }
 
+const НЕИЗВЕСТНО_КАРТОЧКА = "ответ сервера не дошёл — могло и сохраниться. Закройте карточку, откройте снова и проверьте";
+
 async function saveEdit(p, подтверждено) {
   const isVar = hasVariants(p);
   // Ответы сервера ПРОВЕРЯЕМ. Раньше их не смотрели вовсе: сервер отказывал —
@@ -1720,7 +1724,11 @@ async function saveEdit(p, подтверждено) {
     if ("price" in поля && editOrigPriceRev !== null) ожидали.price_rev = editOrigPriceRev;
     const r = await fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ initData, id: editId, fields: поля, expected: ожидали }) });
-    const d = await r.json().catch(() => ({}));
+    const d = await r.json().catch(() => null);
+    // Ответ не дочитался или сервер упал — правка могла и сохраниться.
+    // «Не сохранилось» было бы неправдой; повтор безопасен: сервер сверит
+    // значения со снимком и не затрёт то, что уже записано.
+    if (!d || r.status >= 500) { отказы.push(`правка товара: ${НЕИЗВЕСТНО_КАРТОЧКА}`); return {}; }
     if (!d.ok) { отказы.push(назвать("правка товара", d)); return d; }
     // Сервер сохраняет всё, что прошло, и называет, что не прошло: отказ в
     // цене не повод потерять только что вписанное описание.
@@ -1740,7 +1748,8 @@ async function saveEdit(p, подтверждено) {
   const послать = async (адрес, тело, что) => {
     const r = await fetch(адрес, { method: "POST", headers: { "Content-Type": "application/json" },
                                    body: JSON.stringify(тело) });
-    const d = await r.json().catch(() => ({}));
+    const d = await r.json().catch(() => null);
+    if (!d || r.status >= 500) { отказы.push(`${что}: ${НЕИЗВЕСТНО_КАРТОЧКА}`); return {}; }
     if (!d.ok) отказы.push(назвать(что, d));
     return d;
   };

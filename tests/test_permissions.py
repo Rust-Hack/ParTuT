@@ -12,7 +12,7 @@
 Здесь проверяются НАСТОЯЩИЕ проверки прав, а не заглушка as_admin(): иначе
 тест про доступ проверял бы сам себя.
 """
-from _common import (db, client, Checker, as_admin, real_auth, REAL_GET_USER)
+from _common import (db, client, Checker, as_admin, real_auth, REAL_GET_USER, версия_цены)
 
 from partut.web import auth
 
@@ -81,8 +81,9 @@ def run():
         # ---------- Продавец точки ----------
         c2 = Checker("Продавец точки")
         _as(SELLER)
-        c2("свою точку правит",
-          _post("/api/admin/product/update", id=turov, field="price", value="35").get_json().get("ok"))
+        # Цену приложение меняет с номером версии (без него — «приложение устарело»).
+        c2("свою точку правит", "price" in (_post("/api/admin/product/update", id=turov, fields={"price": "35"},
+                                                  expected={"price_rev": версия_цены(turov)}).get_json().get("saved") or []))
         r = _post("/api/admin/product/update", id=minsk, field="price", value="1")
         c2("чужую — нет", r.status_code == 403 and r.get_json()["error"] == "other_city")
         c2("цена чужой точки цела", db.get_product(minsk)["price"] == 30.0)
@@ -101,8 +102,8 @@ def run():
         # промокоды и реквизиты оплаты. Теперь это просто продавец пошире.
         c3 = Checker("Продавец всех точек")
         _as(ROAMER)
-        c3("правит любую точку",
-          _post("/api/admin/product/update", id=minsk, field="price", value="31").get_json().get("ok"))
+        c3("правит любую точку", "price" in (_post("/api/admin/product/update", id=minsk, fields={"price": "31"},
+                                                   expected={"price_rev": версия_цены(minsk)}).get_json().get("saved") or []))
         c3("видит заказы всех точек", _post("/api/admin/orders").get_json().get("ok"))
         r = _post("/api/admin/model", category="podsystem", name="Своя модель")
         c3("но ассортимент ему закрыт", r.status_code == 403 and r.get_json()["error"] == "owner_only")

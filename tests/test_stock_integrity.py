@@ -16,7 +16,7 @@
 """
 import types
 
-from _common import db, client, Checker, as_admin, SENT, reset_sent
+from _common import db, client, Checker, as_admin, SENT, reset_sent, версия_цены
 
 from partut import cache
 from partut import config
@@ -236,7 +236,8 @@ def run_карточка_и_бот_не_обходят_склад():
 
     pid = db.add_product("Минск", "pods", "ОбходПод", 20.0, 5, cost=12.0)
     r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
-                    "fields": {"stock": "9", "price": "22"}, "expected_stock": 5})
+                    "fields": {"stock": "9", "price": "22"}, "expected_stock": 5,
+                    "expected": {"price_rev": версия_цены(pid)}})
     d = r.get_json()
     c("цена сохранилась", "price" in (d.get("saved") or []))
     c("остаток — отказ «только через склад»", d["failed"]["stock"]["error"] == "use_stock_moves")
@@ -409,7 +410,7 @@ def run_журнал_было_стало():
     try:
         pid = db.add_product("Минск", "pods", "ЖурналПод", 20.0, 5, cost=12.0)
         client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
-                    "fields": {"price": "25", "is_hit": 1, "cost": "12"}})
+                    "fields": {"price": "25", "is_hit": 1, "cost": "12"}, "expected": {"price_rev": версия_цены(pid)}})
         _ход(id=pid, qty=3, reason="in")
         mid = db.add_model("disposable", "ЖурналМодель", "BR", "", {}, ["Мята"])
         client.post("/api/admin/product/from-model", json={
@@ -424,7 +425,7 @@ def run_журнал_было_стало():
         c("завоз назван с первым приходом", any("ЖурналМодель" in x and "первый приход 4" in x for x in строки))
         # Цену успел поменять другой: попытка тоже в журнале, а не «без изменений».
         client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
-                    "fields": {"price": "30"}, "expected": {"price": "20"}})
+                    "fields": {"price": "30"}, "expected": {"price": "20", "price_rev": 0}})
         последняя = db.list_admin_log(limit=1)[0]["details"] or ""
         c(f"конфликт цены назван: {последняя}", "не сохранено — уже поменяли, сейчас 25.00 Br" in последняя)
     finally:

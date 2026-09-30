@@ -1950,11 +1950,19 @@ async function stockЗаписать(подтверждено) {
   try {
     const r = await fetch("/api/admin/stock/move/batch", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ initData, reason: stockReason, note: $("stockNote").value, items }) });
-    const d = await r.json().catch(() => ({}));
     // 5xx — сервер споткнулся посередине: часть строк могла записаться. Это
     // тот же «исход неизвестен», что и обрыв сети, — ключи строк сохраняем.
     if (r.status >= 500) throw new Error("server_error");
+    // Тело ответа не дочиталось (обрыв на середине, истёк срок) — это тоже не
+    // «не записано», а «не знаем»: приход мог пройти. Раньше такой ответ
+    // превращался в пустой {} и шёл как «отказ всей пачке» — ключи стирались,
+    // и повторное «Записать» уходило новыми ключами: приход записался бы дважды.
+    let d;
+    try { d = await r.json(); } catch (e) { throw new Error(e && e.name === "AbortError" ? "timeout" : "no_body"); }
+    if (!d || typeof d !== "object") throw new Error("no_body");
     if (!r.ok || !d.ok) {
+      // Отказ — только с причиной от сервера. Без неё — тоже «не знаем».
+      if (!d.error && !d.message) throw new Error("no_body");
       // Отказ всей пачке целиком (права, пустой список): ни одна строка не
       // записана, ключи можно выдать заново.
       stockTokens = {};
@@ -2001,8 +2009,11 @@ async function stockЗаписать(подтверждено) {
   } catch (e) {
     // Ответа нет: запись могла и пройти. Ключи строк НЕ меняем — повторное
     // нажатие с теми же ключами сервер узнает и второй раз не запишет.
-    const что = e && e.message === "server_error" ? "Сервер ответил ошибкой." : текстСбоя(e);
-    alertMsg(что + "\n\nВведённое на месте. Нажмите «Записать» ещё раз — дважды не запишется.");
+    const что = e && e.message === "server_error" ? "Сервер ответил ошибкой."
+      : e && e.message === "no_body" ? "Ответ сервера оборвался."
+      : e && e.message === "timeout" ? "Сервер не ответил вовремя."
+      : текстСбоя(e);
+    alertMsg(что + " Запись могла пройти.\n\nВведённое на месте. Нажмите «Записать» ещё раз — дважды не запишется.");
   } finally { btn.disabled = false; btn.textContent = "Записать"; }
 }
 

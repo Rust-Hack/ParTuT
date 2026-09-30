@@ -8,7 +8,7 @@
 заводилась: все поля применяются за один вызов, отказ по одному полю не теряет
 остальные, а отказ по правам остаётся отказом по правам.
 """
-from _common import db, client, Checker, as_admin, as_user, deny_admin
+from _common import db, client, Checker, as_admin, as_user, deny_admin, версия_цены
 
 from partut import cache
 
@@ -30,7 +30,8 @@ def run():
 
     # --- Всё сразу ---
     r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid, "fields": {
-        "price": "25.5", "cost": "12", "stock": "7", "name": "Пачка-под 2", "is_hit": 1}})
+        "price": "25.5", "cost": "12", "stock": "7", "name": "Пачка-под 2", "is_hit": 1},
+        "expected": {"price_rev": версия_цены(pid)}})
     d = r.get_json()
     c("пачка принята", r.status_code == 200 and d.get("ok"))
     c("сервер назвал, что сохранил", set(d.get("saved") or []) == {"price", "cost", "name", "is_hit"})
@@ -94,7 +95,7 @@ def run_остаток_не_переписывается_чужой_продаж
 
     # Владелец меняет ТОЛЬКО цену и сохраняет форму.
     r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid, "fields": {
-        "price": "45"}, "expected": {"price": 40}})
+        "price": "45"}, "expected": {"price": 40, "price_rev": версия_цены(pid)}})
     d = r.get_json()
     c("цена сохранилась", d.get("ok") and "price" in (d.get("saved") or []))
     c("остаток НЕ вернулся к 5", db.get_product(pid)["stock"] == 4)
@@ -137,12 +138,12 @@ def run_цена_не_затирает_чужую_правку():
 
     # Первый открыл карточку (видит 40) и сохранил 42.
     r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
-                    "fields": {"price": "42"}, "expected": {"price": "40"}})
+                    "fields": {"price": "42"}, "expected": {"price": "40", "price_rev": 0}})
     c("первый сохранил", "price" in (r.get_json().get("saved") or []))
 
     # Второй открыл карточку раньше (тоже видел 40) и сохраняет 45 и описание.
     r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
-                    "fields": {"price": "45", "description": "новое"}, "expected": {"price": "40.00"}})
+                    "fields": {"price": "45", "description": "новое"}, "expected": {"price": "40.00", "price_rev": 0}})
     d = r.get_json()
     отказ = (d.get("failed") or {}).get("price", {})
     c("цену второго не приняли — конфликт назван", отказ.get("error") == "conflict")
@@ -153,7 +154,7 @@ def run_цена_не_затирает_чужую_правку():
     # «40», «40.0» и «40.00» — одно и то же: без этого сверка ругалась бы на
     # каждое сохранение.
     r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
-                    "fields": {"price": "43"}, "expected": {"price": 42.0}})
+                    "fields": {"price": "43"}, "expected": {"price": 42.0, "price_rev": версия_цены(pid)}})
     c("то же число в другой записи — не конфликт", "price" in (r.get_json().get("saved") or []))
 
     _clean()

@@ -16,14 +16,26 @@
 const СРОК_ЗАПРОСА = 20000;     // обычная ручка отвечает за доли секунды
 const СРОК_ЗАГРУЗКИ = 60000;    // фото на 12 МБ по мобильной сети — дело долгое
 const _родной_fetch = window.fetch.bind(window);
+//
+// Срок — на ВЕСЬ обмен, до конца чтения тела ответа. Заголовки могут прийти,
+// а тело застрять на середине: раньше таймер снимался вместе с заголовками,
+// и r.json() ждал вечно — «Сохраняю…» до перезагрузки страницы (QP-04). Истёк
+// срок во время чтения — чтение падает с AbortError, и экран считает исход
+// неизвестным: сервер мог успеть записать.
 window.fetch = (адрес, наст) => {
   наст = наст || {};
   if (наст.signal) return _родной_fetch(адрес, наст);   // отменой уже управляют снаружи
   const стоп = new AbortController();
   const срок = (наст.body instanceof FormData) ? СРОК_ЗАГРУЗКИ : СРОК_ЗАПРОСА;
   const таймер = setTimeout(() => стоп.abort(), срок);
-  return _родной_fetch(адрес, { ...наст, signal: стоп.signal })
-    .finally(() => clearTimeout(таймер));
+  const снять = () => clearTimeout(таймер);
+  return _родной_fetch(адрес, { ...наст, signal: стоп.signal }).then(r => {
+    for (const способ of ["json", "text", "blob", "arrayBuffer", "formData"]) {
+      const родной = r[способ];
+      if (typeof родной === "function") r[способ] = (...а) => родной.apply(r, а).finally(снять);
+    }
+    return r;
+  }, e => { снять(); throw e; });
 };
 
 // «Сеть недоступна» и «сервер молчит» лечатся по-разному: в первом случае
@@ -309,8 +321,8 @@ function showTab(id) {
 // корзине. Свайп, начатый на ленте, — это её прокрутка, а не «Назад» и не
 // смена вкладки. Раньше жест «Назад» забирал его себе: листая фильтры слева
 // направо, человек вылетал в «Управление», а листая фото товара назад —
-// из карточки. Новая лента с overflow-x — сюда же: tests/test_swipe_rails.py
-// сверяет этот список со стилями.
+// из карточки. Новая лента с прокруткой вбок — сюда же: tests/js/swipe_rails.cjs
+// сверяет этот список со стилями и разметкой.
 const ЛЕНТЫ_ВБОК = ".chiprow, .pgal, .chips, .upsell";
 const наЛенте = (e) => !!(e.target && e.target.closest && e.target.closest(ЛЕНТЫ_ВБОК));
 
@@ -577,10 +589,7 @@ async function админПост(адрес, тело, что) {
   try {
     const r = await fetch(адрес, { method: "POST", headers: { "Content-Type": "application/json" },
                                    body: JSON.stringify({ initData, ...(тело || {}) }) });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok && d.ok) return d;
-    alertMsg(d.message || ОТКАЗЫ[d.error] || (что ? `Не удалось: ${что}.` : "Не удалось."));
-    return null;
+    return разобратьАдминОтвет(r, await r.json().catch(() => null), что);
   } catch (e) { alertMsg(текстСбоя(e)); return null; }
 }
 
@@ -588,11 +597,21 @@ async function админПост(адрес, тело, что) {
 async function админФайл(адрес, fd, что) {
   try {
     const r = await fetch(адрес, { method: "POST", body: fd });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok && d.ok) return d;
-    alertMsg(d.message || ОТКАЗЫ[d.error] || (что ? `Не удалось: ${что}.` : "Не удалось."));
-    return null;
+    return разобратьАдминОтвет(r, await r.json().catch(() => null), что);
   } catch (e) { alertMsg(текстСбоя(e)); return null; }
+}
+
+// Ответ не дочитался (обрыв, истёк срок) или сервер упал на середине — это не
+// «не удалось», а «не знаем»: действие могло выполниться. Говорим так, чтобы
+// человек сначала проверил, а не повторил вслепую.
+function разобратьАдминОтвет(r, d, что) {
+  if (r.ok && d && d.ok) return d;
+  if (!d || r.status >= 500) {
+    alertMsg(`${что ? `«${что}»: о` : "О"}твет сервера не дошёл — действие могло выполниться. Проверьте, прежде чем повторять.`);
+    return null;
+  }
+  alertMsg(d.message || ОТКАЗЫ[d.error] || (что ? `Не удалось: ${что}.` : "Не удалось."));
+  return null;
 }
 
 function prefetchBonuses() { prefetchDelivery(); fetchBonus(); fetchWheel(); fetchSlot(); fetchRaffle(); }

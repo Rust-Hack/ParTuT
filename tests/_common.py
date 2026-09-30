@@ -161,6 +161,13 @@ def as_user(uid, username=None, first_name=None):
     auth.get_user = lambda init: {"id": uid, "username": username, "first_name": first_name}
 
 
+def версия_цены(pid):
+    """Номер версии цены товара (price_rev). Приложение меняет цену только с
+    ним: без номера сервер отвечает «приложение устарело» (QP-03-L), поэтому
+    тесты, которые меняют цену через API, передают его в expected."""
+    return int(db.get_product(pid)["price_rev"] or 0)
+
+
 def as_admin(uid=100, username="owner", role="owner", city=""):
     """Админ-эндпоинты будут считать запрос от этого админа.
 
