@@ -1025,6 +1025,10 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 .pricetap::after { content: "✎"; font-weight: 400; font-size: 14px; color: var(--accent); }
 .pricetap:active { filter: brightness(.94); }
 .pricetap.nopen::after { content: none; }
+/* Цена не подтверждена: ответ на прошлое сохранение не пришёл. Число может
+   быть уже неправдой — строка говорит об этом, а нажатие сверит с сервером. */
+.pricetap.unsure { background: transparent; box-shadow: inset 0 0 0 1.5px var(--warn); }
+.pricetap.unsure::after { content: "?"; font-weight: 800; color: var(--warn); }
 
 /* Строка товара в «Ценах и остатках». Раньше четыре квадратные кнопки
    справа съедали половину ширины: название и строка сведений ломались на
