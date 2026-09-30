@@ -129,6 +129,20 @@
     </div>
   </div>
 
+  <!-- Редкие действия со строкой товара. Раньше «снять с витрины» и
+       «удалить» стояли в каждой строке вровень с ценой и складом, и
+       удаление было в одном касании от ежедневной работы. -->
+  <div class="overlay" id="rowMoreOverlay">
+    <div class="sheet">
+      <h2 id="rowMoreTitle">Товар</h2>
+      <div class="pricescope" id="rowMoreScope"></div>
+      <button class="opt" id="rowMoreHide">🚫 Снять с витрины</button>
+      <button class="opt dangeropt" id="rowMoreDel">🗑 Удалить с точки</button>
+      <div class="dnote" style="margin:4px 0 0">Снятый с витрины товар покупатели не видят, а остаток, история и отзывы остаются. Удаление уносит всё это с собой.</div>
+      <button class="closebtn" id="rowMoreCancel">Отмена</button>
+    </div>
+  </div>
+
   <div class="overlay" id="filterOverlay">
     <div class="sheet">
       <h2>Фильтры</h2>

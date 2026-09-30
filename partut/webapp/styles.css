@@ -1017,13 +1017,34 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 /* Быстрая цена. Цена в строке списка — кнопка: цену меняют чаще всего
    остального, и путь к ней не должен идти через всю карточку товара.
    Высота не меньше 32px — по пальцу мимо узкой кнопки промахиваются. */
-.pricetap { display: inline-flex; align-items: center; gap: 6px; min-height: 32px;
-  margin: 5px 0 3px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
-  font-size: 14.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+.pricetap { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; flex: 0 0 auto;
+  padding: 0 11px; border: none; border-radius: 10px; cursor: pointer;
+  background: var(--accent-soft); color: var(--text);
+  font-size: 15.5px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap;
   touch-action: manipulation; }
-.pricetap::after { content: "✎"; font-weight: 400; color: var(--accent); }
-.pricetap:active { background: var(--accent-soft); }
+.pricetap::after { content: "✎"; font-weight: 400; font-size: 14px; color: var(--accent); }
+.pricetap:active { filter: brightness(.94); }
+.pricetap.nopen::after { content: none; }
+
+/* Строка товара в «Ценах и остатках». Раньше четыре квадратные кнопки
+   справа съедали половину ширины: название и строка сведений ломались на
+   три строки. Теперь сведения — во всю ширину, действия — снизу, с
+   подписями; редкие («снять с витрины», «удалить») — в меню «⋯». */
+.admrow.prodrow { display: block; padding: 12px 12px 10px; }
+.prodtop { display: flex; align-items: flex-start; gap: 10px; }
+.prodname { flex: 1; min-width: 0; font-weight: 700; font-size: 15px; line-height: 1.3;
+  padding-top: 6px; overflow-wrap: anywhere; }
+.prodmeta { color: var(--hint); font-size: 13px; line-height: 1.4; margin-top: 4px; }
+.prodmeta .resv { color: var(--text); }
+.prodacts { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.actbtn { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 13px;
+  border: none; border-radius: 10px; background: var(--surface-2); color: var(--text);
+  font-size: 14px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+.actbtn:active { filter: brightness(.94); }
+.actbtn.more { margin-left: auto; width: 40px; justify-content: center; padding: 0; font-size: 18px; letter-spacing: 1px; }
+.prodacts input { width: 72px; padding: 8px; border-radius: 9px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--text); font-size: 14px; text-align: center; }
+.opt.dangeropt { color: var(--danger); }
 .pricescope { color: var(--hint); font-size: 13.5px; margin: -6px 0 12px; }
 .pricenow { font-size: 15px; margin: 0 0 10px; font-variant-numeric: tabular-nums; }
 .pricenow b { font-size: 18px; }
