@@ -37,7 +37,10 @@ function стенд() {
   const узлы = new Map();
   const $ = (id) => { if (!узлы.has(id)) узлы.set(id, узел()); return узлы.get(id); };
   const товар = () => ({ id: 1, name: "XROS 3", city: "Минск", price: 25, stock: 4 });
-  const adminProducts = [товар()], allProducts = [товар()];
+  const второй = () => ({ id: 2, name: "Vinci", city: "Минск", price: 50, stock: 2 });
+  const adminProducts = [товар(), второй()], allProducts = [товар(), второй()];
+  const ждут = [];            // запросы, на которые тест ответит сам (режим «вручную»)
+  let вручную = false;
   const журнал = { posts: [], toasts: [], перерисовок: 0, обновлений: 0, закрытий: 0 };
   let ответ = () => ({ status: 200, body: { ok: true, saved: ["price"] } });
   const ctx = vm.createContext({
@@ -50,6 +53,12 @@ function стенд() {
     setTimeout: (f) => f(),
     fetch: async (url, opts) => {
       журнал.posts.push({ url, body: JSON.parse(opts.body) });
+      if (вручную) {
+        return new Promise((готово, беда) => ждут.push({
+          ответить: (body, status = 200) => готово({ ok: status < 400, status, json: async () => body }),
+          потерять: () => беда(new Error("ответ потерялся")),
+        }));
+      }
       const о = ответ();
       if (о.throws) throw new Error("network");
       return { ok: о.status < 400, status: о.status, json: async () => о.body };
@@ -60,7 +69,11 @@ function стенд() {
     $, журнал, adminProducts, allProducts,
     js: (строка) => vm.runInContext(строка, ctx),
     ответ: (f) => { ответ = f; },
+    вручную: () => { вручную = true; }, ждут,
+    тик: () => new Promise((r) => setImmediate(r)),
     сохранить: async () => { await vm.runInContext("сохранитьЦену()", ctx); },
+    // Нажать «Сохранить» и не ждать ответа — он придёт, когда тест скажет.
+    нажать: () => vm.runInContext("сохранитьЦену()", ctx),
     открыто: () => $("priceOverlay").classList.contains("show"),
   };
 }
@@ -116,7 +129,7 @@ function стенд() {
     с.$("priceNew").value = "30";
     с.ответ(() => ({ status: 200, body: { ok: true, saved: [], failed: { price: { error: "conflict", current: 30 } } } }));
     await с.сохранить();
-    проверка("там уже наша цена — это успех, а не конфликт", !с.открыто() && /Цена уже 30\.00/.test(с.журнал.toasts.join(" ")), с.журнал.toasts);
+    проверка("там уже наша цена — это успех, а не конфликт", !с.открыто() && /цена уже 30\.00/i.test(с.журнал.toasts.join(" ")), с.журнал.toasts);
   }
 
   // ---------- Неверный ввод и та же цена ----------
@@ -148,6 +161,79 @@ function стенд() {
     проверка("нет сети — сказано, что цена могла сохраниться и повтор проверит",
       с.открыто() && /могла сохраниться/.test(с.$("priceMsg").textContent), с.$("priceMsg").textContent);
     проверка("кнопка снова доступна", с.$("priceSave").disabled === false);
+  }
+
+  // ---------- QP-01: ответ прошлого окна не трогает новое ----------
+  {
+    const с = стенд(); с.вручную();
+    с.js("открытьЦену(1)"); с.$("priceNew").value = "30";
+    const первый = с.нажать();
+    с.$("priceNew").onkeydown({ key: "Enter", preventDefault() {} });   // Enter, пока запрос в пути
+    проверка("QP: Enter во время запроса не шлёт второй", с.журнал.posts.length === 1, с.журнал.posts.length);
+    с.$("priceCancel").onclick();                                       // «Отмена»
+    с.js("открытьЦену(2)"); с.$("priceNew").value = "60";              // открыли другой товар
+    с.ждут[0].ответить({ ok: true, saved: ["price"] });                 // пришёл ответ про первый
+    await первый; await с.тик();
+    проверка("QP-01: окно второго товара открыто", с.открыто() && с.$("priceTitle").textContent === "Vinci");
+    проверка("QP-01: введённое во втором окне на месте", с.$("priceNew").value === "60", с.$("priceNew").value);
+    проверка("QP-01: «Сейчас» второго — его цена", /50\.00/.test(с.$("priceNow").innerHTML), с.$("priceNow").innerHTML);
+    проверка("QP-01: строка первого товара обновлена", с.adminProducts[0].price === 30);
+    проверка("QP-01: о первом сказано уведомлением", /XROS 3/.test(с.журнал.toasts.join(" ")), с.журнал.toasts);
+  }
+  {
+    const с = стенд(); с.вручную();
+    с.js("открытьЦену(1)"); с.$("priceNew").value = "30";
+    const первый = с.нажать();
+    с.$("priceCancel").onclick();
+    с.js("открытьЦену(2)"); с.$("priceNew").value = "60";
+    с.ждут[0].ответить({ ok: true, saved: [], failed: { price: { error: "conflict", current: 27 } } });
+    await первый; await с.тик();
+    проверка("QP-01: конфликт первого не подменил «Сейчас» второго", /50\.00/.test(с.$("priceNow").innerHTML)
+      && с.$("priceMsg").textContent === "", { now: с.$("priceNow").innerHTML, msg: с.$("priceMsg").textContent });
+    const второйЗапрос = с.нажать();
+    проверка("QP-01: второй товар уходит со своим снимком (50)",
+      с.журнал.posts[1] && с.журнал.posts[1].body.id === 2 && с.журнал.posts[1].body.expected.price === 50, с.журнал.posts[1]);
+    с.ждут[1].ответить({ ok: true, saved: ["price"] });
+    await второйЗапрос;
+    проверка("QP-01: кнопка нового окна не заблокирована старым запросом", с.$("priceSave").disabled === false);
+  }
+  {
+    // Тот же товар открыли заново, пока шёл запрос: старый ответ — не этому окну.
+    const с = стенд(); с.вручную();
+    с.js("открытьЦену(1)"); с.$("priceNew").value = "30";
+    const первый = с.нажать();
+    с.js("открытьЦену(1)"); с.$("priceNew").value = "31";
+    с.ждут[0].ответить({ ok: true, saved: ["price"] });
+    await первый; await с.тик();
+    проверка("QP-01: переоткрытое окно того же товара не закрыто чужим ответом",
+      с.открыто() && с.$("priceNew").value === "31", { открыто: с.открыто(), поле: с.$("priceNew").value });
+  }
+
+  // ---------- QP-02: после потерянного ответа сверка не обманывается ----------
+  {
+    const с = стенд(); с.вручную();
+    с.js("открытьЦену(1)"); с.$("priceNew").value = "30";
+    const первый = с.нажать();
+    с.ждут[0].потерять();                                   // сервер записал 30, ответ потерялся
+    await первый; await с.тик();
+    проверка("QP-02: окно открыто, сказано, что цена могла сохраниться",
+      с.открыто() && /могла сохраниться/.test(с.$("priceMsg").textContent));
+    с.$("priceNew").value = "25";                            // вернул прежнюю цену
+    const второй = с.нажать();
+    проверка("QP-02: «та же цена» после неизвестного исхода — всё равно спрашиваем сервер",
+      с.журнал.posts.length === 2 && с.журнал.posts[1].body.expected.price === 25 && с.журнал.posts[1].body.fields.price === 25,
+      с.журнал.posts[1]);
+    с.ждут[1].ответить({ ok: true, saved: [], failed: { price: { error: "conflict", current: 30 } } });
+    await второй; await с.тик();
+    проверка("QP-02: показано, что на сервере 30 и что дошло прошлое нажатие",
+      /сейчас 30\.00 Br/.test(с.$("priceMsg").textContent) && /прошлое нажатие/.test(с.$("priceMsg").textContent),
+      с.$("priceMsg").textContent);
+    проверка("QP-02: строка товара — 30, как на сервере", с.adminProducts[0].price === 30);
+    const третий = с.нажать();
+    проверка("QP-02: повтор — осознанно, со снимком 30", с.журнал.posts[2] && с.журнал.posts[2].body.expected.price === 30);
+    с.ждут[2].ответить({ ok: true, saved: ["price"] });
+    await третий;
+    проверка("QP-02: цена 25 сохранена, окно закрыто", с.adminProducts[0].price === 25 && !с.открыто());
   }
 
   дошлиДоКонца = true;
