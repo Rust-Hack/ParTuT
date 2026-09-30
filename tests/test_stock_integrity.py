@@ -71,7 +71,7 @@ def run_пересчёт_с_заказами():
 
     # На полке физически 5 (3 свободных + 2 отложенных). Продавец посчитал всё
     # и отметил заказ — свободных так и остаётся 3, записывать нечего.
-    r = _ход(id=pid, qty=5, reason="fix", counted_orders=[самовывоз], expected=3)
+    r = _ход(id=pid, qty=5, reason="fix", counted_orders=[самовывоз], expected=3, counted_scope="orders")
     c("полка сходится — «записывать нечего», а не «нашлись лишние»",
       r.status_code == 400 and r.get_json()["error"] == "no_change")
     c("остаток не тронут", db.get_product(pid)["stock"] == 3)
@@ -86,12 +86,12 @@ def run_пересчёт_с_заказами():
     c("свободно 1", db.get_product(pid)["stock"] == 1)
     # На точке физически: 1 свободный + 1 отложенный под самовывоз = 2.
     # Продавец посчитал 2 и отметил только самовывоз: такси не на полке.
-    r = _ход(id=pid, qty=2, reason="fix", counted_orders=[ещё], expected=1)
+    r = _ход(id=pid, qty=2, reason="fix", counted_orders=[ещё], expected=1, counted_scope="orders")
     c("с такси, который уехал, пересчёт тоже сходится",
       r.status_code == 400 and r.get_json()["error"] == "no_change")
 
     # Нашёл меньше: на полке 1, а отмечен самовывоз на 1 → свободных 0.
-    r = _ход(id=pid, qty=1, reason="fix", counted_orders=[ещё], expected=1)
+    r = _ход(id=pid, qty=1, reason="fix", counted_orders=[ещё], expected=1, counted_scope="orders")
     d = r.get_json()
     c("недостача записана", d.get("ok") and d["stock"] == 0 and d["delta"] == -1)
     c("в ответе видно, сколько учли под заказы", d.get("counted") == 1)
@@ -99,22 +99,39 @@ def run_пересчёт_с_заказами():
     c("в истории сказано, что считали вместе с отложенным", "под заказы" in (ход["note"] or ""))
 
     # На полке 0, а под самовывоз обещан 1 — не хватает, и это сказано прямо.
-    r = _ход(id=pid, qty=0, reason="fix", counted_orders=[ещё], expected=0)
+    r = _ход(id=pid, qty=0, reason="fix", counted_orders=[ещё], expected=0, counted_scope="orders")
     c("нехватка под заказ названа, а не проглочена",
       r.status_code == 400 and r.get_json()["error"] == "short")
 
     # Заказ, который тем временем выдали, отмечать нельзя — экран устарел.
     db.issue_order(такси)
-    r = _ход(id=pid, qty=1, reason="fix", counted_orders=[такси], expected=0)
+    r = _ход(id=pid, qty=1, reason="fix", counted_orders=[такси], expected=0, counted_scope="orders")
     c("выданный заказ в пересчёте — отказ «обновите экран»",
       r.status_code == 409 and r.get_json()["error"] == "orders_changed")
 
     # Пока считали, пришёл новый заказ — пересчёт устарел.
     _ход(id=pid, qty=4, reason="in")
     _заказ(pid, 1)
-    r = _ход(id=pid, qty=9, reason="fix", counted_orders=[], expected=4)
+    r = _ход(id=pid, qty=9, reason="fix", counted_orders=[], counted_scope="free", expected=4)
     c("новый заказ во время пересчёта — конфликт, а не перезапись",
       r.status_code == 409 and r.get_json()["error"] == "stock_conflict")
+
+    # --- Ответ «что посчитали» обязателен, если что-то отложено ---
+    # Молчание не отличить от «экран не успел загрузить заказы»: принять его
+    # как «только свободное» — значит завысить остаток ровно на отложенное.
+    при = db.add_product("Минск", "pods", "ОтветПод", 20.0, 5, cost=12.0)
+    _заказ(при, 2)
+    r = _ход(id=при, qty=5, reason="fix", expected=3)
+    c("отложено 2, ответа нет — отказ, а не «нашлись лишние»",
+      r.status_code == 400 and r.get_json()["error"] == "need_counted_choice")
+    c("остаток не тронут", db.get_product(при)["stock"] == 3)
+    r = _ход(id=при, qty=3, reason="fix", counted_scope="free", counted_orders=[99], expected=3)
+    c("«только свободное» и отмеченные заказы вместе — отказ", r.status_code == 400)
+    r = _ход(id=при, qty=2, reason="fix", counted_scope="free", expected=3)
+    c("ответ «только свободное» принят: насчитали 2 свободных", r.get_json().get("ok") and db.get_product(при)["stock"] == 2)
+    без = db.add_product("Минск", "pods", "БезЗаказовПод", 20.0, 5, cost=12.0)
+    r = _ход(id=без, qty=4, reason="fix", expected=5)
+    c("ничего не отложено — ответ не нужен (так пересчитывает и бот)", r.get_json().get("ok"))
 
     _clean()
     return c.fails
@@ -176,6 +193,9 @@ def run_повтор_не_двоит():
     r3 = _ход(id=pid, qty=12, reason="in", client_token="tok-povtor-0001")
     c("тот же ключ с другим числом — отказ", r3.status_code == 409 and r3.get_json()["error"] == "token_reused")
     c("в отказе сказано, что уже записано", "+10" in (r3.get_json().get("message") or ""))
+    # Экрану — не только текст, но и что именно записано: он покажет это у
+    # строки и не отправит число из поля второй раз (S-02).
+    c("в отказе — записанная операция", r3.get_json().get("recorded") == {"reason": "in", "delta": 10, "flavor": ""})
     r4 = _ход(id=pid, qty=10, reason="in", cost="15", client_token="tok-povtor-0001")
     c("тот же ключ с другой ценой — тоже отказ", r4.status_code == 409)
     c("остаток всё ещё 10", db.get_product(pid)["stock"] == 10)

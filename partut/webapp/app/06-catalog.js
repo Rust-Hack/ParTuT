@@ -532,12 +532,15 @@ let batchMode = false;
 // Введённое — по товару, отдельно от разметки: смена фильтра или поиск
 // перерисовывают список и раньше стирали набранные числа.
 let batchDraft = {}, batchTokens = {}, batchErrors = {};
+// Товар -> что уже записано раньше («Приход +10»), когда сервер узнал ключ
+// прошлой попытки, а число с тех пор поменяли (см. то же в окне склада).
+let batchConflicts = {};
 $("batchModeBtn").onclick = () => {
   batchMode = !batchMode;
   $("batchModeBtn").classList.toggle("active", batchMode);
   $("batchModeBtn").textContent = batchMode ? "✕ Отменить массовый приход" : "📦 Массовый приход";
   $("batchBar").style.display = batchMode ? "" : "none";
-  if (!batchMode) { batchDraft = {}; batchTokens = {}; batchErrors = {}; }
+  if (!batchMode) { batchDraft = {}; batchTokens = {}; batchErrors = {}; batchConflicts = {}; }
   renderAdminList();
 };
 function batchItems() {
@@ -545,13 +548,23 @@ function batchItems() {
     .map(([id, v]) => ({ id: +id, qty: Number(String(v).trim()) }))
     .filter(x => String(batchDraft[x.id]).trim() !== "");
 }
-$("batchSave").onclick = async () => {
+$("batchSave").onclick = () => batchЗаписать(false);
+
+async function batchЗаписать(подтверждено) {
   const items = batchItems();
   if (!items.length) { alertMsg("Впишите количество хотя бы для одного товара."); return; }
   const кривые = items.filter(x => !Number.isInteger(x.qty) || x.qty <= 0);
   if (кривые.length) {
     кривые.forEach(x => { batchErrors[x.id] = "Проверьте число."; });
     renderAdminList(); return;
+  }
+  // По товару уже записано раньше — новая запись только осознанно.
+  const уже = items.filter(x => batchConflicts[x.id]);
+  if (уже.length && !подтверждено) {
+    const имя = (id) => (shelf().find(p => p.id === id) || { name: "товар" }).name;
+    confirmMsg(уже.map(x => `«${имя(x.id)}»: уже записано ${batchConflicts[x.id]}.`).join("\n")
+               + "\n\nЗаписать новые числа отдельной операцией?", () => batchЗаписать(true));
+    return;
   }
   // Ключ попытки у каждой строки — пока по ней не пришёл ответ: ответ
   // потерялся, нажали ещё раз — сервер не запишет приход второй раз.
@@ -570,12 +583,20 @@ $("batchSave").onclick = async () => {
     let записано = 0;
     (d.done || []).forEach(x => {
       const id = items[x.index] && items[x.index].id; if (id === undefined) return;
-      delete batchDraft[id]; delete batchTokens[id]; delete batchErrors[id]; записано++;
+      delete batchDraft[id]; delete batchTokens[id]; delete batchErrors[id]; delete batchConflicts[id]; записано++;
     });
     const провалы = Object.entries(d.failed || {});
     провалы.forEach(([i, f]) => {
       const id = items[+i] && items[+i].id; if (id === undefined) return;
       delete batchTokens[id];
+      if (f.error === "token_reused") {
+        // Прошлая попытка уже проведена — число из поля не повторяем, иначе
+        // следующий тап записал бы его как новый приход.
+        const р = f.recorded;
+        batchConflicts[id] = р ? `приход ${р.delta > 0 ? "+" : ""}${р.delta}` : "операция";
+        delete batchDraft[id]; delete batchErrors[id];
+        return;
+      }
       batchErrors[id] = f.message || ОТКАЗЫ[f.error] || "Не записано.";
     });
     await refreshProducts();
@@ -593,7 +614,7 @@ $("batchSave").onclick = async () => {
     const что = e && e.message === "server_error" ? "Сервер ответил ошибкой." : текстСбоя(e);
     alertMsg(что + "\n\nЧисла на месте. Нажмите «Записать приход» ещё раз — дважды не запишется.");
   } finally { btn.disabled = false; btn.textContent = "Записать приход"; }
-};
+}
 
 function renderAdminList() {
   if (!shelf().length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
@@ -635,7 +656,9 @@ function renderAdminList() {
     // В массовом приходе — поле количества вместо кнопок действий. Товар со
     // вкусами: остаток у него свой на каждый вкус, и одна цифра «+N» не
     // сказала бы, какому, — для него кнопка в окно склада, где строка на вкус.
-    const ошибка = batchErrors[p.id] ? `<div class="dwarn" style="flex-basis:100%;margin-top:4px">${esc(batchErrors[p.id])}</div>` : "";
+    const ошибка = (batchConflicts[p.id]
+        ? `<div class="dwarn" style="flex-basis:100%;margin-top:4px">Уже записано раньше: ${esc(batchConflicts[p.id])}. Если привезли ещё — впишите, сколько добавить.</div>` : "")
+      + (batchErrors[p.id] ? `<div class="dwarn" style="flex-basis:100%;margin-top:4px">${esc(batchErrors[p.id])}</div>` : "");
     const batchTail = hasVariants(p)
       ? `<button class="closebtn" data-batchvar="${p.id}" style="width:auto;padding:8px 10px;margin:0">по вкусам ›</button></div>`
       : `<input type="number" min="0" inputmode="numeric" placeholder="+шт" data-batchqty="${p.id}"

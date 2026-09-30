@@ -1636,7 +1636,16 @@ let stockDraft = {};
 // записывает. Новый ключ строка получает только после ответа по ней.
 let stockTokens = {};
 let stockErrors = {};            // ключ строки -> отказ сервера, показываем рядом со строкой
-let stockOrders = [];            // невыданные заказы с этим товаром — для пересчёта
+// Ключ строки -> что уже записано раньше («Приход +10»). Сервер узнал ключ
+// прошлой попытки, а число с тех пор поменяли: прошлая уже проведена.
+// Держим до следующей удачной записи этой строки — и новую запись по ней
+// делаем только после явного «да, это ещё одна операция».
+let stockConflicts = {};
+// Невыданные заказы с этим товаром — для пересчёта. Три состояния, а не два:
+// пустой список означал сразу и «заказов нет», и «ещё не загрузились», и
+// пересчёт, отправленный в эту секунду, уходил как «считал только свободное».
+let stockOrders = [], stockOrdersState = "loading";   // "loading" | "ready" | "error"
+let stockLoadSeq = 0;            // номер последнего запроса: запоздавший ответ — не наш
 let stockCounted = null;         // что посчитали при пересчёте: null — не ответили, "free" | "all"
 let stockOrderPick = new Set();  // заказы, чей отложенный товар вошёл в насчитанное
 
@@ -1656,15 +1665,16 @@ function новыйКлючОперации() {
 function openStockMove(id, reason) {
   const p = shelf().find(x => x.id === id);
   if (!p) return;
-  // Другой товар — чистый лист. Тот же — набранное остаётся: закрыл окно,
-  // чтобы глянуть заказ, вернулся — числа на месте.
+  // Другой товар — чистый лист. Тот же — набранное и незакрытые «уже
+  // записано» остаются: закрыл окно, чтобы глянуть заказ, вернулся — всё на месте.
   if (!stockProduct || stockProduct.id !== id) {
-    stockDraft = {}; stockTokens = {}; stockErrors = {};
+    stockDraft = {}; stockTokens = {}; stockErrors = {}; stockConflicts = {};
     $("stockCost").value = ""; $("stockNote").value = "";
   }
   stockProduct = p;
   stockReason = reason || "in";
-  stockCounted = null; stockOrderPick = new Set(); stockOrders = [];
+  stockCounted = null; stockOrderPick = new Set();
+  stockOrders = []; stockOrdersState = "loading";
   $("stockFind").value = "";
   $("stockView").classList.add("show");
   renderStockHead();
@@ -1713,11 +1723,14 @@ function renderStockRows() {
     const есть = `свободно ${s.stock}` + (s.reserved ? ` · в заказах ${s.reserved}` : "");
     const отказ = stockErrors[s.key]
       ? `<div class="dwarn" style="flex-basis:100%;margin-top:4px">${esc(stockErrors[s.key])}</div>` : "";
+    const уже = stockConflicts[s.key]
+      ? `<div class="dwarn" style="flex-basis:100%;margin-top:4px">Уже записано раньше: ${esc(stockConflicts[s.key])}.
+           Если нужно ещё — впишите, сколько добавить: это будет отдельная операция.</div>` : "";
     return `<div class="admrow" data-srow="${esc(s.key)}" style="flex-wrap:wrap">
       <div class="an">${s.flavor ? esc(s.flavor) : esc(stockProduct.name)}<small>${есть}</small>
         <small class="srowprev"></small></div>
       ${qtyHtml(esc(stockDraft[s.key] ?? ""), `class="srowqty" placeholder="шт"`, 0)}
-      ${отказ}</div>`;
+      ${уже}${отказ}</div>`;
   }).join("");
   bindQty($("stockRows"));
   $("stockRows").querySelectorAll(".srowqty").forEach(поле => поле.oninput = () => {
@@ -1729,11 +1742,29 @@ function renderStockRows() {
   stockПредпросмотр();
 }
 
+// Невыданные заказы — по заказу, а не по строке заказа: у одного заказа
+// бывает несколько вкусов, а отложен он одним пакетом. Раньше на такой заказ
+// рисовалось две галочки с общим номером: снял одну — вторая оставалась
+// отмеченной на экране, но в расчёт уже не шла.
+function stockГруппыЗаказов() {
+  const группы = new Map();
+  (stockOrders || []).forEach(z => {
+    if (!группы.has(z.order_id)) группы.set(z.order_id, { order_id: z.order_id, method: z.method, items: [] });
+    группы.get(z.order_id).items.push({ flavor: z.flavor || "", qty: +z.qty });
+  });
+  return [...группы.values()];
+}
+
+// Заказы, чей товар этой строки (вкуса) вошёл в насчитанное.
+function stockЗаказыСтроки(flavor) {
+  if (stockCounted !== "all") return [];
+  return stockГруппыЗаказов().filter(г => stockOrderPick.has(г.order_id) && г.items.some(и => и.flavor === flavor));
+}
+
 // Сколько отложенного под заказы посчитано в этой строке (при пересчёте).
 function stockПосчитаноПодЗаказы(flavor) {
-  if (stockCounted !== "all") return 0;
-  return stockOrders.filter(z => stockOrderPick.has(z.order_id) && (z.flavor || "") === flavor)
-                    .reduce((n, z) => n + z.qty, 0);
+  return stockЗаказыСтроки(flavor).reduce((n, г) =>
+    n + г.items.filter(и => и.flavor === flavor).reduce((m, и) => m + и.qty, 0), 0);
 }
 
 // Под каждой строкой — чем она станет, до того как нажали «Записать».
@@ -1768,29 +1799,42 @@ function stockПредпросмотр() {
 }
 $("stockCost").oninput = () => stockПредпросмотр();
 
-// Пересчёт при невыданных заказах. Заказ снимает товар с остатка сразу, а с
-// полки он уходит только при выдаче: самовывоз лежит на точке, а с курьером
-// уже уехал, хотя выданным ещё не отмечен. Угадывать за продавца нельзя —
-// поэтому он отвечает сам, что посчитал.
+// Пересчёт при невыданных заказах. Заказ снимает товар с остатка сразу, а
+// отдают его позже: до выдачи отложенное лежит на точке, и продавец считает
+// полку вместе с ним или без него. Угадывать нельзя — он отвечает сам.
 function renderStockOrders() {
   const box = $("stockOrders");
-  const нужен = stockReason === "fix" && stockOrders.length > 0;
-  box.style.display = нужен ? "" : "none";
-  if (!нужен) return;
-  const всего = stockOrders.reduce((n, z) => n + z.qty, 0);
+  if (stockReason !== "fix") { box.style.display = "none"; return; }
+  if (stockOrdersState === "loading") {
+    box.style.display = "";
+    box.innerHTML = `<div class="dnote" style="margin:10px 0 0">Проверяю невыданные заказы — без них пересчёт не сверить…</div>`;
+    return;
+  }
+  if (stockOrdersState === "error") {
+    box.style.display = "";
+    box.innerHTML = `<div class="dwarn">Не загрузились невыданные заказы — без них пересчёт не сверить.</div>
+      <button type="button" class="closebtn" id="stockOrdersRetry" style="margin-top:8px">Повторить</button>`;
+    $("stockOrdersRetry").onclick = () => { stockOrdersState = "loading"; renderStockOrders(); loadStockLog(stockProduct.id); };
+    return;
+  }
+  const группы = stockГруппыЗаказов();
+  box.style.display = группы.length ? "" : "none";
+  if (!группы.length) return;
+  const всего = группы.reduce((n, г) => n + г.items.reduce((m, и) => m + и.qty, 0), 0);
   box.innerHTML = `
     <label style="margin-top:14px">Под невыданные заказы отложено ${всего} шт. Что вы посчитали?</label>
     <button class="opt ${stockCounted === "free" ? "active" : ""}" data-sc="free">Только свободный товар — отложенное не считал</button>
     <button class="opt ${stockCounted === "all" ? "active" : ""}" data-sc="all">Всё, что лежит на точке, — вместе с отложенным</button>
     ${stockCounted !== "all" ? "" : `
       <div class="dnote" style="margin:2px 0 4px">Отметьте заказы, чей товар вы посчитали. Уехавшее с курьером не отмечайте — его на точке нет.</div>
-      ${stockOrders.map(z => `<label class="chk" style="margin-top:6px"><input type="checkbox" data-so="${z.order_id}" ${stockOrderPick.has(z.order_id) ? "checked" : ""}>
-        <span>№${z.order_id} · ${esc(z.method || "способ не указан")}${z.flavor ? ` · ${esc(z.flavor)}` : ""} · ${z.qty} шт</span></label>`).join("")}`}`;
+      ${группы.map(г => `<label class="chk" style="margin-top:6px"><input type="checkbox" data-so="${г.order_id}" ${stockOrderPick.has(г.order_id) ? "checked" : ""}>
+        <span>№${г.order_id} · ${esc(г.method || "способ не указан")} · ${г.items.map(и =>
+          `${и.flavor ? esc(и.flavor) + " " : ""}${и.qty} шт`).join(", ")}</span></label>`).join("")}`}`;
   box.querySelectorAll("[data-sc]").forEach(b => b.onclick = () => {
     stockCounted = b.dataset.sc;
     // «Всё на точке» — значит отложенное посчитано; снять галочку нужно
     // только с того, что уехало.
-    if (stockCounted === "all" && !stockOrderPick.size) stockOrders.forEach(z => stockOrderPick.add(z.order_id));
+    if (stockCounted === "all" && !stockOrderPick.size) группы.forEach(г => stockOrderPick.add(г.order_id));
     renderStockOrders(); stockПредпросмотр();
   });
   box.querySelectorAll("[data-so]").forEach(ch => ch.onchange = () => {
@@ -1801,13 +1845,18 @@ function renderStockOrders() {
 }
 
 async function loadStockLog(id) {
-  $("stockLog").innerHTML = "";
+  const мой = ++stockLoadSeq;
+  // Ответ пришёл, когда окно уже про другой товар (или открыто заново), —
+  // он не наш: его заказы и история чужие.
+  const наш = () => мой === stockLoadSeq && stockProduct && stockProduct.id === id;
   try {
     const r = await fetch("/api/admin/stock/moves", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id }) });
     const d = await r.json();
     if (!r.ok || !d.ok) throw new Error("stock_moves");
+    if (!наш()) return;
     // Сначала заказы: без них вопрос при пересчёте задать нечем.
     stockOrders = d.reserved_orders || [];
+    stockOrdersState = "ready";
     renderStockOrders(); stockПредпросмотр();
     const moves = d.moves || [];
     if (!moves.length) { $("stockLog").innerHTML = `<div class="card-block"><p style="color:var(--hint);margin:0">Движений пока не было.</p></div>`; return; }
@@ -1820,14 +1869,18 @@ async function loadStockLog(id) {
     }).join("");
     $("stockLog").innerHTML = `<div class="stathead">История движений</div><div class="statlist">${rows}</div>`;
   } catch (e) {
+    if (!наш()) return;
     // История — не главное, но заказы для пересчёта — главное: без них
     // вопрос «что посчитали» задать нечем, и пересчёт вышел бы вслепую.
-    $("stockLog").innerHTML = `<div class="card-block"><p style="color:var(--hint);margin:0">История не загрузилась. Пересчёт при невыданных заказах сейчас не проверить — откройте окно заново.</p></div>`;
-    stockOrders = null;
+    stockOrders = []; stockOrdersState = "error";
+    renderStockOrders();
+    $("stockLog").innerHTML = `<div class="card-block"><p style="color:var(--hint);margin:0">История не загрузилась.</p></div>`;
   }
 }
 
-$("stockSave").onclick = async () => {
+$("stockSave").onclick = () => stockЗаписать(false);
+
+async function stockЗаписать(подтверждено) {
   const строки = stockСтроки().filter(s => String(stockDraft[s.key] ?? "").trim() !== "");
   if (!строки.length) {
     alertMsg(stockReason === "fix" ? "Впишите, сколько насчитали." : "Впишите количество хотя бы в одну строку.");
@@ -1839,12 +1892,23 @@ $("stockSave").onclick = async () => {
     if (!Number.isInteger(n) || n < 0 || (stockReason !== "fix" && n === 0)) { stockErrors[s.key] = "Проверьте число."; плохо = true; }
   });
   if (плохо) { renderStockRows(); return; }
-  if (stockReason === "fix" && stockOrders === null) {
-    alertMsg("Не загрузились невыданные заказы — без них пересчёт не проверить. Закройте окно и откройте снова.");
-    return;
+  if (stockReason === "fix") {
+    // Пока не знаем, есть ли невыданные заказы, пересчёт не отправляем:
+    // иначе он ушёл бы как «считал только свободное» — ровно та ошибка,
+    // из-за которой всё это и затевалось.
+    if (stockOrdersState === "loading") { alertMsg("Ещё проверяю невыданные заказы — подождите секунду и нажмите снова."); return; }
+    if (stockOrdersState === "error") { alertMsg("Не загрузились невыданные заказы — нажмите «Повторить» в окне пересчёта."); return; }
+    if (stockOrders.length && !stockCounted) {
+      alertMsg("Отметьте, считали ли вы товар, отложенный под невыданные заказы: от этого зависит, сколько останется свободным.");
+      return;
+    }
   }
-  if (stockReason === "fix" && stockOrders.length && !stockCounted) {
-    alertMsg("Отметьте, считали ли вы товар, отложенный под невыданные заказы: от этого зависит, сколько останется свободным.");
+  // По строке уже записано раньше — новая запись только осознанно.
+  const уже = строки.filter(s => stockConflicts[s.key]);
+  if (уже.length && !подтверждено) {
+    confirmMsg(уже.map(s => `«${s.flavor || stockProduct.name}»: уже записано ${stockConflicts[s.key]}.`).join("\n")
+               + `\n\nЗаписать ${уже.length === 1 ? "ещё " + stockDraft[уже[0].key] + " шт" : "эти строки"} отдельной операцией?`,
+               () => stockЗаписать(true));
     return;
   }
   const items = строки.map(s => {
@@ -1856,9 +1920,10 @@ $("stockSave").onclick = async () => {
       // Сколько было свободно, когда человек считал: пришёл заказ или отмена
       // — сервер откажет, и пересчёт не вернёт на полку проданное.
       item.expected = s.stock;
-      item.counted_orders = stockCounted === "all"
-        ? stockOrders.filter(z => stockOrderPick.has(z.order_id) && (z.flavor || "") === s.flavor).map(z => z.order_id)
-        : [];
+      // Ответ на вопрос «что посчитали» уходит явно, а не угадывается по
+      // пустому списку: заказов нет — значит посчитано только свободное.
+      item.counted_scope = stockCounted === "all" ? "orders" : "free";
+      item.counted_orders = stockЗаказыСтроки(s.flavor).map(г => г.order_id);
     }
     return item;
   });
@@ -1881,24 +1946,34 @@ $("stockSave").onclick = async () => {
     let записано = 0, повторов = 0;
     (d.done || []).forEach(x => {
       const s = строки[x.index]; if (!s) return;
-      delete stockTokens[s.key]; delete stockDraft[s.key]; delete stockErrors[s.key];
+      delete stockTokens[s.key]; delete stockDraft[s.key]; delete stockErrors[s.key]; delete stockConflicts[s.key];
       if (x.replay) повторов++; else записано++;
     });
     const провалы = Object.entries(d.failed || {});
     провалы.forEach(([i, f]) => {
       const s = строки[+i]; if (!s) return;
-      delete stockTokens[s.key];       // ответ по строке пришёл — ключ отработал
+      if (f.error === "token_reused") {
+        // Прошлая попытка этой строки УЖЕ проведена — просто с другим числом.
+        // Число из поля не повторяем: следующий тап отправил бы его как
+        // новый приход, и вышло бы 22 вместо 10. Показываем, что записано,
+        // и ждём, что человек сам решит, нужно ли ещё.
+        const р = f.recorded;
+        stockConflicts[s.key] = р ? `${STOCK_REASONS[р.reason] || р.reason} ${р.delta > 0 ? "+" : ""}${р.delta}` : "операция";
+        delete stockDraft[s.key]; delete stockTokens[s.key]; delete stockErrors[s.key];
+        return;
+      }
+      delete stockTokens[s.key];       // ответ по строке пришёл, ничего не записано — ключ отработал
       stockErrors[s.key] = f.message || ОТКАЗЫ[f.error] || "Не записано.";
     });
     await refreshProducts();
     stockProduct = shelf().find(p => p.id === stockProduct.id) || stockProduct;
     // Заказы и остатки могли измениться — вопрос про отложенное задаём заново.
-    stockCounted = null; stockOrderPick = new Set();
-    renderStockHead(); renderStockRows();
+    stockCounted = null; stockOrderPick = new Set(); stockOrders = []; stockOrdersState = "loading";
+    renderStockHead(); renderStockRows(); renderStockOrders();
     await loadStockLog(stockProduct.id);
     if (!провалы.length) $("stockNote").value = "";
     if (провалы.length) {
-      alertMsg(`Записано строк: ${записано + повторов}. Не записано: ${провалы.length} — причина под каждой строкой, введённое на месте.`);
+      alertMsg(`Записано строк: ${записано + повторов}. Не записано: ${провалы.length} — причина под каждой строкой.`);
     } else {
       // Повтор узнан — говорим прямо: человек нажимал дважды и должен знать,
       // что второй раз ничего не записалось.
@@ -1911,7 +1986,7 @@ $("stockSave").onclick = async () => {
     const что = e && e.message === "server_error" ? "Сервер ответил ошибкой." : текстСбоя(e);
     alertMsg(что + "\n\nВведённое на месте. Нажмите «Записать» ещё раз — дважды не запишется.");
   } finally { btn.disabled = false; btn.textContent = "Записать"; }
-};
+}
 
 // ----- Промокоды -----
 // Владелец постит в группу вручную, и без кодов нельзя понять, что сработало.

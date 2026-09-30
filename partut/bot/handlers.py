@@ -615,8 +615,10 @@ def handle_admin_input(chat_id, user_id, raw_text):
             # Остаток — только движением склада, как и в приложении: пересчёт
             # с автором и записью «было → стало», а не число поверх истории.
             try:
+                # Бот спрашивает именно СВОБОДНОЕ (см. вопрос выше) — это и есть ответ.
                 итог = db.stock_operation(product_id, "fix", value, admin_id=user_id,
-                                          note="пересчёт в боте", expected=st.get("expected"))
+                                          note="пересчёт в боте", expected=st.get("expected"),
+                                          counted_scope="free")
             except db.StockRefused as e:
                 bot.send_message(chat_id, f"Не записано: {e.message}")
                 return

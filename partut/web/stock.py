@@ -102,6 +102,10 @@ def _apply_move(admin, item, reason=None, token=None):
     заказы = _заказы(item.get("counted_orders"))
     if заказы is None:
         return 400, {"ok": False, "error": "bad_input"}, None
+    # Ответ человека на вопрос пересчёта: что именно посчитано (см. db.stock_operation).
+    охват = item.get("counted_scope")
+    if охват not in (None, "", "free", "orders"):
+        return 400, {"ok": False, "error": "bad_input"}, None
     expected = item.get("expected")
     if expected is not None:
         expected = inputs.целое(expected)
@@ -119,10 +123,10 @@ def _apply_move(admin, item, reason=None, token=None):
         итог = db.stock_operation(pid, reason, qty, flavor=inputs._text(item.get("flavor")) or None,
                                   cost=cost, note=inputs._text(item.get("note")),
                                   admin_id=int(admin["id"]), client_token=token,
-                                  counted_orders=заказы, expected=expected)
+                                  counted_orders=заказы, expected=expected, counted_scope=охват or None)
     except db.StockRefused as e:
         код = 404 if e.code == "not_found" else 409 if e.code in _КОНФЛИКТЫ else 400
-        return код, {"ok": False, "error": e.code, "message": e.message}, None
+        return код, {"ok": False, "error": e.code, "message": e.message, **e.extra}, None
     return 200, {"ok": True, **итог}, товар
 
 
@@ -216,7 +220,7 @@ def api_admin_stock_move_batch():
             if товар is not None:
                 журнал.append(_строка_журнала(товар, reason, вкус, тело))
         else:
-            failed[str(i)] = {"error": тело.get("error"), "message": тело.get("message"),
+            failed[str(i)] = {**{k: v for k, v in тело.items() if k != "ok"},
                               "id": item.get("id"), "flavor": вкус}
     g.log_note = (f"Пачкой ({len(done)} из {len(items)}): " + "; ".join(журнал)
                   + (f" · не прошло {len(failed)}" if failed else ""))

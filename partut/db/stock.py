@@ -42,10 +42,13 @@ class StockRefused(Exception):
     code — для программы (экран решает, что показать), message — для
     человека: почему нельзя и что сделать вместо этого."""
 
-    def __init__(self, code, message=""):
+    def __init__(self, code, message="", **extra):
         super().__init__(message or code)
         self.code = code
         self.message = message
+        # Подробности для экрана: например, что именно уже записано под этим
+        # ключом, — чтобы показать человеку, а не заставлять читать журнал.
+        self.extra = extra
 
 
 def _открытые(cur):
@@ -148,7 +151,7 @@ def _запереть(cur, product_id, flavor):
         cur.execute("UPDATE products SET id = id WHERE id = ?", (product_id,))
 
 
-def _отпечаток(product_id, reason, qty, flavor, cost, counted_orders, expected):
+def _отпечаток(product_id, reason, qty, flavor, cost, counted_orders, expected, counted_scope=None):
     """Содержимое операции одной строкой — чтобы узнать повтор НАВЕРНЯКА.
 
     Одного ключа мало: ответ потерялся, человек поправил число и нажал
@@ -157,7 +160,8 @@ def _отпечаток(product_id, reason, qty, flavor, cost, counted_orders, e
     return json.dumps({"p": int(product_id), "r": reason, "q": int(qty), "f": flavor or "",
                        "c": round(float(cost or 0), 2),
                        "o": sorted(int(x) for x in (counted_orders or [])),
-                       "e": None if expected is None else int(expected)},
+                       "e": None if expected is None else int(expected),
+                       "s": counted_scope or ""},
                       sort_keys=True, ensure_ascii=False)
 
 
@@ -168,7 +172,7 @@ def _повтор(cur, client_token, отпечаток):
     получит ответ. Ответ потерялся в плохой сети, человек нажал ещё раз,
     запрос пришёл второй раз с тем же ключом — записывать его снова значило
     бы удвоить приход."""
-    cur.execute(db._q("SELECT delta, reason, client_request FROM stock_moves WHERE client_token = %s"),
+    cur.execute(db._q("SELECT delta, reason, flavor, client_request FROM stock_moves WHERE client_token = %s"),
                 (client_token,))
     r = cur.fetchone()
     if not r:
@@ -177,7 +181,9 @@ def _повтор(cur, client_token, отпечаток):
         было = f"{STOCK_REASONS.get(r['reason'], r['reason'])} {int(r['delta']):+d}"
         raise StockRefused("token_reused",
                            f"Эта операция уже записана раньше ({было}), а сейчас пришла с другими "
-                           f"данными. Посмотрите историю: если нужно ещё, запишите разницу отдельно.")
+                           f"данными. Посмотрите историю: если нужно ещё, запишите разницу отдельно.",
+                           recorded={"reason": r["reason"], "delta": int(r["delta"]),
+                                     "flavor": r["flavor"] or ""})
     return int(r["delta"])
 
 
@@ -209,7 +215,7 @@ def _record_move(cur, product_id, flavor, delta, reason, cost, note="", admin_id
 
 
 def stock_operation(product_id, reason, qty, flavor=None, cost=0, note="", admin_id=None,
-                    client_token=None, counted_orders=None, expected=None):
+                    client_token=None, counted_orders=None, expected=None, counted_scope=None):
     """Одно движение склада — так, как его задаёт человек: причина и число.
 
       • Приход: qty — сколько привезли, остаток растёт на qty.
@@ -219,10 +225,12 @@ def stock_operation(product_id, reason, qty, flavor=None, cost=0, note="", admin
         число — и отчёт о потерях считал штуки, которых не было.
       • Пересчёт: qty — сколько НАСЧИТАЛИ; разницу считаем здесь, а не на
         экране: ошибка в знаке вскрылась бы только следующей недостачей.
-        counted_orders — невыданные заказы, чей товар вошёл в насчитанное
-        (самовывоз лежит на точке до выдачи; уехавшее с курьером — нет).
-        Свободным станет насчитанное минус товар этих заказов. Пусто —
-        считали только свободное.
+        counted_scope — ЧТО посчитали, ответ человека: "free" — только
+        свободное, "orders" — вместе с отложенным под заказы из
+        counted_orders. Свободным станет насчитанное минус товар этих
+        заказов. Если под заказы что-то отложено, а ответа нет — отказ:
+        молчание не отличить от «не успело загрузиться», и пересчёт вслепую
+        завысил бы остаток ровно на отложенное.
         expected — сколько было свободно, когда человек начинал: пришёл
         новый заказ или отмена — отказ, пересчёт устарел. Карточка товара
         держит число с момента открытия по той же причине.
@@ -246,10 +254,14 @@ def stock_operation(product_id, reason, qty, flavor=None, cost=0, note="", admin
         raise StockRefused("bad_number", "Количество — целое число.")
     if qty < 0 or (reason != "fix" and qty == 0):
         raise StockRefused("bad_number", "Укажите количество больше нуля.")
-    if reason != "fix" and заказы:
+    if reason != "fix" and (заказы or counted_scope):
         raise StockRefused("bad_input", "Заказы отмечают только при пересчёте.")
+    if counted_scope not in (None, "free", "orders"):
+        raise StockRefused("bad_input", "Непонятно, что посчитали: только свободное или вместе с отложенным.")
+    if counted_scope == "free" and заказы:
+        raise StockRefused("bad_input", "Отмечены заказы, а выбрано «только свободное» — выберите что-то одно.")
     flavor = str(flavor or "").strip() or None
-    отпечаток = _отпечаток(product_id, reason, qty, flavor, cost, заказы, expected)
+    отпечаток = _отпечаток(product_id, reason, qty, flavor, cost, заказы, expected, counted_scope)
 
     conn = db.connect()
     cur = conn.cursor()
@@ -301,6 +313,14 @@ def stock_operation(product_id, reason, qty, flavor=None, cost=0, note="", admin
         посчитано = 0
         нехватка = 0
         if reason == "fix":
+            # Под заказы что-то отложено, а человек не сказал, считал ли он
+            # это: экран не успел загрузить заказы или это старая страница.
+            # Принять такое как «только свободное» — значит завысить остаток.
+            if резерв and counted_scope is None:
+                raise StockRefused("need_counted_choice",
+                                   f"Под невыданные заказы отложено {резерв} шт. Отметьте, считали ли вы "
+                                   f"отложенное вместе со свободным, — иначе пересчёт завысит остаток. "
+                                   f"Если вопроса на экране нет, обновите приложение.")
             if заказы:
                 лишние = [x for x in заказы if x not in по_заказам]
                 if лишние:
