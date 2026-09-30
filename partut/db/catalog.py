@@ -85,7 +85,10 @@ def update_field(product_id, field, value):
         return False
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q(f"UPDATE products SET {field} = %s WHERE id = %s"), (value, product_id))
+    # Цену так меняет бот. Номер версии растёт и здесь: иначе застрявший
+    # запрос из приложения со старым номером прошёл бы поверх правки из бота.
+    версия = ", price_rev = price_rev + 1" if field == "price" else ""
+    cur.execute(db._q(f"UPDATE products SET {field} = %s{версия} WHERE id = %s"), (value, product_id))
     conn.commit()
     conn.close()
     return True
@@ -145,6 +148,16 @@ def _то_же_значение(поле, было, стало):
     return str(было if было is not None else "").strip() == str(стало if стало is not None else "").strip()
 
 
+def _та_же_версия(было, ждали):
+    """Тот ли номер версии цены, что видел человек. Непонятный номер — не тот:
+    лучше лишний раз показать «цену уже поменяли», чем пропустить старый
+    запрос поверх нового."""
+    try:
+        return int(было or 0) == int(ждали)
+    except (TypeError, ValueError):
+        return False
+
+
 def update_fields(product_id, fields, expected=None):
     """Несколько полей товара — одним UPDATE, то есть разом или никак.
 
@@ -157,8 +170,13 @@ def update_fields(product_id, fields, expected=None):
     молча затереть чужую правку цены — та же беда, что затереть чужую
     продажу. Остальные поля сохраняются.
 
+    Для цены в expected может быть ещё price_rev — номер версии, который видел
+    человек. Сверка по значению не видит сохранения той же цены (25 → 25), и
+    застрявший старый запрос прошёл бы поверх него; сверка по номеру — видит.
+    Любая запись цены номер увеличивает.
+
     Возвращает (сохранённые поля, {поле: текущее значение} для конфликтов,
-    значения до правки — для журнала «было → стало»).
+    значения до правки — для журнала «было → стало» и номера версии цены).
     """
     поля = {k: v for k, v in (fields or {}).items() if k in db._EDITABLE}
     conn = db.connect()
@@ -180,8 +198,14 @@ def update_fields(product_id, fields, expected=None):
             if поле in поля and not _то_же_значение(поле, до.get(поле), ждали):
                 конфликты[поле] = до.get(поле)
                 поля.pop(поле)
+        if "price" in поля and "price_rev" in (expected or {}) \
+                and not _та_же_версия(до.get("price_rev"), expected["price_rev"]):
+            конфликты["price"] = до.get("price")
+            поля.pop("price")
         if поля:
             sets = ", ".join(f"{k} = %s" for k in поля)
+            if "price" in поля:
+                sets += ", price_rev = price_rev + 1"
             cur.execute(db._q(f"UPDATE products SET {sets} WHERE id = %s"), (*поля.values(), product_id))
         conn.commit()
     except Exception:

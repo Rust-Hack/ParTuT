@@ -702,6 +702,7 @@ def init_db():
     _ensure_order_columns()     # coins_used / доставка у заказов
     _ensure_coin_log_columns()  # related_id — какой реферал за начислением
     _ensure_stock_move_columns()  # ключ попытки у движения склада — против двойного прихода
+    _ensure_price_rev_column()    # номер версии цены — против перестановки запросов
     _ensure_category_columns()  # has_flavors у категорий
     _ensure_photo_columns()     # галерея у модели, а не у товара
     _migrate("0001-модели-собраны-из-товаров", models_seeded_from_products)
@@ -962,6 +963,26 @@ def _ensure_stock_move_columns():
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS stock_moves_client_token_uniq "
                 "ON stock_moves (client_token) "
                 "WHERE client_token IS NOT NULL AND client_token <> ''")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_price_rev_column():
+    """Номер версии цены товара — против перестановки запросов (QP-03).
+
+    Сверка цены по значению не видит сохранения той же цены. Продавец жмёт
+    «25 → 30», запрос застревает в сети; открывает окно заново, оставляет 25 и
+    сохраняет. Если сервер получит второй запрос раньше первого, то «25 → 25»
+    пройдёт, а следом и застрявший «25 → 30, ожидаю 25»: там ведь по-прежнему
+    25. Итог — 30, хотя последним решением продавца было 25.
+
+    price_rev растёт при ЛЮБОЙ записи цены, даже той же самой. Запрос несёт
+    номер, который видел человек, и запрос со старым номером сервер не пишет,
+    а отвечает, что там теперь."""
+    conn = connect()
+    cur = conn.cursor()
+    if "price_rev" not in _table_columns(cur, "products"):
+        cur.execute("ALTER TABLE products ADD COLUMN price_rev INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     conn.close()
 
