@@ -221,6 +221,7 @@ _WRITE_PATHS = {
     # остатки, и ждавшие поступления покупатели не получали сообщения.
     "/api/admin/stock/move/batch": _STOCK_KEYS,
     "/api/admin/product/variants/change": _ТОВАРЫ,
+    "/api/admin/product/publish": _ТОВАРЫ,
     "/api/admin/brand": _БРЕНДЫ, "/api/admin/brand/delete": _БРЕНДЫ,
     "/api/admin/settings/update": (), "/api/admin/stats/reset": (),
     "/api/order": _STOCK_KEYS,                  # меняют остаток на складе

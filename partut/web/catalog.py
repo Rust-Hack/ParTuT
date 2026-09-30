@@ -13,7 +13,9 @@ partut/web/catalog.py — админка ассортимента: товары,
 база импортируются напрямую — это внешние библиотеки, а не состояние сервера.
 """
 
+import hashlib
 import json
+import re
 
 from flask import Blueprint, g, jsonify, request
 
@@ -846,6 +848,35 @@ def api_admin_photo():
     return jsonify({"ok": True})
 
 
+@bp.route("/api/admin/photo/draft", methods=["POST"])
+def api_admin_photo_draft():
+    """Фото для черновика нового товара: товара ещё нет, а фото нужно
+    сохранить сразу — чтобы оно пережило закрытие приложения и не грузилось
+    заново при публикации. Черновик хранит file_id, а не сам файл: File из
+    браузера после перезапуска не восстановить."""
+    user = auth.get_admin(request.form.get("initData", ""))
+    if not user:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"ok": False, "error": "no_file"}), 400
+    беда = _не_картинка(file)
+    if беда:
+        return беда
+    try:
+        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
+                                   caption="🖼 Фото для нового товара", disable_notification=True)
+        file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
+    except Exception as e:
+        print(f"Не смог обработать фото нового товара: {e}")
+        return jsonify({"ok": False, "error": "send_failed",
+                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
+    db.add_draft_photo(user["id"], file_id, thumb_id)
+    g.log_note = "фото для нового товара загружено"
+    return jsonify({"ok": True, "file_id": file_id, "thumb_id": thumb_id,
+                    "url": f"/api/photo?file_id={file_id}", "thumb": f"/api/photo?file_id={thumb_id or file_id}"})
+
+
 @bp.route("/api/admin/photo/add", methods=["POST"])
 def api_admin_photo_add():
     """Добавить фото в галерею МОДЕЛИ (главное фото при этом не меняется)."""
@@ -948,6 +979,127 @@ def api_admin_model_save():
                         "orphans": db.orphan_flavors(int(mid))})
     new_id = db.add_model(category, name, data.get("brand") or "", data.get("description") or "", specs, flavors)
     return jsonify({"ok": True, "id": new_id})
+
+
+_КЛЮЧ_ПУБЛИКАЦИИ = re.compile(r"[A-Za-z0-9_-]{8,64}")
+_МАКС_ШТУК = 100000
+
+
+def _отказ(код, сообщение, поле=None, статус=400):
+    тело = {"ok": False, "error": код, "message": сообщение}
+    if поле:
+        тело["field"] = поле
+    return jsonify(тело), статус
+
+
+@bp.route("/api/admin/product/publish", methods=["POST"])
+def api_admin_product_publish():
+    """Новый товар одним маршрутом: модель, фото, точки, варианты и первый
+    приход — одной транзакцией (db.publish_product), с ключом повтора.
+
+    Раньше это были два раздела и несколько запросов подряд, и сбой
+    посередине оставлял полтовара. Всё, что прислал экран, проверяется здесь
+    же — форма может ошибиться или оказаться старой."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    token = inputs._text(data.get("client_token"))
+    if not _КЛЮЧ_ПУБЛИКАЦИИ.fullmatch(token or ""):
+        return _отказ("bad_token", "Экран прислал неверный ключ публикации — обновите приложение.")
+
+    модель = data.get("model") if isinstance(data.get("model"), dict) else {}
+    категория = inputs._text(модель.get("category"))
+    категории = {c["code"]: c for c in db.list_categories()}
+    if категория not in категории:
+        return _отказ("bad_category", "Выберите категорию.", "category")
+    имя = inputs._text(модель.get("name"), 120)
+    if not имя:
+        return _отказ("no_name", "Впишите название товара.", "name")
+    бренд = inputs._text(модель.get("brand"), 80)
+    описание = inputs._text(модель.get("description"), 2000)
+    specs = _clean_specs(категория, модель.get("specs"))
+    вкусы, видели = [], set()
+    сырые = модель.get("flavors") if isinstance(модель.get("flavors"), list) else []
+    for f in сырые:
+        f = inputs._text(f, 60)
+        if f and f.lower() not in видели:
+            видели.add(f.lower())
+            вкусы.append(f)
+    if len(вкусы) > 200:
+        return _отказ("too_many", "Больше 200 вариантов у одного товара — похоже на ошибку.", "flavors")
+    if вкусы and not int(категории[категория].get("has_flavors") or 0):
+        return _отказ("no_variants", "У этой категории нет вариантов — уберите их или выберите другую категорию.", "flavors")
+
+    фото = data.get("photos") if isinstance(data.get("photos"), list) else []
+    фото = [inputs._text(f, 300) for f in фото]
+    if any(not f for f in фото) or len(set(фото)) != len(фото) or len(фото) > 1 + db.MAX_EXTRA_PHOTOS:
+        return _отказ("bad_photo", f"Фото — не больше {1 + db.MAX_EXTRA_PHOTOS}, без повторов.", "photos")
+
+    сырые_точки = data.get("points") if isinstance(data.get("points"), list) else []
+    if not сырые_точки:
+        return _отказ("no_point", "Выберите точку, где товар будет продаваться.", "points")
+    известные = set(db.location_names())
+    точки, города = [], set()
+    for i, т in enumerate(сырые_точки):
+        т = т if isinstance(т, dict) else {}
+        город = inputs._text(т.get("city"), 80)
+        if город not in известные:
+            return _отказ("bad_point", "Такой точки нет — выберите из списка.", f"points.{i}.city")
+        if город in города:
+            return _отказ("bad_point", f"Точка «{город}» выбрана дважды.", f"points.{i}.city")
+        if not auth.may_city(admin, город):
+            return _отказ("other_city", "Это точка другого продавца.", f"points.{i}.city", 403)
+        города.add(город)
+        цена = inputs.дробное(т.get("price"))
+        if цена is None or цена <= 0 or цена > _МАКС_ШТУК:
+            return _отказ("bad_price", f"«{город}»: цена — число больше нуля, например 18.5.", f"points.{i}.price")
+        # Пусто — «закупка не указана» (0). Мусор — отказ, а не тихий ноль.
+        закупка = inputs.дробное(т.get("cost")) if т.get("cost") not in (None, "") else 0.0
+        if закупка is None or закупка < 0 or закупка > _МАКС_ШТУК:
+            return _отказ("bad_cost", f"«{город}»: закупка — неотрицательное число.", f"points.{i}.cost")
+        точка = {"city": город, "price": round(цена, 2), "cost": round(закупка, 2), "is_hit": 1 if т.get("is_hit") else 0}
+        if вкусы:
+            варианты, есть = [], set()
+            for j, v in enumerate(т.get("variants") if isinstance(т.get("variants"), list) else []):
+                v = v if isinstance(v, dict) else {}
+                вкус = inputs._text(v.get("flavor"), 60)
+                if вкус not in вкусы or вкус in есть:
+                    return _отказ("bad_variant", f"«{город}»: вариант «{вкус}» не из списка товара или повторяется.",
+                                  f"points.{i}.variants.{j}")
+                штук = inputs.целое(v.get("stock")) if v.get("stock") not in (None, "") else 0
+                if штук is None or штук < 0 or штук > _МАКС_ШТУК:
+                    return _отказ("bad_number", f"«{город}», «{вкус}»: количество — целое число от 0.",
+                                  f"points.{i}.variants.{j}")
+                есть.add(вкус)
+                варианты.append({"flavor": вкус, "stock": штук})
+            if not варианты:
+                return _отказ("no_variants", f"«{город}»: отметьте хотя бы один вариант, который там продаётся.",
+                              f"points.{i}.variants")
+            точка["variants"] = варианты
+        else:
+            штук = inputs.целое(т.get("stock")) if т.get("stock") not in (None, "") else 0
+            if штук is None or штук < 0 or штук > _МАКС_ШТУК:
+                return _отказ("bad_number", f"«{город}»: количество — целое число от 0.", f"points.{i}.stock")
+            точка["stock"] = штук
+        точки.append(точка)
+
+    содержимое = {"model": {"category": категория, "name": имя, "brand": бренд, "description": описание,
+                            "specs": specs, "flavors": вкусы}, "photos": фото, "points": точки}
+    отпечаток = hashlib.sha256(json.dumps(содержимое, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    try:
+        итог = db.publish_product(int(admin["id"]), token, отпечаток, содержимое["model"], фото, точки)
+    except db.PublishRefused as e:
+        return jsonify({"ok": False, "error": e.code, "message": e.message, **e.extra}), \
+            409 if e.code in ("exists", "token_reused") else 400
+
+    части = []
+    for т in точки:
+        штук = sum(v["stock"] for v in т["variants"]) if "variants" in т else т["stock"]
+        части.append(f"{т['city']} — {т['price']:.2f} Br, первый приход {штук} шт")
+    g.log_note = (f"Новый товар «{имя}»" + (f" · {бренд}" if бренд else "") + ": " + "; ".join(части)
+                  + (" (повтор, второй раз не создан)" if итог.get("replay") else ""))
+    return jsonify({"ok": True, **итог})
 
 
 @bp.route("/api/admin/model/hide", methods=["POST"])

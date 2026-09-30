@@ -703,6 +703,7 @@ def init_db():
     _ensure_coin_log_columns()  # related_id — какой реферал за начислением
     _ensure_stock_move_columns()  # ключ попытки у движения склада — против двойного прихода
     _ensure_price_rev_column()    # номер версии цены — против перестановки запросов
+    _ensure_publish_tables()      # новый товар одним маршрутом: фото черновика и ключи публикаций
     _ensure_category_columns()  # has_flavors у категорий
     _ensure_photo_columns()     # галерея у модели, а не у товара
     _migrate("0001-модели-собраны-из-товаров", models_seeded_from_products)
@@ -983,6 +984,39 @@ def _ensure_price_rev_column():
     cur = conn.cursor()
     if "price_rev" not in _table_columns(cur, "products"):
         cur.execute("ALTER TABLE products ADD COLUMN price_rev INTEGER NOT NULL DEFAULT 0")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_publish_tables():
+    """Новый товар одним маршрутом (этап 2): фото черновика и журнал публикаций.
+
+    draft_photos — фото, загруженные в черновик нового товара, когда самого
+    товара ещё нет. Публикация принимает только такие фото и только от того
+    же человека: иначе чужим file_id (например, чека об оплате) можно было бы
+    выставить картинку на витрину.
+
+    publish_ops — ключ каждой публикации и её итог. Ответ потерялся, человек
+    нажал ещё раз, приложение перезапустилось — тот же ключ возвращает тот же
+    товар, а не второй. Тот же ключ с другим содержимым не выполняется. Строка
+    пишется в той же транзакции, что и сам товар: либо есть оба, либо ничего."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS draft_photos (
+            id         {ID_COL},
+            admin_id   BIGINT NOT NULL,
+            file_id    TEXT   NOT NULL,
+            thumb_id   TEXT,
+            created_at TEXT
+        )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS draft_photos_file_idx ON draft_photos (file_id)")
+    cur.execute("""CREATE TABLE IF NOT EXISTS publish_ops (
+            client_token TEXT PRIMARY KEY,
+            fingerprint  TEXT NOT NULL,
+            result       TEXT NOT NULL,
+            admin_id     BIGINT,
+            created_at   TEXT
+        )""")
     conn.commit()
     conn.close()
 
@@ -2689,6 +2723,7 @@ from partut.db.catalog import (                                         # noqa: 
     merge_model_flavors,                                                    # noqa: F401
     propagate_model, orphan_flavors, count_products_of_model, delete_model, # noqa: F401
     add_product_from_model, create_point_product,                           # noqa: F401
+    PublishRefused, publish_product, add_draft_photo,                       # noqa: F401
     get_variants, get_all_variants, add_variant, delete_variants,           # noqa: F401
     replace_variants_if, change_variants,                                   # noqa: F401
     change_variant_stock, recalc_product_stock,                             # noqa: F401

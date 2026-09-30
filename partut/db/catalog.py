@@ -580,37 +580,10 @@ def create_point_product(model_id, city, price, cost=0, is_hit=0, stock=0, varia
     m = get_model(model_id)
     if not m:
         return None
-    specs = m["specs"] or {}
-    extra = {k: v for k, v in specs.items() if k not in db.SPEC_COLUMNS and str(v).strip() != ""}
-    варианты = [{"flavor": str(v.get("flavor") or "").strip(), "stock": max(0, int(v.get("stock") or 0))}
-                for v in (variants or []) if str(v.get("flavor") or "").strip()]
-    штук = 0 if варианты else max(0, int(stock or 0))
-    закупка = float(cost or 0)
     conn = db.connect()
     cur = conn.cursor()
     try:
-        pid = db._insert_id(
-            cur,
-            """INSERT INTO products (city, category, name, price, stock, is_hit, description, brand,
-                                     flavor, strength, volume, cost, model_id, specs, photo, photo_thumb)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (city, m["category"], m["name"], price, штук, 1 if is_hit else 0, m["description"],
-             m["brand"], "", str(specs.get("strength", "") or ""), str(specs.get("volume", "") or ""),
-             закупка, model_id, json.dumps(extra, ensure_ascii=False) if extra else None,
-             m["photo"] or None, m["photo_thumb"] or None),
-        )
-        for v in варианты:
-            cur.execute(db._q("INSERT INTO product_variants (product_id, flavor, stock) VALUES (%s, %s, %s)"),
-                        (pid, v["flavor"], v["stock"]))
-            if v["stock"]:
-                db._record_move(cur, pid, v["flavor"], v["stock"], "in", закупка,
-                                "первый завоз на точку", admin_id)
-        if варианты:
-            cur.execute(db._q("""UPDATE products SET stock =
-                              (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
-                              WHERE id = %s"""), (pid, pid))
-        elif штук:
-            db._record_move(cur, pid, None, штук, "in", закупка, "первый завоз на точку", admin_id)
+        pid = _на_точку(cur, m, model_id, city, price, cost, is_hit, stock, variants, admin_id)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -618,6 +591,180 @@ def create_point_product(model_id, city, price, cost=0, is_hit=0, stock=0, varia
         raise
     conn.close()
     return pid
+
+
+def _на_точку(cur, m, model_id, city, price, cost=0, is_hit=0, stock=0, variants=None, admin_id=None,
+              заметка="первый завоз на точку"):
+    """Товар модели на точке — внутри чужой транзакции (cur): строка товара,
+    варианты, итог из вариантов и первый приход в историю склада. Один и тот
+    же путь у «Завезти на точку» и у публикации нового товара — второго
+    способа положить остаток на склад нет."""
+    specs = m["specs"] or {}
+    extra = {k: v for k, v in specs.items() if k not in db.SPEC_COLUMNS and str(v).strip() != ""}
+    варианты = [{"flavor": str(v.get("flavor") or "").strip(), "stock": max(0, int(v.get("stock") or 0))}
+                for v in (variants or []) if str(v.get("flavor") or "").strip()]
+    штук = 0 if варианты else max(0, int(stock or 0))
+    закупка = float(cost or 0)
+    pid = db._insert_id(
+        cur,
+        """INSERT INTO products (city, category, name, price, stock, is_hit, description, brand,
+                                 flavor, strength, volume, cost, model_id, specs, photo, photo_thumb)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (city, m["category"], m["name"], price, штук, 1 if is_hit else 0, m["description"],
+         m["brand"], "", str(specs.get("strength", "") or ""), str(specs.get("volume", "") or ""),
+         закупка, model_id, json.dumps(extra, ensure_ascii=False) if extra else None,
+         m["photo"] or None, m["photo_thumb"] or None),
+    )
+    for v in варианты:
+        cur.execute(db._q("INSERT INTO product_variants (product_id, flavor, stock) VALUES (%s, %s, %s)"),
+                    (pid, v["flavor"], v["stock"]))
+        if v["stock"]:
+            db._record_move(cur, pid, v["flavor"], v["stock"], "in", закупка, заметка, admin_id)
+    if варианты:
+        cur.execute(db._q("""UPDATE products SET stock =
+                          (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                          WHERE id = %s"""), (pid, pid))
+    elif штук:
+        db._record_move(cur, pid, None, штук, "in", закупка, заметка, admin_id)
+    return pid
+
+
+class PublishRefused(Exception):
+    """Публикация нового товара не проведена — ничего не записано. code —
+    для экрана, message — человеку, extra — подробности (какая модель уже есть,
+    что записано под этим ключом раньше)."""
+
+    def __init__(self, code, message="", **extra):
+        super().__init__(message or code)
+        self.code, self.message, self.extra = code, message, extra
+
+
+# Ключ замка публикаций в Postgres (pg_advisory_xact_lock). Любое постоянное
+# число: важно лишь, что все публикации берут один и тот же.
+_ЗАМОК_ПУБЛИКАЦИИ = 820930
+
+
+def add_draft_photo(admin_id, file_id, thumb_id=""):
+    """Фото, загруженное в черновик нового товара: товара ещё нет, а фото уже
+    в Telegram. Публикация примет его только от этого же человека."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("INSERT INTO draft_photos (admin_id, file_id, thumb_id, created_at) VALUES (%s, %s, %s, %s)"),
+                (int(admin_id), file_id, thumb_id or "", db._now_str()))
+    conn.commit()
+    conn.close()
+
+
+def publish_product(admin_id, token, fingerprint, модель, фото, точки):
+    """Новый товар целиком — ОДНОЙ транзакцией: модель, её фото, товар на
+    каждой выбранной точке, варианты и первый приход с автором и закупкой.
+
+    Раньше это были отдельные шаги двух разделов: модель в «Ассортименте»,
+    потом фото отдельным запросом, потом «Завезти на точку». Сбой посередине
+    оставлял модель без точки или товар без фото, и никто этого не видел.
+
+    token — ключ публикации, fingerprint — отпечаток её содержимого. Тот же
+    ключ с тем же содержимым возвращает прежний итог (replay), с другим —
+    отказ token_reused. Ключ и товар пишутся вместе: либо оба, либо ничего.
+
+    модель — {category, name, brand, description, specs, flavors};
+    фото — [file_id, …] из draft_photos этого человека, первое — главное;
+    точки — [{city, price, cost, is_hit, stock, variants: [{flavor, stock}]}].
+    Возвращает {"model_id", "products": [{"id", "city"}], "replay"}.
+    """
+    conn = db.connect()
+    cur = conn.cursor()
+
+    def прежний_итог():
+        cur.execute(db._q("SELECT fingerprint, result FROM publish_ops WHERE client_token = %s"), (token,))
+        return cur.fetchone()
+
+    try:
+        # Публикации идут по одной: проверка «такой модели ещё нет» и её
+        # создание не должны разойтись между двумя владельцами. В Postgres —
+        # общий замок; в SQLite первая запись транзакции (ключ ниже) и так
+        # берёт замок на всю базу.
+        if db.USE_PG:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (_ЗАМОК_ПУБЛИКАЦИИ,))
+            был = прежний_итог()
+        else:
+            try:
+                cur.execute(db._q("INSERT INTO publish_ops (client_token, fingerprint, result, admin_id, created_at) "
+                                  "VALUES (%s, %s, %s, %s, %s)"),
+                            (token, fingerprint, "{}", int(admin_id), db._now_str()))
+                был = None
+            except db.sqlite3.IntegrityError:
+                conn.rollback()
+                был = прежний_итог()
+        if был:
+            conn.rollback()
+            conn.close()
+            if был["fingerprint"] != fingerprint:
+                raise PublishRefused("token_reused",
+                                     "Эта публикация уже проведена с другими данными. Откройте товар и проверьте его.",
+                                     recorded=json.loads(был["result"] or "{}"))
+            итог = json.loads(был["result"] or "{}")
+            итог["replay"] = True
+            return итог
+
+        категория = модель["category"]
+        имя = модель["name"].strip()
+        бренд = (модель.get("brand") or "").strip()
+        # Двойник — та же модель в той же категории. Сравниваем в Python:
+        # LOWER() в SQLite не знает кириллицы.
+        cur.execute(db._q("SELECT id, name, brand FROM models WHERE category = %s"), (категория,))
+        for r in cur.fetchall():
+            if (r["name"] or "").strip().lower() == имя.lower() and (r["brand"] or "").strip().lower() == бренд.lower():
+                raise PublishRefused("exists", f"Такая модель уже есть: «{r['name']}». Завезите её на точку, а не заводите вторую.",
+                                     model_id=int(r["id"]), name=r["name"])
+
+        # Фото — только загруженные в черновик этим же человеком.
+        миниатюры = {}
+        for fid in фото:
+            cur.execute(db._q("SELECT thumb_id FROM draft_photos WHERE file_id = %s AND admin_id = %s"),
+                        (fid, int(admin_id)))
+            r = cur.fetchone()
+            if not r:
+                raise PublishRefused("bad_photo", "Фото не найдено среди загруженных для нового товара — загрузите его заново.")
+            миниатюры[fid] = r["thumb_id"] or ""
+        главное = фото[0] if фото else None
+
+        mid = db._insert_id(cur, "INSERT INTO models (category, brand, name, description, specs, flavors, "
+                                 "photo, photo_thumb, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                            (категория, бренд, имя, (модель.get("description") or "").strip(),
+                             json.dumps(модель.get("specs") or {}, ensure_ascii=False),
+                             json.dumps(модель.get("flavors") or [], ensure_ascii=False),
+                             главное, миниатюры.get(главное) or None if главное else None, db._now_str()))
+        for i, fid in enumerate(фото[1:], start=1):
+            cur.execute(db._q("INSERT INTO product_photos (product_id, model_id, file_id, thumb_id, sort) "
+                              "VALUES (%s, %s, %s, %s, %s)"), (0, mid, fid, миниатюры[fid], i))
+        m = {"category": категория, "name": имя, "brand": бренд, "description": (модель.get("description") or "").strip(),
+             "specs": модель.get("specs") or {}, "photo": главное, "photo_thumb": миниатюры.get(главное) if главное else None}
+        товары = []
+        for т in точки:
+            pid = _на_точку(cur, m, mid, т["city"], т["price"], т.get("cost") or 0, т.get("is_hit") or 0,
+                            т.get("stock") or 0, т.get("variants"), admin_id, "первый приход нового товара")
+            товары.append({"id": pid, "city": т["city"]})
+        итог = {"model_id": mid, "products": товары}
+        if db.USE_PG:
+            cur.execute(db._q("INSERT INTO publish_ops (client_token, fingerprint, result, admin_id, created_at) "
+                              "VALUES (%s, %s, %s, %s, %s)"),
+                        (token, fingerprint, json.dumps(итог), int(admin_id), db._now_str()))
+        else:
+            cur.execute(db._q("UPDATE publish_ops SET result = %s WHERE client_token = %s"), (json.dumps(итог), token))
+        for fid in фото:
+            cur.execute(db._q("DELETE FROM draft_photos WHERE file_id = %s AND admin_id = %s"), (fid, int(admin_id)))
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+            conn.close()
+        except Exception:
+            pass
+        raise
+    conn.close()
+    итог["replay"] = False
+    return итог
 
 
 def get_variants(product_id):
