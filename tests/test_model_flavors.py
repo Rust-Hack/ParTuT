@@ -14,7 +14,7 @@ from _common import db, client, Checker, as_admin
 
 def _чисто():
     conn = db.connect(); cur = conn.cursor()
-    for t in ("product_variants", "products", "models"):
+    for t in ("stock_moves", "product_variants", "products", "models"):
         cur.execute(f"DELETE FROM {t}")
     conn.commit(); conn.close()
 
@@ -41,18 +41,28 @@ def run():
     c("сервер сказал, что добавил", set(ответ.get_json().get("added_to_model", []))
       == {"Black Cherry", "Sour apple ice"})
 
-    # Повтор ничего не двоит, и регистр не разводит один вкус на два.
-    client.post("/api/admin/product/variants", json={
-        "initData": "x", "id": pid,
-        "variants": [{"flavor": "black cherry", "stock": 5},
-                     {"flavor": "Grape B - POP", "stock": 1}]})
-    c(f"дублей нет: {db.get_model(mid)['flavors']}", len(db.get_model(mid)["flavors"]) == 3)
+    # Регистр не разводит один вкус на два: «black cherry» — это уже заведённый
+    # «Black Cherry», и второй записью он не станет.
+    ответ = client.post("/api/admin/product/variants/change", json={
+        "initData": "x", "id": pid, "add": [{"flavor": "black cherry", "qty": 5}]})
+    c("тот же вкус в другом регистре — отказ «уже есть»",
+      ответ.status_code == 409 and ответ.get_json().get("error") == "exists")
+    c("на точке всё так же три вкуса", len(db.get_variants(pid)) == 3)
+    c(f"дублей в модели нет: {db.get_model(mid)['flavors']}", len(db.get_model(mid)["flavors"]) == 3)
 
-    # Убрали вкус на точке — из модели он НЕ исчезает.
-    client.post("/api/admin/product/variants", json={
-        "initData": "x", "id": pid, "variants": [{"flavor": "Grape B - POP", "stock": 1}]})
+    # Убрали вкусы на точке — из модели они НЕ исчезают. Остаток при этом
+    # уходит только с подтверждением и остаётся в истории склада.
+    ответ = client.post("/api/admin/product/variants/change", json={
+        "initData": "x", "id": pid, "remove": ["Black Cherry", "Sour apple ice"]})
+    c("без подтверждения вкус с остатком не убирается",
+      ответ.status_code == 409 and ответ.get_json().get("error") == "has_stock")
+    ответ = client.post("/api/admin/product/variants/change", json={
+        "initData": "x", "id": pid, "remove": ["Black Cherry", "Sour apple ice"], "writeoff": True})
+    c("с подтверждением — убраны", ответ.status_code == 200 and ответ.get_json().get("ok"))
     c("на точке остался один вкус", len(db.get_variants(pid)) == 1)
     c("а в модели по-прежнему три", len(db.get_model(mid)["flavors"]) == 3)
+    списано = {m["flavor"]: m["delta"] for m in db.get_stock_moves(pid, limit=20) if m["delta"] < 0}
+    c(f"списанное — в истории склада: {списано}", списано == {"Black Cherry": -1, "Sour apple ice": -3})
 
     _чисто()
     return c.fails
@@ -167,13 +177,15 @@ def run_case_duplicates():
     c("написание взято из модели", вар[0]["flavor"] == "Grape B - POP")
     c("и модель не раздвоилась", len(db.get_model(mid)["flavors"]) == 1)
 
-    # Пустое имя и отрицательный остаток отбрасываются.
+    # Пустое имя и отрицательный остаток отбрасываются (старый вход «весь
+    # список» — его ещё шлют страницы, открытые до обновления).
     client.post("/api/admin/product/variants", json={
         "initData": "x", "id": pid,
-        "variants": [{"flavor": "  ", "stock": 5}, {"flavor": "Cherry", "stock": -4}]})
-    вар2 = db.get_variants(pid)
-    c(f"пустой вкус отброшен: {[v['flavor'] for v in вар2]}", len(вар2) == 1)
-    c("отрицательный остаток стал нулём", вар2[0]["stock"] == 0)
+        "variants": [{"flavor": "Grape B - POP", "stock": 6},
+                     {"flavor": "  ", "stock": 5}, {"flavor": "Cherry", "stock": -4}]})
+    вар2 = {v["flavor"]: v["stock"] for v in db.get_variants(pid)}
+    c(f"пустой вкус отброшен: {list(вар2)}", set(вар2) == {"Grape B - POP", "Cherry"})
+    c("отрицательный остаток стал нулём", вар2.get("Cherry") == 0)
 
     # То же при заведении на вторую точку.
     ответ = client.post("/api/admin/product/from-model", json={

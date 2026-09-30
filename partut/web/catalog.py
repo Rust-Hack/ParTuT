@@ -15,7 +15,7 @@ partut/web/catalog.py — админка ассортимента: товары,
 
 import json
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from partut import cache
 from partut.web import auth
@@ -260,7 +260,23 @@ def api_admin_products():
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
-    out = [p for p in _all_products_payload() if auth.may_city(admin, p["city"])]
+    # Сколько обещано в невыданных заказах — рядом с остатком. Остаток в базе
+    # показывает то, что можно продать, а продавцу у полки нужно и второе
+    # число: на полке-то лежит больше, но часть уже чужая. Считаем свежим, мимо
+    # кэша витрины, и складываем в НОВЫЕ словари: кэш общий с покупательской
+    # витриной, и дописать в него — значило бы показать это покупателям.
+    try:
+        резерв = db.reserved_stock()
+    except Exception as e:
+        резерв = {}                     # без этого числа список всё равно нужен
+        print(f"Не удалось посчитать товар в невыданных заказах: {e}")
+    out = []
+    for p in _all_products_payload():
+        if not auth.may_city(admin, p["city"]):
+            continue
+        варианты = [dict(v, reserved=резерв.get((p["id"], v["flavor"]), 0)) for v in p["variants"]]
+        всего = (sum(v["reserved"] for v in варианты) if варианты else резерв.get((p["id"], ""), 0))
+        out.append(dict(p, variants=варианты, reserved=всего))
     return jsonify({"ok": True, "products": out})
 
 
@@ -395,9 +411,13 @@ def _проверить_поле(admin, pid, field, raw):
             if field == "price" and value == 0:
                 return None, ("bad_value", "Цена должна быть больше нуля.")
         elif field == "stock":
-            value = int(raw)
-            if value < 0:
-                return None, ("bad_value", "Остаток не может быть отрицательным.")
+            # Остаток — не поле карточки, а итог движений склада. Правка числом
+            # шла мимо истории, а у товара с вариантами ещё и сбивала итог.
+            # Страницы, открытые до обновления, ещё пришлют его — отвечаем
+            # понятным отказом, остальные поля сохраняются.
+            return None, ("use_stock_moves",
+                          "Остаток меняется только в «Складе»: приход, списание или пересчёт — "
+                          "так каждое изменение остаётся в истории. Обновите приложение.")
         elif field == "name":
             value = str(raw).strip()
             if not value:
@@ -470,27 +490,6 @@ def api_admin_update():
         else:
             приняты[field] = value
 
-    # Остаток — не как остальные поля. Форма редактора держит его число с
-    # момента открытия, и раньше ЛЮБОЕ сохранение карточки (даже одной цены)
-    # слало это число на сервер как новое — а за это время кто-то мог купить
-    # товар, и продажа тихо исчезала со склада. expected_stock — то, что
-    # клиент видел при открытии; меняем остаток, только если на складе он
-    # всё ещё таков. Не пришёл expected_stock — обратной совместимости ради
-    # считаем поле безусловным, как раньше.
-    условный_остаток = False
-    if "stock" in приняты and "expected_stock" in data:
-        try:
-            expected = int(data.get("expected_stock"))
-        except (TypeError, ValueError):
-            expected = None
-        if expected is not None:
-            new_stock = приняты.pop("stock")
-            условный_остаток = True
-            if not db.update_stock_if(pid, new_stock, expected):
-                отказы["stock"] = {"error": "stock_conflict",
-                                    "message": "Остаток изменился, пока вы редактировали карточку "
-                                               "(кто-то купил). Обновите страницу и повторите."}
-
     # Одиночное поле отвечает как раньше — кодом и текстом: на него завязаны
     # переключатели, которые ждут именно такой ответ.
     if одиночное and отказы:
@@ -498,24 +497,71 @@ def api_admin_update():
         ответ = {"ok": False, "error": беда["error"]}
         if беда["message"]:
             ответ["message"] = беда["message"]
-        # «Чужая точка» — это отказ в праве, а не кривые данные, а конфликт
-        # остатка — не «неверные данные»: коды должны различаться.
-        код = (403 if беда["error"] in ("other_city", "forbidden")
-               else 409 if беда["error"] == "stock_conflict" else 400)
+        # «Чужая точка» — это отказ в праве, а не кривые данные: коды должны различаться.
+        код = 403 if беда["error"] in ("other_city", "forbidden") else 400
         return jsonify(ответ), код
 
-    for field, value in приняты.items():
-        db.update_field(pid, field, value)
-
-    # "stock" вынут из приняты выше (применён отдельно, условно) — возвращаем
-    # его в список сохранённых полей, только если он и правда применился.
-    сохранено = sorted(приняты) + (["stock"] if условный_остаток and "stock" not in отказы else [])
+    # expected — каким человек видел каждое поле, открывая карточку. Если с
+    # тех пор поле успел поменять кто-то другой (второй продавец, владелец с
+    # телефона), его НЕ перезаписываем: молча затереть чужую цену — та же
+    # беда, что затереть чужую продажу. Остальные поля сохраняются, а про
+    # конфликт экран скажет прямо и покажет, что там теперь.
+    ожидали = data.get("expected") if isinstance(data.get("expected"), dict) else {}
+    сохранено, конфликты, до = db.update_fields(pid, приняты, expected=ожидали)
+    for поле, сейчас in конфликты.items():
+        отказы[поле] = {"error": "conflict", "current": сейчас,
+                        "message": f"{_ИМЕНА_ПОЛЕЙ.get(поле) or поле}: пока карточка была открыта, "
+                                   f"значение уже поменяли — сейчас {_как_показать(поле, сейчас)}. "
+                                   f"Проверьте и сохраните ещё раз, если нужно."}
+    if до:
+        g.log_note = _было_стало(до, {k: приняты[k] for k in сохранено})
 
     # Пачка сохраняет всё, что прошло, и честно называет, что не прошло:
     # отказать в цене — не повод потерять только что вписанное описание.
     if отказы:
         return jsonify({"ok": True, "saved": сохранено, "failed": отказы})
     return jsonify({"ok": True, "saved": сохранено})
+
+
+# Как поля называются по-человечески — для журнала и отказов. None — служебное
+# поле, в журнал его не пишем (у фото есть уменьшенная копия, и строка «фото
+# изменено» дважды никому не нужна).
+_ИМЕНА_ПОЛЕЙ = {"price": "Цена", "cost": "Закупка", "name": "Название", "category": "Категория",
+                "city": "Точка", "brand": "Бренд", "flavor": "Вкус", "strength": "Крепость",
+                "volume": "Объём", "description": "Описание", "is_hit": "«Хит»",
+                "hidden": "Витрина", "photo": "Фото", "photo_thumb": None}
+
+
+def _как_показать(поле, значение):
+    if поле in ("price", "cost"):
+        return f"{float(значение or 0):.2f} Br"
+    if поле in ("is_hit", "hidden"):
+        return "да" if int(значение or 0) else "нет"
+    return f"«{значение}»" if значение not in (None, "") else "пусто"
+
+
+def _было_стало(до, стало):
+    """Строка журнала: «Название» · точка: Цена 20.00 Br → 25.00 Br; …
+
+    Раньше журнал писал «product/update · id=5» — ни что изменили, ни каким
+    оно было. На вопрос «кто и когда поднял цену» ответить было нечем."""
+    части = []
+    for поле, новое in стало.items():
+        имя = _ИМЕНА_ПОЛЕЙ.get(поле, поле)
+        if имя is None:
+            continue
+        было = до.get(поле)
+        if _как_показать(поле, было) == _как_показать(поле, новое):
+            continue
+        if поле == "hidden":
+            части.append("снят с витрины" if int(новое or 0) else "возвращён на витрину")
+        elif поле == "is_hit":
+            части.append("отмечен «Хит»" if int(новое or 0) else "снята отметка «Хит»")
+        elif поле in ("description", "photo"):
+            части.append(f"{имя.lower()} изменено")
+        else:
+            части.append(f"{имя} {_как_показать(поле, было)} → {_как_показать(поле, новое)}")
+    return f"«{до.get('name')}» · {до.get('city')}: " + ("; ".join(части) if части else "без изменений")
 
 
 def _свести_вкусы(сырые, эталон=None):
@@ -576,28 +622,104 @@ def api_admin_variants():
                         "message": "Нужен хотя бы один вариант — со всеми пустыми остаток посчитать нечем."}), 400
 
     # expected — снимок остатков по вкусам, который клиент видел при открытии
-    # карточки. Раньше список менялся целиком (удалить всё, вставить заново)
-    # без единой проверки: карточка открыта, кто-то купил вкус, продавец
-    # добавил ещё один вкус в список и сохранил — купленное тихо возвращалось
-    # на полку, потому что форма помнила старое число. С expected — только
-    # если на складе всё ещё то же, что видел клиент; иначе явный отказ, а не
-    # молчаливая перезапись.
+    # карточки. Раньше список менялся целиком (удалить всё, вставить заново),
+    # и числа из формы ложились поверх склада: карточка открыта, кто-то купил
+    # вкус, продавец добавил ещё один вкус и сохранил — купленное тихо
+    # возвращалось на полку. Теперь эта ручка меняет только СОСТАВ (новые
+    # варианты с первым приходом, убранные — по правилам склада), а число у
+    # заведённого варианта меняет только склад. Снимок нужен, чтобы отличить
+    # «человек поправил число» (отказ с объяснением) от «товар продался, пока
+    # была открыта карточка» (это не правка и не повод отказывать).
     expected = data.get("expected")
     if isinstance(expected, list):
         expected = _свести_вкусы(expected, известные)
     else:
         expected = None
-    if not db.replace_variants_if(pid, норм_вкусы, expected):
-        return jsonify({"ok": False, "error": "stock_conflict",
-                        "message": "Остаток изменился, пока вы редактировали карточку "
-                                   "(кто-то купил). Обновите страницу и повторите."}), 409
+    try:
+        итог = db.replace_variants_if(pid, норм_вкусы, expected, admin_id=int(admin["id"]))
+    except db.StockRefused as e:
+        return jsonify({"ok": False, "error": e.code, "message": e.message}), _код_отказа(e.code)
+    g.log_note = _журнал_вариантов(товар_, итог)
 
     # Вкус, заведённый на точке, обязан попасть в модель — иначе списки
     # расходятся молча: в Горках вкус есть, а завезти его в Минск нельзя,
     # потому что модель о нём не знает. Наступали ровно на это.
-    вкусы = [v["flavor"] for v in норм_вкусы]
-    добавлено = db.merge_model_flavors(модель_, вкусы) if модель_ else []
-    return jsonify({"ok": True, "added_to_model": добавлено})
+    добавлено = db.merge_model_flavors(модель_, итог["added"]) if модель_ else []
+    return jsonify({"ok": True, "added_to_model": добавлено, **итог})
+
+
+def _код_отказа(code):
+    """HTTP-код для отказа склада: конфликт — 409, «не найдено» — 404, прочее — 400."""
+    if code == "not_found":
+        return 404
+    if code in ("stock_conflict", "reserved", "has_stock", "variant_missing", "exists"):
+        return 409
+    return 400
+
+
+def _журнал_вариантов(товар, итог):
+    """«Название» · точка: + Манго (приход 10); − Мята (списано 3)."""
+    части = [f"+ {имя}" for имя in итог.get("added", [])]
+    for имя in итог.get("removed", []):
+        штук = (итог.get("written_off") or {}).get(имя)
+        части.append(f"− {имя}" + (f" (списано {штук} шт)" if штук else ""))
+    return f"«{товар['name']}» · {товар['city']}: варианты " + ("; ".join(части) or "без изменений")
+
+
+@bp.route("/api/admin/product/variants/change", methods=["POST"])
+def api_admin_variants_change():
+    """Состав вариантов товара: добавить новые (с первым приходом), убрать ненужные.
+
+    Число у уже заведённого варианта здесь не меняется — это склад. Поэтому
+    продажа, случившаяся, пока карточка открыта, этому сохранению не мешает:
+    сравнивать нечего, ничьё число не переписывается.
+
+    add — [{"flavor", "qty"}], remove — ["вкус"], writeoff — подтверждение:
+    убрать вариант с остатком и списать этот остаток (с записью в историю).
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    pid = inputs.целое(data.get("id"))
+    if pid is None:
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    deny = auth.deny_product(admin, pid)
+    if deny:
+        return deny
+    товар_ = db.get_product(pid)
+    if not товар_:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    add, remove = data.get("add") or [], data.get("remove") or []
+    if not isinstance(add, list) or not isinstance(remove, list) or len(add) > 200 or len(remove) > 200:
+        return jsonify({"ok": False, "error": "bad_input"}), 400
+    модель_ = товар_["model_id"] if "model_id" in товар_.keys() else None
+    известные = (db.get_model(модель_) or {}).get("flavors", []) if модель_ else []
+    # Написание — как в модели: «мята» и «Мята» в разных городах выглядели бы
+    # как два разных вкуса. Количество не сводим: отрицательное — это отказ.
+    правильное = {str(f).strip().lower(): str(f).strip() for f in известные}
+    новые = []
+    for a in add:
+        if not isinstance(a, dict):
+            return jsonify({"ok": False, "error": "bad_input"}), 400
+        имя = inputs._text(a.get("flavor"), 120)
+        # Пусто — значит «пока без остатка», а мусор вместо числа — отказ:
+        # молча считать его нулём значило бы потерять привезённое.
+        сырое = a.get("qty")
+        штук = 0 if сырое in (None, "") else inputs.целое(сырое)
+        if штук is None or штук > 100_000:
+            return jsonify({"ok": False, "error": "bad_number",
+                            "message": f"«{имя}»: проверьте количество."}), 400
+        if имя:
+            новые.append({"flavor": правильное.get(имя.lower(), имя), "qty": штук})
+    try:
+        итог = db.change_variants(pid, новые, [inputs._text(x, 120) for x in remove],
+                                  admin_id=int(admin["id"]), writeoff=bool(data.get("writeoff")))
+    except db.StockRefused as e:
+        return jsonify({"ok": False, "error": e.code, "message": e.message}), _код_отказа(e.code)
+    g.log_note = _журнал_вариантов(товар_, итог)
+    добавлено = db.merge_model_flavors(модель_, итог["added"]) if модель_ else []
+    return jsonify({"ok": True, "added_to_model": добавлено, **итог})
 
 
 @bp.route("/api/admin/product/delete", methods=["POST"])
@@ -628,8 +750,12 @@ def api_admin_delete():
                                        f"Сначала выдайте или отклоните их — или удаляйте, "
                                        f"понимая, что выдавать будет нечего."}), 409
 
+    товар_ = db.get_product(pid)
     db.delete_variants(pid)
     db.delete_product(pid)
+    if товар_:
+        g.log_note = (f"«{товар_['name']}» · {товар_['city']}: удалён с точки"
+                      + (f" (на остатке было {int(товар_['stock'] or 0)} шт)" if товар_["stock"] else ""))
     return jsonify({"ok": True})
 
 
@@ -948,15 +1074,20 @@ def api_admin_product_from_model():
         stock = max(0, int(data.get("stock") or 0))
     except (TypeError, ValueError):
         stock = 0
-    pid = db.add_product_from_model(mid, city, max(0.0, price), cost,
-                                    0 if норм_вкусы else stock, 1 if data.get("is_hit") else 0)
+    # Одной транзакцией: товар, привязка к модели, варианты и первый приход в
+    # историю склада. Раньше это были отдельные записи, и сбой посередине
+    # оставлял на точке товар без вариантов.
+    pid = db.create_point_product(mid, city, max(0.0, price), cost,
+                                  is_hit=1 if data.get("is_hit") else 0,
+                                  stock=0 if норм_вкусы else stock, variants=норм_вкусы,
+                                  admin_id=int(admin["id"]))
     if норм_вкусы:
-        заведены = []
-        for v in норм_вкусы:
-            db.add_variant(pid, v["flavor"], v["stock"])
-            заведены.append(v["flavor"])
-        db.recalc_product_stock(pid)
-        db.merge_model_flavors(mid, заведены)
+        db.merge_model_flavors(mid, [v["flavor"] for v in норм_вкусы])
+    всего = sum(v["stock"] for v in норм_вкусы) if норм_вкусы else stock
+    g.log_note = (f"«{m['name']}» → {city}: цена {price:.2f} Br, закупка {cost:.2f} Br, "
+                  f"первый приход {всего} шт"
+                  + (f" ({', '.join(v['flavor'] + ' ' + str(v['stock']) for v in норм_вкусы)})"
+                     if норм_вкусы else ""))
     return jsonify({"ok": True, "id": pid})
 
 

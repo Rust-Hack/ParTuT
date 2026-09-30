@@ -701,6 +701,7 @@ def init_db():
     _ensure_user_columns()      # coins / referred_by у пользователей
     _ensure_order_columns()     # coins_used / доставка у заказов
     _ensure_coin_log_columns()  # related_id — какой реферал за начислением
+    _ensure_stock_move_columns()  # ключ попытки у движения склада — против двойного прихода
     _ensure_category_columns()  # has_flavors у категорий
     _ensure_photo_columns()     # галерея у модели, а не у товара
     _migrate("0001-модели-собраны-из-товаров", models_seeded_from_products)
@@ -934,6 +935,33 @@ def _ensure_coin_log_columns():
     cols = _table_columns(cur, "coin_log")
     if "related_id" not in cols:
         cur.execute("ALTER TABLE coin_log ADD COLUMN related_id BIGINT")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_stock_move_columns():
+    """Ключ попытки у движения склада — против двойного прихода.
+
+    Ответ на «Записать» потерялся в плохой сети, продавец нажал ещё раз — и
+    приход ложился дважды: на полке десять, в базе двадцать. У заказов такой
+    ключ был давно (orders.client_token), у склада — нет.
+
+    client_request — содержимое операции (причина, число, цена): повтор с тем
+    же ключом, но другим числом — это уже другая операция, и принимать её
+    молча нельзя."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "stock_moves")
+    if "client_token" not in cols:
+        cur.execute("ALTER TABLE stock_moves ADD COLUMN client_token TEXT")
+    if "client_request" not in cols:
+        cur.execute("ALTER TABLE stock_moves ADD COLUMN client_request TEXT")
+    # Последнее слово о дублях — за базой: два одинаковых запроса приходят
+    # одновременно, и оба успевают не найти друг друга. Ключ частичный: у всех
+    # прежних движений ключа нет, и мешать им он не должен.
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS stock_moves_client_token_uniq "
+                "ON stock_moves (client_token) "
+                "WHERE client_token IS NOT NULL AND client_token <> ''")
     conn.commit()
     conn.close()
 
@@ -2196,7 +2224,12 @@ def trim_coin_log(days=COIN_LOG_KEEP_DAYS):
 
 
 # Какие колонки разрешено менять (защита: имя колонки нельзя подставить параметром).
-_EDITABLE = {"name", "price", "cost", "stock", "is_hit", "description", "photo", "photo_thumb",
+#
+# Остатка («stock») здесь нет намеренно. Число на складе меняет только
+# движение — приход, списание, пересчёт (db.stock_operation), с автором и
+# записью в историю. Раньше карточка товара и бот ставили его как любое
+# другое поле, мимо истории, и на вопрос «куда делись пять штук» ответа не было.
+_EDITABLE = {"name", "price", "cost", "is_hit", "description", "photo", "photo_thumb",
              "brand", "flavor", "strength", "volume", "category", "city", "hidden"}
 
 
@@ -2521,7 +2554,8 @@ def models_seeded_from_products():
 # --- Склад ---
 # Движения и подписки на поступление — см. partut/db/stock.py.
 from partut.db.stock import (                                          # noqa: E402
-    move_stock, get_stock_moves, stock_losses,                          # noqa: F401
+    StockRefused, stock_operation, reserved_stock, reserved_orders,     # noqa: F401
+    _record_move, get_stock_moves, stock_losses,                        # noqa: F401
     add_stock_alert, remove_stock_alert, stock_alerts_ready,            # noqa: F401
     clear_stock_alerts, stock_alert_counts, STOCK_REASONS,              # noqa: F401
 )
@@ -2626,16 +2660,16 @@ from partut.db.customers import (                                       # noqa: 
 from partut.db.catalog import (                                         # noqa: E402
     get_products, get_product, get_all_products, add_product,               # noqa: F401
     hide_model_products, update_field, toggle_hit, delete_product,          # noqa: F401
-    change_stock, update_stock_if,                                         # noqa: F401
+    change_stock, update_fields,                                           # noqa: F401
     get_brands, get_brand, find_brand_by_name, count_products_of_brand,     # noqa: F401
     rename_brand_in_products, known_flavors, merge_duplicate_brands,        # noqa: F401
     add_brand, update_brand, delete_brand,                                  # noqa: F401
     _model_json, list_models, get_model, add_model, update_model,           # noqa: F401
     merge_model_flavors,                                                    # noqa: F401
     propagate_model, orphan_flavors, count_products_of_model, delete_model, # noqa: F401
-    add_product_from_model,                                                 # noqa: F401
+    add_product_from_model, create_point_product,                           # noqa: F401
     get_variants, get_all_variants, add_variant, delete_variants,           # noqa: F401
-    replace_variants_if,                                                    # noqa: F401
+    replace_variants_if, change_variants,                                   # noqa: F401
     change_variant_stock, recalc_product_stock,                             # noqa: F401
 )
 

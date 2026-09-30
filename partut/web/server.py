@@ -216,6 +216,11 @@ _WRITE_PATHS = {
     "/api/admin/delivery": (), "/api/admin/delivery/update": (), "/api/admin/delivery/delete": (),
     "/api/admin/point": (), "/api/admin/point/update": (), "/api/admin/point/delete": (),
     "/api/admin/stock/move": _STOCK_KEYS,
+    # Пачкой — тот же склад. Этой строки не было: после массового прихода
+    # экран говорил «Готово ✅», а список ещё полминуты показывал старые
+    # остатки, и ждавшие поступления покупатели не получали сообщения.
+    "/api/admin/stock/move/batch": _STOCK_KEYS,
+    "/api/admin/product/variants/change": _ТОВАРЫ,
     "/api/admin/brand": _БРЕНДЫ, "/api/admin/brand/delete": _БРЕНДЫ,
     "/api/admin/settings/update": (), "/api/admin/stats/reset": (),
     "/api/order": _STOCK_KEYS,                  # меняют остаток на складе
@@ -284,7 +289,9 @@ def _write_admin_log(resp):
         # читают глазами, когда ищут, кто что сделал.
         готовое = getattr(g, "log_note", None)
         if готовое:
-            parts = [str(готовое)[:200]]
+            # 400, а не 200: строка «было → стало» по нескольким полям или
+            # поставка на пять позиций в 200 знаков не помещалась.
+            parts = [str(готовое)[:400]]
         else:
             src = request.get_json(silent=True) or request.form or {}
             parts = [f"{k}={str(src[k])[:40]}" for k in _LOG_FIELDS if k in src and src[k] not in ("", None)]

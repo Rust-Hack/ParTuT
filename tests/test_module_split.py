@@ -35,7 +35,7 @@ from partut.db import stock as db_stock
                   "count_pending_reviews", "reviewable_products"]),
     (db_promos, ["check_promo", "add_promo", "list_promos", "delete_promo",
                  "set_promo_active", "consume_promo"]),
-    (db_stock, ["move_stock", "get_stock_moves", "stock_losses", "add_stock_alert",
+    (db_stock, ["stock_operation", "reserved_stock", "get_stock_moves", "stock_losses", "add_stock_alert",
                 "clear_stock_alerts", "stock_alert_counts"]),
     (db_orders, ["create_order", "place_order", "get_order", "cancel_order",
                  "update_order_items", "set_order_status", "get_checkout_data"]),

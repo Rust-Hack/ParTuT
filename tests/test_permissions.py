@@ -193,7 +193,9 @@ def run():
         prices = [r for r in rows if r["action"] == "product/update"]
         c8("правка цены записана", bool(prices))
         c8("видно, кто именно", any(int(r["admin_id"]) == SELLER for r in prices))
-        c8("видно, что менялось", any("price" in (r["details"] or "") for r in prices))
+        # Не «price=31», а по-человечески и с прежним значением: «Цена 30.00 Br → 31.00 Br».
+        c8("видно, что менялось", any("Цена" in (r["details"] or "") and "→" in (r["details"] or "")
+                                      for r in prices))
         c8("отказ по правам в журнал не попал",
           all(int(r["admin_id"]) != BUYER for r in rows))
         c8("чтение не засоряет журнал",

@@ -129,19 +129,67 @@ def change_stock(product_id, delta):
     conn.close()
 
 
-def update_stock_if(product_id, new_stock, expected_stock):
-    """Ставит остаток В ТОЧНОСТИ new_stock, но только если он всё ещё тот, что
-    видел клиент (expected_stock) — иначе кто-то купил товар, пока была
-    открыта карточка, и слепая перезапись стёрла бы эту продажу со склада.
-    Возвращает True, если применилось."""
+def _то_же_значение(поле, было, стало):
+    """Одно ли это значение поля: «20», 20 и 20.0 — одно и то же, иначе
+    сверка со снимком ругалась бы на каждое сохранение."""
+    if поле in ("price", "cost"):
+        try:
+            return round(float(было or 0), 2) == round(float(стало or 0), 2)
+        except (TypeError, ValueError):
+            return False
+    if поле in ("is_hit", "hidden"):
+        try:
+            return bool(int(было or 0)) == bool(int(стало or 0))
+        except (TypeError, ValueError):
+            return False            # непонятный снимок — считаем, что поле трогали
+    return str(было if было is not None else "").strip() == str(стало if стало is not None else "").strip()
+
+
+def update_fields(product_id, fields, expected=None):
+    """Несколько полей товара — одним UPDATE, то есть разом или никак.
+
+    Раньше каждое поле уходило своим запросом со своим коммитом: сбой
+    посередине оставлял карточку наполовину сохранённой.
+
+    expected — {поле: значение}, каким человек видел поле, открывая карточку.
+    Если с тех пор его успел поменять кто-то другой (второй продавец, владелец
+    с телефона), это поле НЕ перезаписываем, а возвращаем в конфликтах:
+    молча затереть чужую правку цены — та же беда, что затереть чужую
+    продажу. Остальные поля сохраняются.
+
+    Возвращает (сохранённые поля, {поле: текущее значение} для конфликтов,
+    значения до правки — для журнала «было → стало»).
+    """
+    поля = {k: v for k, v in (fields or {}).items() if k in db._EDITABLE}
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("UPDATE products SET stock = %s WHERE id = %s AND stock = %s"),
-                (new_stock, product_id, expected_stock))
-    applied = cur.rowcount > 0
-    conn.commit()
+    try:
+        if db.USE_PG:
+            cur.execute("SELECT * FROM products WHERE id = %s FOR UPDATE", (product_id,))
+        else:
+            cur.execute("UPDATE products SET id = id WHERE id = ?", (product_id,))
+            cur.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+        до = cur.fetchone()
+        if not до:
+            conn.rollback()
+            conn.close()
+            return [], {}, {}
+        до = dict(до)
+        конфликты = {}
+        for поле, ждали in (expected or {}).items():
+            if поле in поля and not _то_же_значение(поле, до.get(поле), ждали):
+                конфликты[поле] = до.get(поле)
+                поля.pop(поле)
+        if поля:
+            sets = ", ".join(f"{k} = %s" for k in поля)
+            cur.execute(db._q(f"UPDATE products SET {sets} WHERE id = %s"), (*поля.values(), product_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
     conn.close()
-    return applied
+    return sorted(поля), конфликты, до
 
 
 def get_brands(category=None):
@@ -489,21 +537,61 @@ def delete_model(model_id):
 
 def add_product_from_model(model_id, city, price, cost=0, stock=0, is_hit=0):
     """Заводит наличие модели на точке. Описание берётся из модели целиком."""
+    return create_point_product(model_id, city, price, cost, is_hit=is_hit, stock=stock)
+
+
+def create_point_product(model_id, city, price, cost=0, is_hit=0, stock=0, variants=None, admin_id=None):
+    """Модель появляется на точке — ОДНОЙ транзакцией, с первым приходом в истории.
+
+    Раньше это были отдельные записи подряд: товар, привязка к модели, каждый
+    вариант, пересчёт итога — каждая со своим коммитом. Сбой посередине
+    оставлял на точке товар без вариантов: на витрине он выглядел
+    раскупленным, и почему — было не понять. А первый приход в историю склада
+    не попадал вовсе: остаток появлялся из ниоткуда, и первое же «куда делось»
+    упиралось в пустоту.
+
+    variants — [{"flavor", "stock"}] у модели с вариантами; у остальных — stock.
+    Возвращает id товара или None, если модели нет.
+    """
     m = get_model(model_id)
     if not m:
         return None
     specs = m["specs"] or {}
-    pid = add_product(city, m["category"], m["name"], price, stock, is_hit, m["description"],
-                      brand=m["brand"], flavor="",
-                      strength=str(specs.get("strength", "") or ""),
-                      volume=str(specs.get("volume", "") or ""), cost=cost)
     extra = {k: v for k, v in specs.items() if k not in db.SPEC_COLUMNS and str(v).strip() != ""}
+    варианты = [{"flavor": str(v.get("flavor") or "").strip(), "stock": max(0, int(v.get("stock") or 0))}
+                for v in (variants or []) if str(v.get("flavor") or "").strip()]
+    штук = 0 if варианты else max(0, int(stock or 0))
+    закупка = float(cost or 0)
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("UPDATE products SET model_id = %s, specs = %s, photo = %s, photo_thumb = %s WHERE id = %s"),
-                (model_id, json.dumps(extra, ensure_ascii=False) if extra else None,
-                 m["photo"] or None, m["photo_thumb"] or None, pid))
-    conn.commit()
+    try:
+        pid = db._insert_id(
+            cur,
+            """INSERT INTO products (city, category, name, price, stock, is_hit, description, brand,
+                                     flavor, strength, volume, cost, model_id, specs, photo, photo_thumb)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (city, m["category"], m["name"], price, штук, 1 if is_hit else 0, m["description"],
+             m["brand"], "", str(specs.get("strength", "") or ""), str(specs.get("volume", "") or ""),
+             закупка, model_id, json.dumps(extra, ensure_ascii=False) if extra else None,
+             m["photo"] or None, m["photo_thumb"] or None),
+        )
+        for v in варианты:
+            cur.execute(db._q("INSERT INTO product_variants (product_id, flavor, stock) VALUES (%s, %s, %s)"),
+                        (pid, v["flavor"], v["stock"]))
+            if v["stock"]:
+                db._record_move(cur, pid, v["flavor"], v["stock"], "in", закупка,
+                                "первый завоз на точку", admin_id)
+        if варианты:
+            cur.execute(db._q("""UPDATE products SET stock =
+                              (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                              WHERE id = %s"""), (pid, pid))
+        elif штук:
+            db._record_move(cur, pid, None, штук, "in", закупка, "первый завоз на точку", admin_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
     conn.close()
     return pid
 
@@ -544,50 +632,156 @@ def delete_variants(product_id):
     conn.close()
 
 
-def replace_variants_if(product_id, variants, expected=None):
-    """Заменяет список вариантов товара целиком — ОДНОЙ транзакцией (удаление,
-    вставка новых и пересчёт общего остатка не расходятся, если что-то
-    упадёт посередине — раньше это были три отдельных коммита).
+def change_variants(product_id, add=None, remove=None, admin_id=None, writeoff=False):
+    """Состав вариантов товара на точке: добавить новые, убрать ненужные.
 
-    Если передан expected ({"flavor": ..., "stock": ...} по текущим вкусам) —
-    применяет замену, только пока фактические остатки совпадают с ним. Иначе
-    товар мог продаться, пока была открыта карточка, а замена всем списком
-    тихо стёрла бы эту продажу. Возвращает True, если применилось; False —
-    при конфликте (ничего не меняется).
+    Остатки уже заведённых вариантов здесь НЕ меняются — это работа склада
+    (приход, списание, пересчёт). Раньше карточка слала весь список с числами,
+    и любая правка состава заодно переписывала остатки: добавил вкус — и
+    вернул на полку то, что успели купить, пока карточка была открыта.
+
+    add — [{"flavor", "qty"}]: новый вариант, qty — его первый приход (≥ 0);
+        приход ложится в историю склада, как любой другой.
+    remove — ["вкус", ...]: вариант уходит из товара.
+        • Под невыданные заказы — нельзя: отмена такого заказа вернула бы
+          товар варианту, которого больше нет, и штуки пропали бы молча.
+        • С остатком — только с writeoff=True: остаток списывается
+          пересчётом до нуля, с записью в историю. Без подтверждения — отказ
+          с объяснением, а не тихая потеря.
+    Товар без единого варианта оставить нельзя: остаток такого товара не посчитать.
+
+    Всё одной транзакцией. Нельзя — db.StockRefused, и не меняется ничего.
+    Возвращает {"stock", "added": [...], "removed": [...], "written_off": {вкус: штук}}.
     """
+    add, remove = list(add or []), list(remove or [])
     conn = db.connect()
     cur = conn.cursor()
     try:
-        # Блокировка строки товара — тот же приём, что и у заказов
-        # (update_order_items): держит два одновременных сохранения этой же
-        # карточки друг за другом, а не бок о бок.
+        # Замок в том же порядке, что у заказа: сначала варианты, потом товар.
         if db.USE_PG:
+            cur.execute("SELECT id FROM product_variants WHERE product_id = %s ORDER BY id FOR UPDATE",
+                        (product_id,))
             cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (product_id,))
         else:
             cur.execute("UPDATE products SET id = id WHERE id = ?", (product_id,))
-        if expected is not None:
-            cur.execute(db._q("SELECT flavor, stock FROM product_variants WHERE product_id = %s"),
-                        (product_id,))
-            текущие = {r["flavor"]: int(r["stock"]) for r in cur.fetchall()}
-            снимок = {v["flavor"]: int(v["stock"]) for v in expected}
-            if снимок != текущие:
-                conn.rollback()
-                conn.close()
-                return False
-        cur.execute(db._q("DELETE FROM product_variants WHERE product_id = %s"), (product_id,))
-        for v in variants:
+        cur.execute(db._q("SELECT * FROM products WHERE id = %s"), (product_id,))
+        товар = cur.fetchone()
+        if not товар:
+            raise db.StockRefused("not_found", "Товар не найден — возможно, его уже убрали с точки.")
+        cur.execute(db._q("SELECT flavor, stock FROM product_variants WHERE product_id = %s ORDER BY id"),
+                    (product_id,))
+        было = {r["flavor"]: int(r["stock"] or 0) for r in cur.fetchall()}
+        # Товар без вариантов с остатком: сумма новых вариантов заменила бы
+        # его остаток, и штуки на полке исчезли бы без следа.
+        if not было and int(товар["stock"] or 0) > 0 and add:
+            raise db.StockRefused("has_stock",
+                                  f"У товара остаток {int(товар['stock'])} шт без вариантов. Сначала "
+                                  f"пересчитайте его до нуля в «Складе», потом заводите варианты.")
+        по_имени = {f.lower(): f for f in было}
+
+        уберём = []
+        for f in remove:
+            имя = по_имени.get(str(f or "").strip().lower())
+            if имя is None:
+                raise db.StockRefused("variant_missing",
+                                      f"Варианта «{str(f).strip()}» у товара уже нет — обновите экран.")
+            if имя not in уберём:
+                уберём.append(имя)
+        новые, видели = [], set()
+        for a in add:
+            имя = str((a or {}).get("flavor") or "").strip()
+            if not имя or имя.lower() in видели:
+                continue
+            видели.add(имя.lower())
+            есть = по_имени.get(имя.lower())
+            if есть is not None and есть not in уберём:
+                raise db.StockRefused("exists",
+                                      f"Вариант «{есть}» уже есть — приход по нему записывают в «Складе».")
+            try:
+                штук = int((a or {}).get("qty") or 0)
+            except (TypeError, ValueError):
+                raise db.StockRefused("bad_number", f"«{имя}»: количество — целое число.")
+            if штук < 0:
+                raise db.StockRefused("bad_number", f"«{имя}»: количество не может быть меньше нуля.")
+            новые.append((имя, штук))
+        if not новые and not уберём:
+            raise db.StockRefused("no_change", "Менять нечего.")
+        if len(было) - len(уберём) + len(новые) <= 0:
+            raise db.StockRefused("no_variants",
+                                  "Нужен хотя бы один вариант — со всеми убранными остаток посчитать нечем.")
+
+        резерв = db.reserved_stock(cur)
+        for имя in уберём:
+            обещано = резерв.get((int(product_id), имя), 0)
+            if обещано:
+                raise db.StockRefused("reserved",
+                                      f"«{имя}»: {обещано} шт в невыданных заказах. Уберите вариант после "
+                                      f"их выдачи или отмены — иначе отмена вернёт товар в никуда.")
+            if было[имя] > 0 and not writeoff:
+                raise db.StockRefused("has_stock",
+                                      f"«{имя}»: на остатке {было[имя]} шт. Сначала спишите их "
+                                      f"(«Склад» → списание или пересчёт), потом уберите вариант.")
+
+        закупка = float(товар["cost"] or 0)
+        списано = {}
+        for имя in уберём:
+            if было[имя] > 0:
+                db._record_move(cur, product_id, имя, -было[имя], "fix", закупка,
+                                "вариант убран из карточки", admin_id)
+                списано[имя] = было[имя]
+            cur.execute(db._q("DELETE FROM product_variants WHERE product_id = %s AND flavor = %s"),
+                        (product_id, имя))
+        for имя, штук in новые:
             cur.execute(db._q("INSERT INTO product_variants (product_id, flavor, stock) VALUES (%s, %s, %s)"),
-                        (product_id, v["flavor"], max(0, int(v["stock"]))))
+                        (product_id, имя, штук))
+            if штук:
+                db._record_move(cur, product_id, имя, штук, "in", закупка, "новый вариант", admin_id)
         cur.execute(db._q("""UPDATE products SET stock =
                           (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
                           WHERE id = %s"""), (product_id, product_id))
+        cur.execute(db._q("SELECT stock FROM products WHERE id = %s"), (product_id,))
+        итог = int(cur.fetchone()["stock"] or 0)
         conn.commit()
     except Exception:
         conn.rollback()
         conn.close()
         raise
     conn.close()
-    return True
+    return {"stock": итог, "added": [и for и, _ in новые], "removed": уберём, "written_off": списано}
+
+
+def replace_variants_if(product_id, variants, expected=None, admin_id=None):
+    """Старый вход «весь список вариантов с числами» — для страниц, открытых до
+    обновления приложения. Они ещё какое-то время будут слать запросы по-старому.
+
+    Теперь он только переводит список в change_variants: новые варианты — с
+    первым приходом, пропавшие — убираются по тем же правилам. Изменить число
+    у уже заведённого варианта так больше нельзя: остаток меняет только склад,
+    иначе правка шла бы мимо истории. Такой запрос получает отказ с
+    объяснением, а не молчаливую перезапись.
+
+    expected — снимок, каким человек видел список при открытии карточки: с ним
+    сравниваем, трогал ли он числа. Продажа, случившаяся за это время, правкой
+    не считается и отказом не оборачивается.
+    """
+    по_имени = {str(v["flavor"]).strip().lower(): v for v in variants}
+    сейчас = {v["flavor"]: int(v["stock"] or 0) for v in get_variants(product_id)}
+    снимок = ({str(v["flavor"]).strip().lower(): int(v["stock"]) for v in expected}
+              if expected is not None else {f.lower(): s for f, s in сейчас.items()})
+    тронули = [f for f in сейчас
+               if f.lower() in по_имени and f.lower() in снимок
+               and int(по_имени[f.lower()]["stock"]) != снимок[f.lower()]]
+    if тронули:
+        raise db.StockRefused("use_stock_moves",
+                              "Остаток уже заведённого варианта меняется только в «Складе» (приход, "
+                              "списание, пересчёт) — чтобы каждое изменение осталось в истории. "
+                              "Обновите приложение. Не сохранилось: " + ", ".join(тронули) + ".")
+    известные = {f.lower() for f in сейчас}
+    добавить = [{"flavor": v["flavor"], "qty": v["stock"]} for к, v in по_имени.items() if к not in известные]
+    убрать = [f for f in сейчас if f.lower() not in по_имени]
+    if not добавить and not убрать:
+        return {"stock": sum(сейчас.values()), "added": [], "removed": [], "written_off": {}}
+    return change_variants(product_id, добавить, убрать, admin_id=admin_id)
 
 
 def change_variant_stock(product_id, flavor, delta):

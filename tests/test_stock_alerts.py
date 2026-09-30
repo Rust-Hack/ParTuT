@@ -71,8 +71,9 @@ def run():
     # --- Товар вернулся ---
     reset_sent()
     as_admin()
-    r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid, "field": "stock", "value": 7})
-    c("остаток пополнен", (r.get_json() or {}).get("ok"))
+    # Товар возвращается приходом на склад — остаток меняет только движение.
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 7, "reason": "in"})
+    c("остаток пополнен", (r.get_json() or {}).get("ok") and db.get_product(pid)["stock"] == 7)
 
     got = {chat for chat, _text, _pm in SENT}
     c("сообщили первому", BUYER in got)
@@ -85,7 +86,7 @@ def run():
 
     # Второй раз то же событие не должно ничего слать.
     reset_sent()
-    client.post("/api/admin/product/update", json={"initData": "x", "id": pid, "field": "stock", "value": 9})
+    client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 2, "reason": "in"})
     c("второй раз молчим", not SENT)
 
     tgsend.bg = real_bg
@@ -120,7 +121,7 @@ def run_send_failure_keeps_subscription():
     try:
         reset_sent()
         as_admin()
-        r = client.post("/api/admin/product/update", json={"initData": "x", "id": pid, "field": "stock", "value": 3})
+        r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 3, "reason": "in"})
         c("запрос всё равно успешен, сбой у одного не роняет ручку",
           (r.get_json() or {}).get("ok"))
         got = {chat for chat, _t, _p in SENT}

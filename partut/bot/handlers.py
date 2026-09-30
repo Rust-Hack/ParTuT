@@ -415,10 +415,28 @@ def handle_admin_callback(call, chat_id, user_id, data):
         if not _my_product(user_id, product_id):
             bot.answer_callback_query(call.id, "Товар другой точки", show_alert=True)
             return
-        admin_state[user_id] = {"action": "edit", "field": field, "product_id": product_id}
+        # У товара с вариантами остаток — по каждому варианту, а чат умеет
+        # спросить только одно число. Раньше его ставили товару целиком: итог
+        # расходился с вариантами, и первый же заказ молча его стирал.
+        if field == "stock" and db.get_variants(product_id):
+            bot.answer_callback_query(call.id, "Остаток по вариантам — в приложении: "
+                                               "Управление → Цены и остатки → 📦", show_alert=True)
+            return
+        # Запоминаем, сколько было свободно на момент вопроса: если пока
+        # продавец считал, прошёл заказ, пересчёт устарел — лучше переспросить,
+        # чем вернуть проданное на полку.
+        admin_state[user_id] = {"action": "edit", "field": field, "product_id": product_id,
+                                "expected": int((db.get_product(product_id) or {"stock": 0})["stock"] or 0)}
+        обещано = (sum(n for (pid, _), n in db.reserved_stock().items() if pid == product_id)
+                   if field == "stock" else 0)
         prompts = {
             "price": "Введите новую цену в BYN (например 18.5):",
-            "stock": "Введите новый остаток (сколько штук):",
+            # Пересчёт спрашивает СВОБОДНОЕ: отложенное под невыданные заказы
+            # уже снято с остатка, и посчитать его ещё раз — значит записать
+            # «нашлись лишние», которых нет.
+            "stock": ("Пересчёт. Сколько штук СВОБОДНО на точке — не считая отложенного "
+                      "под невыданные заказы" + (f" (под заказы сейчас {обещано} шт)" if обещано else "")
+                      + "? Разница запишется в историю склада."),
         }
         bot.answer_callback_query(call.id)
         bot.send_message(chat_id, prompts.get(field, "Введите значение:"))
@@ -526,12 +544,16 @@ def show_product_card(chat_id, product_id):
     category = _category_title(p["category"])
     hit = "🔥 да" if p["is_hit"] == 1 else "нет"
     has_photo = "есть" if p["photo"] else "нет"
+    # Остаток в базе — то, что можно продать. Под невыданные заказы товар
+    # ещё лежит на точке, но уже обещан: без этого числа пересчёт полки врал.
+    обещано = sum(n for (pid, _), n in db.reserved_stock().items() if pid == int(product_id))
+    в_заказах = f" (+{обещано} в невыданных заказах)" if обещано else ""
     text = (
         f"<b>{p['name']}</b>\n"
         f"Город: {city}\n"
         f"Категория: {category}\n"
         f"Цена: {p['price']:.2f} BYN\n"
-        f"Остаток: {p['stock']} шт.\n"
+        f"Свободный остаток: {p['stock']} шт.{в_заказах}\n"
         f"Хит: {hit}\n"
         f"Фото: {has_photo}\n"
         f"Описание: {p['description'] or '—'}\n\n"
@@ -541,7 +563,7 @@ def show_product_card(chat_id, product_id):
     kb = types.InlineKeyboardMarkup()
     kb.add(
         types.InlineKeyboardButton("✏️ Цена", callback_data=f"admset:price:{product_id}"),
-        types.InlineKeyboardButton("📦 Остаток", callback_data=f"admset:stock:{product_id}"),
+        types.InlineKeyboardButton("📦 Пересчёт", callback_data=f"admset:stock:{product_id}"),
     )
     kb.add(
         types.InlineKeyboardButton("🔥 Хит вкл/выкл", callback_data=f"admhit:{product_id}"),
@@ -583,13 +605,27 @@ def handle_admin_input(chat_id, user_id, raw_text):
 
         # Проверяем ещё раз здесь: между нажатием кнопки и вводом числа товар
         # мог переехать на другую точку, а состояние диалога живёт в памяти.
-        if not _my_product(user_id, product_id):
+        товар = _my_product(user_id, product_id)
+        if not товар:
             admin_state.pop(user_id, None)
             bot.send_message(chat_id, "Это товар другой точки.")
             return
-        db.update_field(product_id, field, value)
-        _log_bot(user_id, "product/update", f"id={product_id} · field={field} · value={value}")
         admin_state.pop(user_id, None)
+        if field == "stock":
+            # Остаток — только движением склада, как и в приложении: пересчёт
+            # с автором и записью «было → стало», а не число поверх истории.
+            try:
+                итог = db.stock_operation(product_id, "fix", value, admin_id=user_id,
+                                          note="пересчёт в боте", expected=st.get("expected"))
+            except db.StockRefused as e:
+                bot.send_message(chat_id, f"Не записано: {e.message}")
+                return
+            _log_bot(user_id, "stock/move",
+                     f"«{товар['name']}» · {товар['city']}: Пересчёт {итог['delta']:+d} (стало {итог['stock']})")
+        else:
+            db.update_field(product_id, field, value)
+            _log_bot(user_id, "product/update",
+                     f"«{товар['name']}» · {товар['city']}: Цена {float(товар['price'] or 0):.2f} Br → {value:.2f} Br")
         bot.send_message(chat_id, "✅ Изменено.")
         show_product_card(chat_id, product_id)
         return

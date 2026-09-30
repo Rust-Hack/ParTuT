@@ -79,9 +79,15 @@ def run():
       client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 99, "reason": "in"}).status_code == 403)
     as_admin(uid=555)
 
-    # --- Остаток не уходит в минус ---
-    client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 999, "reason": "lost"})
-    c("в минус не уходим", db.get_product(pid)["stock"] == 0)
+    # --- Списать больше, чем есть, нельзя ---
+    # Раньше остаток молча прижимался к нулю, а в историю ложилось всё число:
+    # отчёт о потерях считал 999 штук, которых на полке никогда не было.
+    было, ходов = db.get_product(pid)["stock"], len(db.get_stock_moves(pid, limit=100))
+    r = client.post("/api/admin/stock/move", json={"initData": "x", "id": pid, "qty": 999, "reason": "lost"})
+    c("списание больше свободного — отказ", r.status_code == 400 and r.get_json()["error"] == "not_enough")
+    c("в отказе сказано, сколько свободно", str(было) in (r.get_json().get("message") or ""))
+    c("остаток не тронут", db.get_product(pid)["stock"] == было)
+    c("в историю ничего не легло", len(db.get_stock_moves(pid, limit=100)) == ходов)
 
     # --- Товар со вкусами: склад по каждому вкусу ---
     c2 = Checker("Склад по вкусам")
@@ -199,9 +205,13 @@ def run_пачкой():
         "initData": "x", "reason": "in",
         "items": [{"id": a, "qty": 5}, {"id": чужой, "qty": 5}, {"id": 999999, "qty": 1}]})
     d = r.get_json()
+    провал = d.get("failed") or {}
     c("своя позиция всё равно записана", any(x["id"] == a for x in d.get("done") or []))
-    c("чужая точка отклонена, но не роняет пачку", str(чужой) in (d.get("failed") or {}))
-    c("несуществующий товар тоже отклонён отдельной строкой", "999999" in (d.get("failed") or {}))
+    # Строки пачки названы по месту в списке: у одного товара бывает несколько
+    # строк (по вариантам), и номер товара их не различил бы.
+    c("чужая точка отклонена, но не роняет пачку", провал.get("1", {}).get("id") == чужой)
+    c("несуществующий товар тоже отклонён отдельной строкой",
+      провал.get("2", {}).get("id") == 999999 and провал["2"].get("error") == "not_found")
     c("остаток А вырос ещё раз", db.get_product(a)["stock"] == 20)
     c("чужой товар не тронут", db.get_product(чужой)["stock"] == 1)
 

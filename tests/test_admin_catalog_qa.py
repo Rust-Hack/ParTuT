@@ -63,11 +63,15 @@ def run_negative_price_and_stock():
       float(_product(pid)["price"]) != 0.0)
 
     # --- Правка остатка на отрицательный ---
+    # Теперь остаток через карточку не правится вовсе — ни отрицательный, ни
+    # какой-либо другой: только движением склада (см. test_stock_integrity).
+    было = int(_product(pid)["stock"])
     r = client.post("/api/admin/product/update",
                      json={"initData": "x", "id": pid, "field": "stock", "value": "-7"})
     d = r.get_json() or {}
     c("БАГ [catalog.py:357-358] отрицательный остаток отклонён, а не принят",
-      r.status_code == 400 and d.get("error") in ("bad_number", "bad_value"))
+      r.status_code == 400 and d.get("error") == "use_stock_moves")
+    c("остаток не тронут", int(_product(pid)["stock"]) == было)
 
     # --- То же в момент создания нового товара ---
     r = client.post("/api/admin/product", json={
