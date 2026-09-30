@@ -304,6 +304,16 @@ function showTab(id) {
 }
 
 // ---------- Жесты ----------
+// Ленты, которые сами листаются пальцем вбок: ряды фильтров «Цен и
+// остатков», галерея фото в карточке товара, чипы каталога, карусель в
+// корзине. Свайп, начатый на ленте, — это её прокрутка, а не «Назад» и не
+// смена вкладки. Раньше жест «Назад» забирал его себе: листая фильтры слева
+// направо, человек вылетал в «Управление», а листая фото товара назад —
+// из карточки. Новая лента с overflow-x — сюда же: tests/test_swipe_rails.py
+// сверяет этот список со стилями.
+const ЛЕНТЫ_ВБОК = ".chiprow, .pgal, .chips, .upsell";
+const наЛенте = (e) => !!(e.target && e.target.closest && e.target.closest(ЛЕНТЫ_ВБОК));
+
 // Свайп вправо по экрану = «Назад», экран едет за пальцем (18+/оплата не свайпаются)
 document.querySelectorAll(".view").forEach(view => {
   if (view.id === "productView") return;    // у карточки — свой, более богатый жест
@@ -311,7 +321,7 @@ document.querySelectorAll(".view").forEach(view => {
   if (!backBtn) return;
   let sx = 0, sy = 0, dx = 0, mode = null;   // mode: null(не решили)|'h'(тянем назад)|'v'(отдали скроллу)
   view.addEventListener("touchstart", (e) => {
-    if (e.touches.length !== 1) { mode = "v"; return; }
+    if (e.touches.length !== 1 || наЛенте(e)) { mode = "v"; return; }
     sx = e.touches[0].clientX; sy = e.touches[0].clientY; dx = 0; mode = null;
     view.style.transition = "none";
   }, { passive: true });
@@ -358,7 +368,7 @@ document.querySelectorAll(".view").forEach(view => {
     view.style.transform = content.style.transform = ""; dim.style.opacity = ""; dim.style.display = "none";
   };
   view.addEventListener("touchstart", (e) => {
-    if (e.touches.length !== 1) { mode = "v"; return; }
+    if (e.touches.length !== 1 || наЛенте(e)) { mode = "v"; return; }   // галерея листается сама
     sx = e.touches[0].clientX; sy = e.touches[0].clientY; dx = 0; mode = null; t0 = Date.now(); noTrans();
   }, { passive: true });
   view.addEventListener("touchmove", (e) => {
@@ -394,11 +404,11 @@ document.querySelectorAll(".view").forEach(view => {
   let sx = 0, sy = 0, track = false;
   content.addEventListener("touchstart", (e) => {
     if (e.touches.length !== 1) { track = false; return; }
-    // .upsell — карусель «Добавьте к заказу» в корзине: она сама скроллится
-    // горизонтально, и без исключения свайп по ней на отпускании пальца
-    // читался как свайп между вкладками — из Корзины улетало в Избранное
-    // (следующая вкладка по порядку NAV).
-    if (e.target.closest(".chips, input, textarea, select, .searchrow, .upsell")) { track = false; return; }
+    // Ленты вбок (.upsell — карусель «Добавьте к заказу» в корзине, .chips —
+    // категории) скроллятся сами, и без исключения свайп по ним на
+    // отпускании пальца читался как свайп между вкладками — из Корзины
+    // улетало в Избранное (следующая вкладка по порядку NAV).
+    if (наЛенте(e) || e.target.closest("input, textarea, select, .searchrow")) { track = false; return; }
     sx = e.touches[0].clientX; sy = e.touches[0].clientY; track = true;
   }, { passive: true });
   content.addEventListener("touchend", (e) => {
