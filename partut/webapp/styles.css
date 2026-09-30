@@ -1013,3 +1013,17 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
    на три экрана вниз, и нужное поле приходится искать прокруткой. */
 .pointadd { border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin: 0 0 10px }
 .pointadd .pbody { margin-top: 12px }
+
+/* Быстрая цена. Цена в строке списка — кнопка: цену меняют чаще всего
+   остального, и путь к ней не должен идти через всю карточку товара.
+   Высота не меньше 32px — по пальцу мимо узкой кнопки промахиваются. */
+.pricetap { display: inline-flex; align-items: center; gap: 6px; min-height: 32px;
+  margin: 5px 0 3px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+  font-size: 14.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+  touch-action: manipulation; }
+.pricetap::after { content: "✎"; font-weight: 400; color: var(--accent); }
+.pricetap:active { background: var(--accent-soft); }
+.pricescope { color: var(--hint); font-size: 13.5px; margin: -6px 0 12px; }
+.pricenow { font-size: 15px; margin: 0 0 10px; font-variant-numeric: tabular-nums; }
+.pricenow b { font-size: 18px; }

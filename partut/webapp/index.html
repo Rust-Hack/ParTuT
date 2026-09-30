@@ -114,6 +114,21 @@
   </div>
 
   <!-- Фильтры и сортировка витрины -->
+  <!-- Быстрая цена: одно поле, одна точка. Раньше ради цены открывалась вся
+       карточка товара, и её сохранение задевало закупку, вкусы и точки. -->
+  <div class="overlay" id="priceOverlay">
+    <div class="sheet form">
+      <h2 id="priceTitle">Цена</h2>
+      <div class="pricescope" id="priceScope"></div>
+      <div class="pricenow" id="priceNow"></div>
+      <label for="priceNew">Новая цена, Br</label>
+      <input id="priceNew" inputmode="decimal" autocomplete="off" placeholder="например 18.5">
+      <div class="dwarn" id="priceMsg" style="display:none"></div>
+      <button class="bigbtn" id="priceSave" style="margin-top:14px">Сохранить цену</button>
+      <button class="closebtn" id="priceCancel">Отмена</button>
+    </div>
+  </div>
+
   <div class="overlay" id="filterOverlay">
     <div class="sheet">
       <h2>Фильтры</h2>

@@ -616,7 +616,17 @@ async function batchЗаписать(подтверждено) {
   } finally { btn.disabled = false; btn.textContent = "Записать приход"; }
 }
 
+// Перерисовка списка (после правки цены, прихода, обновления с сервера) не
+// должна уносить человека к началу: поиск и фильтры живут в переменных и
+// переживают её сами, а положение прокрутки — нет, его держим здесь.
 function renderAdminList() {
+  const вид = $("productsView");
+  const y = вид ? вид.scrollTop : 0;
+  нарисоватьСписокТоваров();
+  if (вид) вид.scrollTop = y;
+}
+
+function нарисоватьСписокТоваров() {
   if (!shelf().length) { $("adminList").innerHTML = `<p style="color:var(--hint)">Товаров пока нет.</p>`; return; }
   const q = (admSearch || "").trim().toLowerCase();
   const list = shelf().filter(p => {
@@ -668,15 +678,14 @@ function renderAdminList() {
     // «В заказах» — рядом с остатком: товар ещё на полке, но уже обещан.
     // Без этого числа полка и список не сходились, и казалось, что лишнее.
     const обещано = p.reserved ? ` (+${p.reserved} в заказах)` : "";
-    if (hasVariants(p)) {
-      // товар-модель: цену/вкусы/остаток правим в редакторе (✏️), но ВИДНО
-      // цену должно быть здесь: за ней в этот список и заходят чаще всего.
-      return `<div class="admrow" style="flex-wrap:wrap">
-        <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.variants.length} вк · ${p.stock} шт${обещано} · ${фото}${хит}</small>${marks}</div>
-        ${batchMode ? batchTail : tail}`;
-    }
+    // Цена — кнопка: за ней в этот список и заходят чаще всего, и путь к
+    // ней не должен идти через всю карточку. В массовом приходе речь о
+    // количествах — там цена просто видна.
+    const цена = batchMode ? `<b>${(+p.price).toFixed(2)} Br</b> · `
+      : `<button type="button" class="pricetap" data-price="${p.id}" aria-label="Изменить цену">${(+p.price).toFixed(2)} Br</button>`;
+    const вкусы = hasVariants(p) ? `${p.variants.length} вк · ` : "";
     return `<div class="admrow" style="flex-wrap:wrap">
-      <div class="an">${esc(p.name)}<small>${p.city} · ${p.price} Br · ${p.stock} шт${обещано} · ${фото}${хит}</small>${marks}</div>
+      <div class="an">${esc(p.name)}${batchMode ? "" : цена}<small>${esc(p.city)} · ${batchMode ? цена : ""}${вкусы}${p.stock} шт${обещано} · ${фото}${хит}</small>${marks}</div>
       ${batchMode ? batchTail : tail}`;
   }).join("");
   if (batchMode) {
@@ -687,11 +696,113 @@ function renderAdminList() {
     $("adminList").querySelectorAll("[data-batchvar]").forEach(b => b.onclick = () => openStockMove(+b.dataset.batchvar, "in"));
     return;                      // в этом режиме действуют не иконки, а поля и кнопки выше
   }
+  $("adminList").querySelectorAll("[data-price]").forEach(b => b.onclick = () => открытьЦену(+b.dataset.price));
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
   $("adminList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => delAdminRow(+b.dataset.del));
   $("adminList").querySelectorAll("[data-hide]").forEach(b => b.onclick = () => toggleHidden(+b.dataset.hide));
 }
+
+// ----- Быстрая цена -----
+// Цену меняют чаще всего остального, а раньше ради неё открывалась вся
+// карточка: закупка, вкусы, точки — и её сохранение задевало и их. Теперь
+// нажатие на цену в строке списка: одно поле, одна точка, и на сервер уходит
+// только цена — вместе с тем, какой её видел человек. Если за это время цену
+// поменял кто-то другой, сервер не затрёт его правку: окно покажет, что там
+// теперь, а введённое оставит в поле.
+let ценаТовар = null, ценаБыло = null;
+
+const ценаСтрокой = (v) => (+v).toFixed(2);
+
+function открытьЦену(id) {
+  const p = shelf().find(x => x.id === id);
+  if (!p) return;
+  ценаТовар = p; ценаБыло = +p.price;
+  $("priceTitle").textContent = p.name;
+  // Где действует правка — написано прямо: у каждой точки своя цена, и
+  // «поменял в Минске» не должно читаться как «поменял везде».
+  $("priceScope").textContent = `Только точка «${p.city}». На других точках цена своя.`;
+  показатьЦенуСейчас();
+  $("priceNew").value = ценаСтрокой(p.price);
+  показатьОшибкуЦены("");
+  $("priceSave").disabled = false; $("priceSave").textContent = "Сохранить цену";
+  $("priceOverlay").classList.add("show");
+  setTimeout(() => { try { $("priceNew").focus(); $("priceNew").select(); } catch (e) {} }, 60);
+}
+
+function показатьЦенуСейчас() {
+  $("priceNow").innerHTML = `Сейчас: <b>${ценаСтрокой(ценаБыло)} Br</b>`;
+}
+
+function показатьОшибкуЦены(текст) {
+  $("priceMsg").textContent = текст;
+  $("priceMsg").style.display = текст ? "" : "none";
+}
+
+// Цена поменялась — только в этом товаре и только у себя: перечитывать ради
+// одной цифры весь каталог незачем, а список перерисуется с тем же поиском,
+// фильтрами и прокруткой.
+function поставитьЦенуЛокально(id, цена) {
+  [adminProducts, allProducts].forEach(список => (список || []).forEach(x => { if (x.id === id) x.price = цена; }));
+  renderAdminList();
+}
+
+async function сохранитьЦену() {
+  const p = ценаТовар;
+  if (!p) return;
+  const n = Number(String($("priceNew").value || "").replace(",", ".").replace(/\s/g, ""));
+  if (!isFinite(n) || n <= 0) { показатьОшибкуЦены("Цена — число больше нуля, например 18.5."); return; }
+  const новая = Math.round(n * 100) / 100;
+  if (новая === Math.round(ценаБыло * 100) / 100) {
+    closeOverlay($("priceOverlay"));
+    toast("Цена та же — сохранять нечего");
+    return;
+  }
+  const было = ценаБыло;
+  const btn = $("priceSave");
+  btn.disabled = true; btn.textContent = "Сохраняю…";
+  try {
+    const r = await fetch("/api/admin/product/update", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData, id: p.id, fields: { price: новая }, expected: { price: было } }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.status >= 500 || !d.ok) {
+      показатьОшибкуЦены(d.message || ОТКАЗЫ[d.error] || "Цена не сохранилась — попробуйте ещё раз.");
+      return;
+    }
+    const отказ = (d.failed || {}).price;
+    if (отказ && отказ.error === "conflict") {
+      const сейчас = +отказ.current;
+      поставитьЦенуЛокально(p.id, сейчас);
+      if (Math.round(сейчас * 100) === Math.round(новая * 100)) {
+        // Там уже ровно то, что человек вписал: чаще всего это его же прошлое
+        // нажатие, ответ на которое потерялся в сети.
+        closeOverlay($("priceOverlay"));
+        toast(`Цена уже ${ценаСтрокой(новая)} Br`);
+        return;
+      }
+      ценаБыло = сейчас;
+      показатьЦенуСейчас();
+      показатьОшибкуЦены(`Пока окно было открыто, цену уже поменяли: сейчас ${ценаСтрокой(сейчас)} Br. `
+                         + `Нажмите «Сохранить цену» ещё раз, если нужно ${ценаСтрокой(новая)} Br.`);
+      return;
+    }
+    if (отказ) { показатьОшибкуЦены(отказ.message || ОТКАЗЫ[отказ.error] || "Цена не сохранилась."); return; }
+    поставитьЦенуЛокально(p.id, новая);
+    closeOverlay($("priceOverlay"));
+    toast(`«${p.name}» · ${p.city}: ${ценаСтрокой(было)} → ${ценаСтрокой(новая)} Br`);
+    // Фоном — сверить остальное с сервером (витрина покупателя, чужие правки).
+    refreshProducts();
+  } catch (e) {
+    // Ответа нет: цена могла и сохраниться. Повторное нажатие это выяснит —
+    // сервер сверит снимок и ответит, что там теперь.
+    показатьОшибкуЦены(текстСбоя(e) + " Цена могла сохраниться — нажмите «Сохранить цену» ещё раз, приложение проверит.");
+  } finally { btn.disabled = false; btn.textContent = "Сохранить цену"; }
+}
+
+$("priceSave").onclick = сохранитьЦену;
+$("priceCancel").onclick = () => closeOverlay($("priceOverlay"));
+$("priceNew").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); сохранитьЦену(); } };
+// ----- /Быстрая цена -----
 
 // ----- Редактор товара -----
 // Остаток в карточке не правится вовсе — ни числом, ни списком вкусов с
