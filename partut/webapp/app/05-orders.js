@@ -156,7 +156,7 @@ function orderTracker(status) {
     <div class="ostep ${s3}">${d(stage >= 3)}<div class="lbl">Выдан</div></div>
   </div>`;
 }
-function repeatOrder(o) {
+function repeatOrder(o, подтверждено) {
   const unavail = [], toAdd = [];
   (o.items || []).forEach(it => {
     const p = allProducts.find(x => x.id === it.id);
@@ -165,6 +165,16 @@ function repeatOrder(o) {
     toAdd.push({ id: p.id, flavor: it.flavor || null, qty: Math.min(it.qty, avail) });
   });
   if (!toAdd.length) { alertMsg("Эти товары сейчас недоступны."); return; }
+  // Корзина уже собрана — молча выбросить её нельзя: человек мог набрать её
+  // минуту назад. Спрашиваем. Заказ был на другой точке — говорим и это:
+  // корзина у нас одна на точку, и переключится вместе с товарами.
+  const вКорзине = Object.keys(cart).length;
+  if (вКорзине && !подтверждено) {
+    const точка = o.city !== city ? ` Заказ был на точке «${o.city}» — корзина переключится на неё.` : "";
+    confirmMsg(`В корзине уже ${вКорзине} ${plural(вКорзине, "позиция", "позиции", "позиций")}. `
+      + `Заменить их товарами из этого заказа?${точка}`, () => repeatOrder(o, true));
+    return;
+  }
   city = o.city; $("pointName").textContent = city;          // корзина привязана к одной точке
   for (const k in cart) delete cart[k];
   toAdd.forEach(a => { cart[cartKey(a.id, a.flavor)] = { product_id: a.id, flavor: a.flavor, qty: a.qty }; });

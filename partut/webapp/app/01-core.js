@@ -837,8 +837,21 @@ function sortProducts(list) {
 }
 // Ищем и по бренду, и по вкусам: «мята» — обычный запрос покупателя, а
 // раньше поиск смотрел только в название и не находил ничего.
+// ----- Поиск на витрине -----
+// И по характеристикам: покупатель ищет картридж по модели СВОЕГО устройства
+// («XROS 3»), а не по названию картриджа. Совместимость (specs.fit), тип,
+// сопротивление — всё, что заполнено в карточке. Незаполненное не ищется:
+// отсутствие данных не выдаём за совместимость.
 function searchText(p) {
-  return [p.name, p.brand, ...flavorsOf(p)].filter(Boolean).join(" ").toLowerCase();
+  const характеристики = Object.values(p.specs || {})
+    .filter(v => v !== null && v !== undefined && String(v).trim() !== "").map(String);
+  return [p.name, p.brand, ...flavorsOf(p), ...характеристики].filter(Boolean).join(" ").toLowerCase();
+}
+// «xros3» и «XROS 3» — одно и то же: пробелы в модели пишут как придётся.
+function ищетсяВ(текст, запрос) {
+  if (текст.includes(запрос)) return true;
+  const сжатый = запрос.replace(/\s+/g, "");
+  return !!сжатый && текст.replace(/\s+/g, "").includes(сжатый);
 }
 function visibleProducts() {
   const s = search.trim().toLowerCase();
@@ -846,8 +859,9 @@ function visibleProducts() {
     && (!cat || p.category === cat)
     && (!brandFilters.length || brandFilters.includes(p.brand))
     && (!flavorFilters.length || flavorsOf(p).some(f => flavorFilters.includes(f)))
-    && (!s || searchText(p).includes(s)));
+    && (!s || ищетсяВ(searchText(p), s)));
 }
+// ----- /Поиск на витрине -----
 // withSpecs=false на карточке товара: там крепость и объём уже перечислены
 // таблицей характеристик прямо под фото, дублировать их бейджами незачем.
 function productBadges(p, withSpecs = true) {
