@@ -56,13 +56,14 @@ def run():
     c("у расходников вкусов нет", _cat("coils")["has_flavors"] is False)
 
     # --- Товар с характеристиками ---
-    r = client.post("/api/admin/product", json={
-        "initData": "x", "city": "Минск", "category": "coils", "name": "Картридж XROS",
-        "price": "12", "cost": "7", "stock": "10", "brand": "Vaporesso",
-        "specs": {"resistance": "0.8", "volume": "2", "fit": "XROS 2, XROS 3", "kind": "Картридж",
-                  "power": "40"}})       # power у расходников нет — не должен сохраниться
+    r = client.post("/api/admin/product/publish", json={
+        "initData": "x", "client_token": "specs-coil-xros-01",
+        "model": {"category": "coils", "name": "Картридж XROS", "brand": "Vaporesso",
+                  "specs": {"resistance": "0.8", "volume": "2", "fit": "XROS 2, XROS 3", "kind": "Картридж",
+                            "power": "40"}},       # power у расходников нет — не должен сохраниться
+        "points": [{"city": "Минск", "price": "12", "cost": "7", "stock": "10"}]})
     c("товар создан", (r.get_json() or {}).get("ok"))
-    pid = r.get_json()["id"]
+    pid = r.get_json()["products"][0]["id"]
     p = _product(pid)
     c("сопротивление сохранено", p["specs"]["resistance"] == "0.8")
     c("совместимость сохранена", p["specs"]["fit"] == "XROS 2, XROS 3")

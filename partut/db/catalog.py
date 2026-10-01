@@ -544,20 +544,45 @@ def count_products_of_model(model_id):
     return n
 
 
-def delete_model(model_id):
-    """Убирает модель из ассортимента. Товары на точках остаются — их снимают
-    с продажи отдельно, иначе одно нажатие стирало бы остатки всех точек."""
+def cities_of_model(model_id):
+    """Точки, на которых стоит модель, — чтобы назвать их человеку."""
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("UPDATE products SET model_id = NULL WHERE model_id = %s"), (model_id,))
-    # Галерея модели — не товара: без этого фото оставались бы в базе навсегда,
-    # ничем больше не удерживаемые.
-    cur.execute(db._q("DELETE FROM product_photos WHERE model_id = %s"), (model_id,))
-    cur.execute(db._q("DELETE FROM models WHERE id = %s"), (model_id,))
-    deleted = cur.rowcount > 0
+    cur.execute(db._q("SELECT DISTINCT city FROM products WHERE model_id = %s ORDER BY city"), (model_id,))
+    города = [r["city"] for r in cur.fetchall()]
+    conn.close()
+    return города
+
+
+def delete_model(model_id):
+    """Убирает модель из ассортимента — только если её нет ни на одной точке.
+
+    Раньше модель с товарами удалялась «с подтверждением»: товары оставались
+    на точках без модели, галерея модели удалялась, а отзывы, записанные на
+    модель, переставали показываться. Спрашивали об одном («перестанут
+    обновляться вместе с моделью»), а терялось другое. И так появлялись
+    товары без модели — второй сорт, который приходится вести отдельными
+    формами. Теперь такую модель снимают с витрины или сначала убирают товар
+    с точек.
+
+    Проверка и удаление — одним запросом: товар, заведённый в ту же секунду,
+    без модели не останется. Возвращает "deleted", "has_products" или
+    "not_found"."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("DELETE FROM models WHERE id = %s "
+                      "AND NOT EXISTS (SELECT 1 FROM products WHERE model_id = %s)"), (model_id, model_id))
+    if cur.rowcount > 0:
+        # Галерея модели — не товара: без этого фото оставались бы в базе
+        # навсегда, ничем больше не удерживаемые.
+        cur.execute(db._q("DELETE FROM product_photos WHERE model_id = %s"), (model_id,))
+        итог = "deleted"
+    else:
+        cur.execute(db._q("SELECT 1 AS x FROM models WHERE id = %s"), (model_id,))
+        итог = "has_products" if cur.fetchone() else "not_found"
     conn.commit()
     conn.close()
-    return deleted
+    return итог
 
 
 def add_product_from_model(model_id, city, price, cost=0, stock=0, is_hit=0):
@@ -791,6 +816,138 @@ def publish_product(admin_id, token, fingerprint, модель, фото, точ
     conn.close()
     итог["replay"] = False
     return итог
+
+
+class ToModelRefused(Exception):
+    """Товар без модели не получил модель — с причиной, понятной человеку."""
+
+    def __init__(self, code, message, **extra):
+        super().__init__(message)
+        self.code, self.message, self.extra = code, message, extra
+
+
+def product_to_model(product_id, link_to=None):
+    """Товар без модели получает модель — ОДНОЙ транзакцией и ничего не теряя.
+
+    Товары, заведённые до «Ассортимента», модели не имеют. Прежняя кнопка
+    «Сделать моделью» делала это несколькими записями подряд и теряла по
+    дороге две вещи: доп. фото товара (витрина у товара с моделью берёт
+    галерею модели) и отзывы (у товара с моделью они ищутся по модели). Фото
+    пропадали с витрины насовсем, отзывы — до перезапуска сервера.
+
+    Такая же модель (категория, название, бренд — без учёта регистра) уже
+    есть — новую не заводим, а отказываем с её номером: экран спросит,
+    привязать ли товар к ней. link_to — ответ «да»: привязываем только к
+    этой самой модели. Похожие, но не такие же, сами не сливаются никогда.
+
+    ID товара, его заказы, движения склада, подписки и избранное не
+    трогаются. Возвращает {"model_id", "linked", "added_flavors",
+    "photos_moved", "photos_left", "reviews"}."""
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        # Двойник и его создание не должны разойтись с публикацией нового
+        # товара: тот же замок, что у db.publish_product. В SQLite замок на
+        # базу берёт первая запись транзакции — делаем её сразу.
+        if db.USE_PG:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (_ЗАМОК_ПУБЛИКАЦИИ,))
+        else:
+            cur.execute(db._q("UPDATE products SET model_id = model_id WHERE id = %s"), (product_id,))
+        cur.execute(db._q("SELECT * FROM products WHERE id = %s"), (product_id,))
+        p = cur.fetchone()
+        if not p:
+            raise ToModelRefused("not_found", "Этого товара больше нет — обновите список.")
+        if p["model_id"]:
+            raise ToModelRefused("already_model", "У товара уже есть модель.")
+
+        try:
+            специи = json.loads(p["specs"]) if isinstance(p["specs"], str) and p["specs"] else dict(p["specs"] or {})
+        except (TypeError, ValueError):
+            специи = {}
+        for колонка in db.SPEC_COLUMNS:
+            значение = str(p[колонка] or "").strip()
+            if значение:
+                специи[колонка] = значение
+        cur.execute(db._q("SELECT flavor FROM product_variants WHERE product_id = %s ORDER BY id"), (product_id,))
+        вкусы = [r["flavor"] for r in cur.fetchall()]
+        один = str(p["flavor"] or "").strip()          # вкус одиночного товара мог лежать в поле flavor
+        if один and один.lower() not in {f.lower() for f in вкусы}:
+            вкусы.append(один)
+
+        имя, бренд = (p["name"] or "").strip(), (p["brand"] or "").strip()
+        # Сравниваем в Python: LOWER() в SQLite не знает кириллицы.
+        cur.execute(db._q("SELECT * FROM models WHERE category = %s"), (p["category"],))
+        двойник = next((m for m in cur.fetchall()
+                        if (m["name"] or "").strip().lower() == имя.lower()
+                        and (m["brand"] or "").strip().lower() == бренд.lower()), None)
+        if link_to is None and двойник:
+            raise ToModelRefused("exists", f"Такая модель уже есть: «{двойник['name']}».",
+                                 model_id=int(двойник["id"]), name=двойник["name"])
+        if link_to is not None and (not двойник or int(двойник["id"]) != int(link_to)):
+            raise ToModelRefused("bad_link", "Привязать можно только к такой же модели — с тем же названием, "
+                                             "брендом и категорией. Обновите экран.")
+
+        добавлено = []
+        if двойник:
+            mid = int(двойник["id"])
+            # Вкусы товара, которых модель не знает, — в модель: иначе они
+            # остались бы на полке «осиротевшими» (см. orphan_flavors).
+            try:
+                известные = json.loads(двойник["flavors"] or "[]")
+            except (TypeError, ValueError):
+                известные = []
+            знает = {str(f).strip().lower() for f in известные}
+            добавлено = [f for f in вкусы if f.lower() not in знает]
+            if добавлено:
+                cur.execute(db._q("UPDATE models SET flavors = %s WHERE id = %s"),
+                            (json.dumps(известные + добавлено, ensure_ascii=False), mid))
+            if not двойник["photo"] and p["photo"]:
+                cur.execute(db._q("UPDATE models SET photo = %s, photo_thumb = %s WHERE id = %s"),
+                            (p["photo"], p["photo_thumb"] or p["photo"], mid))
+            фото, миниатюра = (двойник["photo"], двойник["photo_thumb"]) if двойник["photo"] else (p["photo"], p["photo_thumb"])
+            # Описание модели — товару: на всех точках это одна и та же вещь.
+            служебные = {k: v for k, v in (json.loads(двойник["specs"] or "{}") if isinstance(двойник["specs"], str)
+                                           else (двойник["specs"] or {})).items()}
+            cur.execute(db._q("UPDATE products SET model_id = %s, category = %s, brand = %s, name = %s, description = %s, "
+                              "specs = %s, photo = %s, photo_thumb = %s WHERE id = %s"),
+                        (mid, двойник["category"], двойник["brand"] or "", двойник["name"], двойник["description"] or "",
+                         json.dumps({k: v for k, v in служебные.items() if k not in db.SPEC_COLUMNS}, ensure_ascii=False)
+                         if служебные else None, фото, миниатюра, product_id))
+            for колонка in db.SPEC_COLUMNS:
+                cur.execute(db._q(f"UPDATE products SET {колонка} = %s WHERE id = %s"),
+                            (str(служебные.get(колонка, "") or ""), product_id))
+        else:
+            mid = db._insert_id(cur, "INSERT INTO models (category, brand, name, description, specs, flavors, "
+                                     "photo, photo_thumb, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                                (p["category"], бренд, имя, p["description"] or "",
+                                 json.dumps(специи, ensure_ascii=False), json.dumps(вкусы, ensure_ascii=False),
+                                 p["photo"] or None, (p["photo_thumb"] or p["photo"]) if p["photo"] else None,
+                                 db._now_str()))
+            cur.execute(db._q("UPDATE products SET model_id = %s WHERE id = %s"), (mid, product_id))
+
+        # Доп. фото товара — в галерею модели, сколько поместится.
+        cur.execute(db._q("SELECT COUNT(*) AS n FROM product_photos WHERE model_id = %s"), (mid,))
+        места = max(0, db.MAX_EXTRA_PHOTOS - int(cur.fetchone()["n"]))
+        cur.execute(db._q("SELECT id FROM product_photos WHERE product_id = %s AND model_id IS NULL ORDER BY sort, id"),
+                    (product_id,))
+        свои = [int(r["id"]) for r in cur.fetchall()]
+        for фид in свои[:места]:
+            cur.execute(db._q("UPDATE product_photos SET model_id = %s WHERE id = %s"), (mid, фид))
+        # Отзывы — к модели: у товара с моделью они ищутся по ней.
+        cur.execute(db._q("UPDATE reviews SET model_id = %s WHERE product_id = %s AND model_id IS NULL"),
+                    (mid, product_id))
+        отзывов = max(0, cur.rowcount)
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        raise
+    conn.close()
+    return {"model_id": mid, "linked": bool(двойник), "added_flavors": добавлено,
+            "photos_moved": min(len(свои), места), "photos_left": max(0, len(свои) - места), "reviews": отзывов}
 
 
 def get_variants(product_id):

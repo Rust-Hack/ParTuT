@@ -1265,17 +1265,34 @@ function toModelBlock() {
     <button class="closebtn" id="edToModelNew">📚 Сделать моделью</button>`;
 }
 
-async function сделатьМоделью(p) {
-  const r = await fetch("/api/admin/product/to-model", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ initData, id: p.id }) });
-  const d = await r.json().catch(() => ({}));
+// Такая же модель уже есть — новую не заводим: спрашиваем, привязать ли
+// товар к ней. Похожие, но не такие же, приложение само не сливает никогда.
+async function сделатьМоделью(p, привязатьК) {
+  let d = null;
+  try {
+    const r = await fetch("/api/admin/product/to-model", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData, id: p.id, link_to: привязатьК || null }) });
+    d = await r.json().catch(() => null);
+    if (!d) { alertMsg("Ответ сервера не дошёл. Обновите список: товар мог уже получить модель."); return; }
+  } catch (e) { alertMsg(текстСбоя(e)); return; }
+  if (d.error === "exists" && d.model_id) {
+    confirmMsg(`${d.message}\n\nПривязать этот товар к ней? Название, описание и фото станут как у модели. ` +
+               "Цена, остаток, история склада, заказы и отзывы товара сохранятся.", () => сделатьМоделью(p, d.model_id));
+    return;
+  }
   if (!d.ok) { alertMsg(d.message || "Не удалось сделать моделью."); return; }
   await Promise.all([refreshProducts(), fetchModels()]);   // независимы — не ждём по очереди
   // Открываем карточку заново: теперь у товара есть модель, и в ней появится
   // блок точек. Показать это сразу важнее, чем сэкономить одну перерисовку.
   openEdit(p.id);
-  alertMsg("Готово ✅\n\nОписание уехало в «Ассортимент». Ниже появились точки продаж.");
+  const ещё = [];
+  if (d.photos_moved) ещё.push(`доп. фото в галерее модели: ${d.photos_moved}`);
+  if (d.photos_left) ещё.push(`не поместилось фото: ${d.photos_left} (в галерее модели до ${MAX_EXTRA_PHOTOS})`);
+  if (d.reviews) ещё.push(`отзывы товара теперь у модели: ${d.reviews}`);
+  if (d.added_flavors && d.added_flavors.length) ещё.push(`в модель добавлены варианты: ${d.added_flavors.join(", ")}`);
+  alertMsg((d.linked ? "Готово ✅\n\nТовар привязан к модели из «Ассортимента»." : "Готово ✅\n\nОписание уехало в «Ассортимент».") +
+           " Ниже появились точки продаж." + (ещё.length ? "\n\n" + ещё.join("\n") : ""));
 }
 
 // Снимок того, что уже введено в блоке точек, — ДО того как его перерисуют.

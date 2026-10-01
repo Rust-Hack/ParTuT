@@ -56,6 +56,11 @@ def _считать(таблица, где="", парам=()):
 
 
 def _опубликовать(ключ, модель=None, точки=None, фото=None):
+    # Закупка обязательна (cost_required). Проверкам, которые не о ней, она
+    # нужна лишь затем, чтобы их отказ пришёл по их причине: подставляем 1,
+    # если ключа "cost" нет вовсе. Пустую закупку проверяют явно — с ключом.
+    if точки is not None:
+        точки = [dict(т, cost="1") if isinstance(т, dict) and "cost" not in т else т for т in точки]
     тело = {"initData": "x", "client_token": ключ,
             "model": модель or {"category": "liquid", "name": "Chaser Lux", "brand": "Chaser",
                                 "flavors": ["Мята", "Вишня", "Лимон"], "specs": {"strength": "20"}},
@@ -185,6 +190,8 @@ def run_проверки_сервера():
         ("количество дробное", {"points": [{"city": "Минск", "price": 5, "stock": "2.5"}]}, "bad_number"),
         ("количество буквами", {"points": [{"city": "Минск", "price": 5, "stock": "много"}]}, "bad_number"),
         ("закупка буквами", {"points": [{"city": "Минск", "price": 5, "cost": "дёшево", "stock": 1}]}, "bad_cost"),
+        ("закупка пустая", {"points": [{"city": "Минск", "price": 5, "cost": "", "stock": 1}]}, "cost_required"),
+        ("закупка не передана", {"points": [{"city": "Минск", "price": 5, "cost": None, "stock": 1}]}, "cost_required"),
         ("нет такой точки", {"points": [{"city": "Атлантида", "price": 5, "stock": 1}]}, "bad_point"),
         ("точка дважды", {"points": [{"city": "Минск", "price": 5, "stock": 1}, {"city": "Минск", "price": 6, "stock": 1}]}, "bad_point"),
         ("нет точек", {"points": []}, "no_point"),

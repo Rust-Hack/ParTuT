@@ -106,10 +106,19 @@ def run():
     r = client.post("/api/admin/model/delete", json={"initData": "x", "id": mid})
     c4("модель с товарами так не удалить", r.status_code == 400 and r.get_json()["error"] == "has_products")
     c4("и сказано, сколько точек затронуто", r.get_json()["count"] == 2)
+    d = r.get_json()
+    c4("названы точки и что делать вместо — снять с витрины или убрать с точек",
+       d.get("cities") == sorted({db.get_product(p1)["city"], db.get_product(p2)["city"]})
+       and "снимите модель с витрины" in d.get("message", "") and "Удалить с точки" in d.get("message", ""))
+    # Раньше «force» удалял модель, оставляя товары без модели, без галереи и
+    # без отзывов. Теперь не действует.
     r = client.post("/api/admin/model/delete", json={"initData": "x", "id": mid, "force": True})
-    c4("с подтверждением удаляется", (r.get_json() or {}).get("ok"))
-    c4("товары на точках остались", db.get_product(p1) is not None and db.get_product(p2) is not None)
-    c4("но с моделью больше не связаны", db.get_product(p1)["model_id"] is None)
+    c4("и «force» не помогает", r.status_code == 400 and r.get_json()["error"] == "has_products")
+    c4("модель на месте, товары по-прежнему с ней",
+       db.get_model(mid) is not None and db.get_product(p1)["model_id"] == mid and db.get_product(p2)["model_id"] == mid)
+    db.delete_product(p1); db.delete_product(p2)
+    r = client.post("/api/admin/model/delete", json={"initData": "x", "id": mid})
+    c4("убрали товар с точек — модель удаляется", (r.get_json() or {}).get("ok") and db.get_model(mid) is None)
     c4("удаление несуществующей — 404",
       client.post("/api/admin/model/delete", json={"initData": "x", "id": 999999}).status_code == 404)
 

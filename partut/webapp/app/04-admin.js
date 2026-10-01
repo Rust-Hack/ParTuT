@@ -457,19 +457,27 @@ async function hideModel(id, hidden) {
   });
 }
 
-function delModel(id, force) {
+// Модель, которая стоит на точках, не удаляется: товары остались бы без
+// модели, а галерея и отзывы — потеряны. Раньше на это спрашивали «товары
+// перестанут обновляться вместе с моделью — всё равно убрать?», и о потерях
+// не говорили. Теперь сразу объясняем, что делать вместо.
+function delModel(id) {
   const m = models.find(x => x.id === id);
-  const ask = force
-    ? `Модель есть на точках. Товары там останутся, но перестанут обновляться вместе с моделью. Всё равно убрать из ассортимента?`
-    : `Убрать «${m ? m.name : ""}» из ассортимента?`;
-  confirmMsg(ask, async () => {
+  if (m && m.products > 0) {
+    alertMsg(`«${m.name}» стоит на точках (${m.products}). Удалить модель вместе с ними нельзя — пропали бы остаток, ` +
+             "история склада и отзывы.\n\nБольше не продаёте — снимите модель с витрины (🚫).\n" +
+             "Удалить совсем — сначала уберите товар с каждой точки (⋯ → «Удалить с точки»).");
+    return;
+  }
+  confirmMsg(`Убрать «${m ? m.name : ""}» из ассортимента?`, async () => {
     try {
       const r = await fetch("/api/admin/model/delete", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData, id, force: !!force }) });
-      const d = await r.json();
-      if (!d.ok) {
-        if (d.error === "has_products") { delModel(id, true); return; }
-        alertMsg("Не удалось убрать модель.");
+        body: JSON.stringify({ initData, id }) });
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d || !d.ok) {
+        // Товар на точку могли завезти, пока список был открыт, — сервер назовёт точки.
+        alertMsg((d && d.message) || "Не удалось убрать модель.");
+        await fetchModels(); renderModelList();
         return;
       }
       await fetchModels(); renderModelList();

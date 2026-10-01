@@ -332,69 +332,16 @@ def _закупка(data):
 
 @bp.route("/api/admin/product", methods=["POST"])
 def api_admin_add():
-    """Добавить товар из приложения."""
-    data = request.get_json(force=True, silent=True) or {}
-    if not auth.get_admin(data.get("initData", "")):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
+    """Прежний путь «завести товар» — закрыт.
 
-    city = data.get("city")
-    category = data.get("category")
-    name = inputs._text(data.get("name"))
-    if city not in db.location_names() or category not in db.category_codes() or not name:
-        return jsonify({"ok": False, "error": "bad_data"}), 400
-    price = inputs.дробное(data.get("price"))
-    if price is None:
-        return jsonify({"ok": False, "error": "bad_number"}), 400
-    # Ноль и минус до этого проходили и превращались в 0.00 уже в базе:
-    # товар появлялся на витрине бесплатным. Заводить его так нельзя.
-    if price <= 0:
-        return jsonify({"ok": False, "error": "bad_price",
-                        "message": "Цена должна быть больше нуля."}), 400
-    cost, беда = _закупка(data)
-    if беда:
-        return беда
-
-    is_hit = 1 if data.get("is_hit") else 0
-    desc = inputs._text(data.get("description"))
-    brand = inputs._text(data.get("brand"))
-    strength = inputs._text(data.get("strength"))
-
-    # Товар-модель со вкусами (одноразки/жидкости): список variants + свои поля.
-    # Объём: у одноразок приходит как puffs (затяжки), у жидкостей как volume (мл).
-    variants = data.get("variants")
-    if isinstance(variants, list) and variants:
-        vol = str(data.get("puffs") or data.get("volume") or "").strip()
-        # Свод дублей («Grape»/«grape» — один вкус) — тот же _свести_вкусы,
-        # что и у редактора вариантов. Раньше нормализация была только там:
-        # при ЗАВОЗЕ дубль писаний уходил в базу двумя строками, и покупатель
-        # видел один вкус дважды, пока кто-то не отредактирует товар вручную.
-        известные_бренда = []
-        найденный_бренд = db.find_brand_by_name(brand) if brand else None
-        if найденный_бренд:
-            try:
-                известные_бренда = json.loads(найденный_бренд["flavors"] or "[]")
-            except (TypeError, ValueError):
-                известные_бренда = []
-        свод = _свести_вкусы(variants, известные_бренда)
-        pid = db.add_product(city, category, name, price, 0, is_hit, desc,
-                             brand=brand, flavor="", strength=strength, volume=vol, cost=cost)
-        for v in свод:
-            if v["flavor"]:
-                db.add_variant(pid, v["flavor"], max(0, v["stock"]))
-        db.recalc_product_stock(pid)
-        _save_specs(pid, category, data.get("specs"))
-        return jsonify({"ok": True, "id": pid})
-
-    # Обычный товар (одно количество, без вкусов).
-    stock = inputs.целое(data.get("stock"))
-    if stock is None:
-        return jsonify({"ok": False, "error": "bad_number"}), 400
-    flavor = inputs._text(data.get("flavor"))
-    volume = inputs._text(data.get("volume"))
-    pid = db.add_product(city, category, name, max(0.0, price), max(0, stock), is_hit, desc,
-                         brand=brand, flavor=flavor, strength=strength, volume=volume, cost=cost)
-    _save_specs(pid, category, data.get("specs"))
-    return jsonify({"ok": True, "id": pid})
+    Он заводил товар мимо ассортимента — без модели, вторым сортом, который
+    потом приходится вести отдельными формами, — и ставил остаток числом, мимо
+    истории склада. Экран им давно не пользуется: новый товар заводится через
+    «✨ Новый товар» (/api/admin/product/publish), уже заведённый —
+    «📥 Завезти на точку» (/api/admin/product/from-model)."""
+    return jsonify({"ok": False, "error": "gone",
+                    "message": "Новый товар заводится кнопкой «✨ Новый товар» в «Ценах и остатках». "
+                               "Если видите это сообщение — закройте приложение и откройте заново."}), 410
 
 
 def _проверить_поле(admin, pid, field, raw):
@@ -1019,10 +966,25 @@ def api_admin_product_publish():
     бренд = inputs._text(модель.get("brand"), 80)
     описание = inputs._text(модель.get("description"), 2000)
     specs = _clean_specs(категория, модель.get("specs"))
+    # Вкусы — в написании справочника брендов, если бренд там есть: «grape b -
+    # pop» и «Grape B - POP» — один вкус, и во всех товарах бренда он должен
+    # выглядеть одинаково (как в редакторе вариантов, _свести_вкусы). Ради
+    # этого справочник и заведён.
+    эталон = {}
+    найденный = db.find_brand_by_name(бренд) if бренд else None
+    if найденный:
+        try:
+            эталон = {str(f).strip().lower(): str(f).strip() for f in json.loads(найденный["flavors"] or "[]") if str(f).strip()}
+        except (TypeError, ValueError):
+            эталон = {}
+
+    def по_эталону(вкус):
+        return эталон.get(вкус.lower(), вкус)
+
     вкусы, видели = [], set()
     сырые = модель.get("flavors") if isinstance(модель.get("flavors"), list) else []
     for f in сырые:
-        f = inputs._text(f, 60)
+        f = по_эталону(inputs._text(f, 60))
         if f and f.lower() not in видели:
             видели.add(f.lower())
             вкусы.append(f)
@@ -1054,8 +1016,13 @@ def api_admin_product_publish():
         цена = inputs.дробное(т.get("price"))
         if цена is None or цена <= 0 or цена > _МАКС_ШТУК:
             return _отказ("bad_price", f"«{город}»: цена — число больше нуля, например 18.5.", f"points.{i}.price")
-        # Пусто — «закупка не указана» (0). Мусор — отказ, а не тихий ноль.
-        закупка = inputs.дробное(т.get("cost")) if т.get("cost") not in (None, "") else 0.0
+        # Закупку обязаны вписать, как и при завозе (_закупка): пустая молча
+        # выбрасывала бы товар из подсчёта прибыли. Ноль — можно, но руками.
+        if str(т.get("cost") if т.get("cost") is not None else "").strip() == "":
+            return _отказ("cost_required", f"«{город}»: впишите закупку за штуку — без неё прибыль по товару "
+                                           "не посчитается. Если закупки не было (подарок, образец), поставьте 0.",
+                          f"points.{i}.cost")
+        закупка = inputs.дробное(т.get("cost"))
         if закупка is None or закупка < 0 or закупка > _МАКС_ШТУК:
             return _отказ("bad_cost", f"«{город}»: закупка — неотрицательное число.", f"points.{i}.cost")
         точка = {"city": город, "price": round(цена, 2), "cost": round(закупка, 2), "is_hit": 1 if т.get("is_hit") else 0}
@@ -1063,7 +1030,7 @@ def api_admin_product_publish():
             варианты, есть = [], set()
             for j, v in enumerate(т.get("variants") if isinstance(т.get("variants"), list) else []):
                 v = v if isinstance(v, dict) else {}
-                вкус = inputs._text(v.get("flavor"), 60)
+                вкус = по_эталону(inputs._text(v.get("flavor"), 60))
                 if вкус not in вкусы or вкус in есть:
                     return _отказ("bad_variant", f"«{город}»: вариант «{вкус}» не из списка товара или повторяется.",
                                   f"points.{i}.variants.{j}")
@@ -1122,20 +1089,32 @@ def api_admin_model_hide():
 
 @bp.route("/api/admin/model/delete", methods=["POST"])
 def api_admin_model_delete():
-    """Убрать модель из ассортимента. Товары на точках остаются: их снимают
-    с продажи отдельно, иначе одно нажатие обнуляло бы все точки разом."""
+    """Убрать модель из ассортимента — только если её нет ни на одной точке.
+
+    Модель с товарами не удаляется вовсе, «force» больше не действует: товары
+    остались бы без модели, а их галерея и отзывы — потеряны (см.
+    db.delete_model). Человеку называем точки и что делать вместо."""
     data = request.get_json(force=True, silent=True) or {}
     if not auth.get_admin(data.get("initData", "")):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     mid = inputs.целое(data.get("id"))
     if mid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    used = db.count_products_of_model(mid)
-    if used and not data.get("force"):
-        return jsonify({"ok": False, "error": "has_products", "count": used}), 400
-    if not db.delete_model(mid):
+    модель = db.get_model(mid)
+    if not модель:
         return jsonify({"ok": False, "error": "not_found"}), 404
-    return jsonify({"ok": True, "count": used})
+    итог = db.delete_model(mid)
+    if итог == "has_products":
+        города = db.cities_of_model(mid)
+        return jsonify({"ok": False, "error": "has_products", "count": db.count_products_of_model(mid), "cities": города,
+                        "message": f"«{модель['name']}» стоит на точках: {', '.join(города)}. Удалить модель вместе "
+                                   "с ними нельзя — пропали бы остаток, история склада и отзывы. Больше не продаёте — "
+                                   "снимите модель с витрины (🚫). Удалить совсем — сначала уберите товар с каждой "
+                                   "точки (⋯ → «Удалить с точки»)."}), 400
+    if итог == "not_found":
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    g.log_note = f"модель «{модель['name']}» удалена из ассортимента"
+    return jsonify({"ok": True, "count": 0})
 
 
 @bp.route("/api/admin/model/photo", methods=["POST"])
@@ -1180,7 +1159,10 @@ def api_admin_product_to_model():
 
     Описание берём из самого товара: название, бренд, характеристики, вкусы,
     фото. Ничего не спрашиваем заново — всё это уже введено, и просить второй
-    раз значит не уважать чужое время.
+    раз значит не уважать чужое время. Как именно и что переезжает вместе с
+    товаром (галерея, отзывы) — db.product_to_model.
+
+    Такая же модель уже есть — 409 с её номером; повтор с link_to — привязка.
     """
     data = request.get_json(force=True, silent=True) or {}
     admin = auth.get_admin(data.get("initData", ""))
@@ -1192,36 +1174,19 @@ def api_admin_product_to_model():
     deny = auth.deny_product(admin, pid)
     if deny:
         return deny
+    link_to = inputs.целое(data.get("link_to")) if data.get("link_to") not in (None, "") else None
+    try:
+        итог = db.product_to_model(pid, link_to)
+    except db.ToModelRefused as e:
+        статус = {"not_found": 404, "exists": 409}.get(e.code, 400)
+        return jsonify({"ok": False, "error": e.code, "message": e.message, **e.extra}), статус
     товар = db.get_product(pid)
-    if not товар:
-        return jsonify({"ok": False, "error": "not_found"}), 404
-    if товар["model_id"]:
-        return jsonify({"ok": False, "error": "already_model",
-                        "message": "У товара уже есть модель."}), 400
-
-    специи = dict(товар["specs"] or {}) if "specs" in товар.keys() and товар["specs"] else {}
-    for колонка in db.SPEC_COLUMNS:
-        значение = str(товар[колонка] or "").strip() if колонка in товар.keys() else ""
-        if значение:
-            специи[колонка] = значение
-    вкусы = [v["flavor"] for v in db.get_variants(pid)]
-    # Вкус одиночного товара мог лежать в поле flavor, а не в вариантах.
-    один = str(товар["flavor"] or "").strip() if "flavor" in товар.keys() else ""
-    if один and один not in вкусы:
-        вкусы.append(один)
-
-    mid = db.add_model(товар["category"], товар["name"], товар["brand"] or "",
-                       товар["description"] or "", специи, вкусы)
-    conn = db.connect()
-    cur = conn.cursor()
-    cur.execute(db._q("UPDATE products SET model_id = %s WHERE id = %s"), (mid, pid))
-    conn.commit()
-    conn.close()
-    if товар["photo"]:
-        db.set_model_photo(mid, товар["photo"], товар["photo_thumb"] or товар["photo"])
-    db.log_admin_action(int(admin["id"]), admin.get("name", ""), "product/to-model",
-                        f"товар {pid} → модель {mid}")
-    return jsonify({"ok": True, "model_id": mid})
+    g.log_note = (f"товар {pid} «{товар['name']}» · {товар['city']} → " +
+                  (f"привязан к модели {итог['model_id']}" if итог["linked"] else f"новая модель {итог['model_id']}") +
+                  (f"; вкусы в модель: {', '.join(итог['added_flavors'])}" if итог["added_flavors"] else "") +
+                  (f"; фото в галерею: {итог['photos_moved']}" if итог["photos_moved"] else "") +
+                  (f"; отзывов: {итог['reviews']}" if итог["reviews"] else ""))
+    return jsonify({"ok": True, **итог})
 
 
 @bp.route("/api/admin/product/from-model", methods=["POST"])

@@ -42,11 +42,12 @@ def run():
     _clean()
     as_admin()
 
-    # Товар с закупкой заводится через админку целиком.
-    r = client.post("/api/admin/product", json={"initData": "x", "city": "Минск", "category": "podsystem",
-                                                "name": "МаржаПод", "price": "20", "cost": "12", "stock": "5"})
+    # Товар с закупкой заводится через «✨ Новый товар» целиком.
+    r = client.post("/api/admin/product/publish", json={
+        "initData": "x", "client_token": "profit-margin-pod1", "model": {"category": "podsystem", "name": "МаржаПод"},
+        "points": [{"city": "Минск", "price": "20", "cost": "12", "stock": "5"}]})
     c("товар с закупкой создан", (r.get_json() or {}).get("ok"))
-    pid = (r.get_json() or {}).get("id")
+    pid = ((r.get_json() or {}).get("products") or [{}])[0].get("id")
     c("закупка сохранена", abs(float(db.get_product(pid)["cost"]) - 12.0) < 0.001)
 
     cache.bust()

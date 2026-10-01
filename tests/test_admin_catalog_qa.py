@@ -73,25 +73,30 @@ def run_negative_price_and_stock():
       r.status_code == 400 and d.get("error") == "use_stock_moves")
     c("остаток не тронут", int(_product(pid)["stock"]) == было)
 
-    # --- То же в момент создания нового товара ---
-    r = client.post("/api/admin/product", json={
-        "initData": "x", "city": "Минск", "category": "podsystem", "name": "QA-новый",
-        "price": "-100", "cost": "10", "stock": "5"})
+    # --- То же в момент создания нового товара («✨ Новый товар») ---
+    def новый(имя, цена, закупка, ключ):
+        return client.post("/api/admin/product/publish", json={
+            "initData": "x", "client_token": ключ, "model": {"category": "podsystem", "name": имя},
+            "points": [{"city": "Минск", "price": цена, "cost": закупка, "stock": "5"}]})
+    r = новый("QA-новый", "-100", "10", "qa-neg-price-0001")
     d = r.get_json() or {}
     # Раньше товар заводился, а цена молча становилась 0.00 — он уезжал на
-    # витрину бесплатным. Теперь ручка отказывает и говорит почему.
+    # витрину бесплатным. Теперь сервер отказывает и говорит почему.
     c("товар с отрицательной ценой не заводится", r.status_code == 400)
-    c("и сказано, в чём дело", d.get("error") in ("bad_price", "bad_number"))
-    if d.get("ok"):
-        p2 = _product(d["id"])
-        c("цена нового товара не стала нулём", float(p2["price"]) != 0.0)
+    c("и сказано, в чём дело", d.get("error") == "bad_price")
+    r = новый("QA-закупка", "10", "-5", "qa-neg-cost-0001")
+    c("закупка < 0 отклонена", r.status_code == 400 and (r.get_json() or {}).get("error") == "bad_cost")
+    r = новый("QA-без-закупки", "10", "", "qa-no-cost-00001")
+    c("пустая закупка отклонена — как при завозе", r.status_code == 400 and (r.get_json() or {}).get("error") == "cost_required")
+    c("ни один из этих товаров не завёлся",
+      not any(m["name"].startswith("QA-") and m["name"] != "QA-модель" for m in db.list_models()))
 
-    # --- Закупочная цена, для сравнения, отклоняется правильно ---
+    # --- Прежний путь «завести товар мимо ассортимента» закрыт ---
     r = client.post("/api/admin/product", json={
-        "initData": "x", "city": "Минск", "category": "podsystem", "name": "QA-закупка",
-        "price": "10", "cost": "-5", "stock": "1"})
-    c("закупка < 0 отклонена (это уже работает верно, эталон поведения)",
-      r.status_code == 400 and (r.get_json() or {}).get("error") == "bad_number")
+        "initData": "x", "city": "Минск", "category": "podsystem", "name": "QA-старый путь",
+        "price": "10", "cost": "5", "stock": "1"})
+    c("прежний путь создания товара закрыт и объясняет, где теперь",
+      r.status_code == 410 and "Новый товар" in (r.get_json() or {}).get("message", ""))
 
     # --- Для контраста: завоз модели на точку цену <= 0 отклоняет правильно ---
     mid = db.add_model("pods", "QA-модель", "", "", {}, [])

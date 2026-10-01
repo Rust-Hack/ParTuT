@@ -2722,8 +2722,10 @@ from partut.db.catalog import (                                         # noqa: 
     _model_json, list_models, get_model, add_model, update_model,           # noqa: F401
     merge_model_flavors,                                                    # noqa: F401
     propagate_model, orphan_flavors, count_products_of_model, delete_model, # noqa: F401
+    cities_of_model,                                                        # noqa: F401
     add_product_from_model, create_point_product,                           # noqa: F401
     PublishRefused, publish_product, add_draft_photo, purge_draft_photos,   # noqa: F401
+    ToModelRefused, product_to_model,                                       # noqa: F401
     DRAFT_PHOTO_KEEP_DAYS,                                                  # noqa: F401
     get_variants, get_all_variants, add_variant, delete_variants,           # noqa: F401
     replace_variants_if, change_variants,                                   # noqa: F401

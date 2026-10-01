@@ -185,7 +185,7 @@ function приложение({ ls = хранилище(), uid = 7, роль = "
     JSON, Date, Math, Number, String, Object, Array, Set, Map, Promise, Error, TypeError, RegExp, isFinite,
     FormData, Blob, File, URL, setTimeout, clearTimeout,
     categories: КАТЕГОРИИ, CAT_OPTS: КАТЕГОРИИ.map(c => [c.code, c.name]),
-    brands: [{ name: "Vaporesso", category: "" }, { name: "Chaser", category: "liquid" }],
+    brands: [{ name: "Vaporesso", category: "", flavors: [] }, { name: "Chaser", category: "liquid", flavors: ["Вишня", "Grape B - POP"] }],
     models: [], locations: точки.map(name => ({ name })), admLocFilter: выбранная, city: "Минск",
     admSearch: "", admCatFilter: "Жидкости", admStockFilter: "low",
     myScope: () => (роль === "seller" ? "Минск" : ""), isOwner: () => роль === "owner",
@@ -654,6 +654,36 @@ async function зарядка(а, { имя = "Зарядка USB-C", цена = 
     а.дальше();
     проверка("вернулись к жидкости — крепость на месте, а не перенесена в чужую категорию",
       а.$("npsp_strength").value === "20" && а.js("нт.specs.coils.fit") === "XROS 3, XROS 4" && !("strength" in а.js("нт.specs.coils")));
+  }
+
+  // ---------- Вкусы бренда из справочника ----------
+  {
+    const а = приложение();
+    await а.открыть();
+    ввести(а.$("npName"), "Chaser Mix");
+    а.$("npBrand").value = "Chaser"; сменить(а.$("npBrand"));
+    а.дальше();
+    const чипы = () => а.$("npBody").querySelectorAll("[data-npkf]").map(b => b.dataset.npkf);
+    проверка("шаг 2: вкусы бренда из справочника подсказаны", JSON.stringify(чипы()) === '["Вишня","Grape B - POP"]', чипы());
+    нажать(а.найти("[data-npkf]", b => b.dataset.npkf === "Вишня"));
+    проверка("нажал — вкус в списке, из подсказок ушёл", а.js("нт.flavors").includes("Вишня") && !чипы().includes("Вишня"), чипы());
+    ввести(а.$("npFlavorIn"), "grape b - pop, Лимон");
+    нажать(а.$("npFlavorAdd"));
+    проверка("набранное руками — в написании справочника",
+      JSON.stringify(а.js("нт.flavors")) === '["Вишня","Grape B - POP","Лимон"]', а.js("нт.flavors"));
+    проверка("все вкусы бренда уже в списке — подсказки нет", !а.$("npBody").querySelector(".npknown"));
+    const б = приложение();
+    await б.открыть();
+    ввести(б.$("npName"), "Chaser Mix");
+    б.$("npBrand").value = "Chaser"; сменить(б.$("npBrand"));
+    б.дальше();
+    нажать(б.$("npKnownAll"));
+    проверка("«Добавить все» — все вкусы бренда разом", JSON.stringify(б.js("нт.flavors")) === '["Вишня","Grape B - POP"]', б.js("нт.flavors"));
+    const в = приложение();
+    await в.открыть();
+    ввести(в.$("npName"), "Без бренда");
+    в.дальше();
+    проверка("бренд не выбран — подсказок нет", !в.$("npBody").querySelector(".npknown"));
   }
 
   // ---------- Черновик не пишется — это видно; черновик — по человеку ----------

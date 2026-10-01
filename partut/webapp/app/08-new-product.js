@@ -232,6 +232,7 @@ function нтШаг2() {
       <textarea id="npFlavorIn" rows="3" placeholder="Один или список: через запятую или каждый с новой строки">${esc(нт.flavorInput || "")}</textarea>
       <button type="button" class="npbtn" id="npFlavorAdd">Добавить в список</button>
       <div class="npnote" id="npFlavorNote" aria-live="polite">${esc(нтЗаметкаВкусов)}</div>
+      ${нтПодсказкаБренда()}
       ${n ? "" : `<div class="npnote">Нет вариантов — товар будет одной позицией со своим остатком.</div>`}
     </div>`);
   }
@@ -241,12 +242,38 @@ function нтШаг2() {
   }
   return части.join("");
 }
+// Вкусы бренда из справочника, которых в списке ещё нет: справочник ради
+// того и заведён, чтобы «Мята» у бренда писалась одинаково во всех товарах
+// и не набиралась заново. Карта — для написания набранного руками.
+function нтБрендСправочника() {
+  const имя = (нт.brand || "").trim().toLowerCase();
+  return имя ? brands.find(b => (b.name || "").trim().toLowerCase() === имя) || null : null;
+}
+function нтВкусыБренда() {
+  const бренд = нтБрендСправочника();
+  if (!бренд) return [];
+  const есть = new Set(нт.flavors.map(f => f.toLowerCase()));
+  return (бренд.flavors || []).map(f => String(f).trim()).filter(f => f && !есть.has(f.toLowerCase()));
+}
+
 // Совместимость вписывают руками: по ней покупатель ищет картридж под своё
 // устройство. Пустая — товар не найдётся, а заметить это потом некому.
 function нтПодсказкаСовместимости() {
   const поле = specsOf(нт.category).find(s => s.key === "fit");
   if (!поле || String(нтХарактеристики().fit || "").trim()) return "";
   return `«${esc(поле.label)}» не заполнена — покупатель не найдёт товар по названию своего устройства. Впишите модели через запятую.`;
+}
+
+function нтПодсказкаБренда() {
+  const known = нтВкусыБренда();
+  if (!known.length) return "";
+  const показать = known.slice(0, 40);
+  return `<div class="npknown">
+    <div class="npsub">${esc(catVariantMany(нт.category))} бренда «${esc(нтБрендСправочника().name)}» из справочника — нажмите, чтобы добавить:</div>
+    <div class="brflavors">${показать.map(f =>
+      `<button type="button" class="ochip npkf" data-npkf="${esc(f)}">＋ ${esc(f)}</button>`).join("")}</div>
+    ${known.length > 1 ? `<button type="button" class="nplink" id="npKnownAll">Добавить все (${known.length})</button>` : ""}
+  </div>`;
 }
 
 function нтШаг3() {
@@ -380,6 +407,8 @@ function нтПривязать() {
     нтЗабратьВвод(); нт.flavors.splice(+b.dataset.npfx, 1); нтЗаметкаВкусов = ""; нтСохранить(); нтНарисовать();
   });
   if ($("npFlavorAdd")) $("npFlavorAdd").onclick = нтДобавитьВарианты;
+  на("[data-npkf]", b => b.onclick = () => нтДобавитьИзСправочника([b.dataset.npkf]));
+  if ($("npKnownAll")) $("npKnownAll").onclick = () => нтДобавитьИзСправочника(нтВкусыБренда());
   на("[data-npcity]", b => b.onclick = () => {
     нтЗабратьВвод(); нт.points[+b.dataset.npcity].city = b.dataset.c; нтСохранить(); нтНарисовать();
   });
@@ -429,13 +458,17 @@ function нтДобавитьВарианты() {
   const новые = String(нт.flavorInput || "").split(/[,;\n]+/).map(x => x.replace(/\s+/g, " ").trim()).filter(Boolean);
   if (!новые.length) { нтЗаметкаВкусов = "Впишите название варианта."; нтНарисовать(); return; }
   const есть = new Set(нт.flavors.map(f => f.toLowerCase()));
+  // Написание — из справочника бренда, если он этот вкус знает (сервер
+  // приведёт так же): пусть на экране будет то, что ляжет в базу.
+  const бренд = нтБрендСправочника();
+  const эталон = new Map((бренд ? бренд.flavors || [] : []).map(f => [String(f).trim().toLowerCase(), String(f).trim()]));
   const повторы = [], длинные = [];
   let лишние = 0;
   for (const f of новые) {
     if (f.length > 60) { длинные.push(f.slice(0, 24) + "…"); continue; }
     if (есть.has(f.toLowerCase())) { повторы.push(f); continue; }
     if (нт.flavors.length >= 200) { лишние++; continue; }
-    есть.add(f.toLowerCase()); нт.flavors.push(f);
+    есть.add(f.toLowerCase()); нт.flavors.push(эталон.get(f.toLowerCase()) || f);
   }
   const заметки = [];
   if (повторы.length) заметки.push(`уже в списке: ${повторы.map(f => `«${f}»`).join(", ")}`);
@@ -445,6 +478,17 @@ function нтДобавитьВарианты() {
   нт.flavorInput = "";
   нтСохранить(); нтНарисовать();
   if ($("npFlavorIn")) $("npFlavorIn").focus();
+}
+
+function нтДобавитьИзСправочника(список) {
+  нтЗабратьВвод();
+  const есть = new Set(нт.flavors.map(f => f.toLowerCase()));
+  for (const f of список) {
+    if (нт.flavors.length >= 200) break;
+    if (f && !есть.has(f.toLowerCase())) { есть.add(f.toLowerCase()); нт.flavors.push(f); }
+  }
+  нтЗаметкаВкусов = "";
+  нтСохранить(); нтНарисовать();
 }
 
 // ---------- Фото ----------

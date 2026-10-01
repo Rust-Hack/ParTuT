@@ -49,20 +49,20 @@ def run():
     new_code = d["code"]
 
     # --- Товар в новой категории ---
-    r = client.post("/api/admin/product", json={"initData": "x", "city": "Минск", "category": new_code,
-                                                "name": "Паучи Ice", "price": "9", "stock": "4",
-                                                "cost": "5"})
+    def новый(категория, имя, ключ):
+        return client.post("/api/admin/product/publish", json={
+            "initData": "x", "client_token": ключ, "model": {"category": категория, "name": имя},
+            # закупку кладём намеренно: иначе отказ пришёл бы из-за неё, и
+            # проверка категории прошла бы вхолостую
+            "points": [{"city": "Минск", "price": "9", "cost": "5", "stock": "4"}]})
+    r = новый(new_code, "Паучи Ice", "cat-new-product-01")
     c("товар заводится в новой категории", (r.get_json() or {}).get("ok"))
-    pid = r.get_json()["id"]
+    pid = r.get_json()["products"][0]["id"]
     cache.bust()
     c("товар виден витрине",
       any(p["id"] == pid for p in client.get("/api/products").get_json()))
     c("выдуманная категория отклонена",
-      client.post("/api/admin/product", json={"initData": "x", "city": "Минск", "category": "нетакой",
-                                              "name": "Ничто", "price": "1", "stock": "1",
-                                              # закупку кладём намеренно: иначе отказ пришёл бы
-                                              # из-за неё, и проверка категории прошла бы вхолостую
-                                              "cost": "1"}).get_json().get("error") == "bad_data")
+      новый("нетакой", "Ничто", "cat-bad-category-1").get_json().get("error") == "bad_category")
     c("перевод товара в выдуманную категорию отклонён",
       client.post("/api/admin/product/update", json={"initData": "x", "id": pid,
                                                      "field": "category", "value": "нетакой"}).status_code == 400)
@@ -90,8 +90,11 @@ def run():
     # --- Удаление ---
     r = client.post("/api/admin/category/delete", json={"initData": "x", "code": new_code})
     c("непустую категорию не удалить", r.status_code == 400 and r.get_json()["error"] == "has_products")
-    c("и сказано, сколько там товаров", r.get_json()["count"] == 1)
+    # Товар заведён «Новым товаром» — значит, с моделью: держат категорию оба.
+    c("и сказано, сколько там товаров и моделей", r.get_json()["count"] == 2)
+    модель = db.get_product(pid)["model_id"]
     db.delete_product(pid)
+    db.delete_model(модель)
     cache.bust()
     c("пустая удаляется",
       client.post("/api/admin/category/delete", json={"initData": "x", "code": new_code}).get_json()["ok"])
