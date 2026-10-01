@@ -12,6 +12,7 @@ partut/db/catalog.py — ассортимент в базе: товары, мо�
 а не копиями имён: копия не заметила бы подмены в тестах — см. partut/db/raffles.py.
 """
 
+import datetime
 import json
 
 from partut import db
@@ -653,6 +654,31 @@ def add_draft_photo(admin_id, file_id, thumb_id=""):
                 (int(admin_id), file_id, thumb_id or "", db._now_str()))
     conn.commit()
     conn.close()
+
+
+# Сколько живёт фото черновика, так и не ставшее товаром. Сами картинки лежат
+# в Telegram (в чате владельца с ботом), здесь — только строка «это фото
+# загрузил такой-то для нового товара». Месяц — с запасом на черновик,
+# отложенный до поставки.
+DRAFT_PHOTO_KEEP_DAYS = 30
+
+
+def purge_draft_photos(days=DRAFT_PHOTO_KEEP_DAYS):
+    """Ночная уборка: фото черновиков, которые так и не опубликовали.
+
+    Черновик мог быть брошен или стёрт — строка о его фото осталась бы
+    навсегда. Черновик старше срока при публикации получит понятный отказ
+    («загрузите фото заново»), а не тихую ошибку. Ключи публикаций
+    (publish_ops) не трогаем: они — защита от второго товара при повторе,
+    и места почти не занимают. Возвращает, сколько убрано."""
+    cutoff = (db.shop_now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("DELETE FROM draft_photos WHERE created_at < %s"), (cutoff,))
+    gone = cur.rowcount
+    conn.commit()
+    conn.close()
+    return max(0, gone)
 
 
 def publish_product(admin_id, token, fingerprint, модель, фото, точки):

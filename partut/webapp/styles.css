@@ -1163,3 +1163,137 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 .dlvsum.done { color: var(--accent); }
 .dlvbar .bigbtn { margin: 0; }
 html[data-theme="dark"] .dlvbar { border: 1px solid rgba(95,242,242,.22); box-shadow: 0 -2px 18px rgba(0,0,0,.5); }
+
+/* ============================================================
+   Новый товар (#npView): три шага, фото сеткой, итог внизу.
+   Вход — две плитки в «Ценах и остатках».
+   ============================================================ */
+/* Две плитки вместо свёрнутой гармошки с одной кнопкой внутри. Подпись
+   под названием говорит, чем они различаются: новый — ещё нет в
+   ассортименте, «Завезти» — уже есть. Продавцу видна только вторая. */
+.addrow { display: flex; gap: 10px; margin-bottom: 14px; }
+.addopt { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  min-height: 64px; padding: 12px 14px; border-radius: 16px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow);
+  font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; }
+.addopt[hidden] { display: none; }
+.addopt b { font-size: 15px; font-weight: 800; line-height: 1.25; }
+.addopt small { color: var(--hint); font-size: 12.5px; line-height: 1.3; }
+#npOpen { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+#npOpen small { color: var(--on-accent); opacity: .85; }
+html[data-theme="dark"] .addopt { border-color: rgba(95,242,242,.22); }
+html[data-theme="dark"] #npOpen { border-color: var(--accent); }
+
+/* Шаги: номер в круге и название. Пройденный — галочкой, нажимается:
+   вернуться к шагу можно в любой момент, набранное не теряется. */
+.npsteps { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 0 0 12px; }
+.npsteps:empty { display: none; }
+.npstep { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px 9px;
+  border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--hint);
+  font: inherit; cursor: pointer; touch-action: manipulation; }
+.npstep b { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface-2); color: var(--hint); font-size: 13px; font-weight: 800; }
+/* Узкий экран: «характеристики» переносится по слогам, а не рвётся где попало. */
+.npstep span { font-size: 12px; font-weight: 700; line-height: 1.2; text-align: center;
+  -webkit-hyphens: auto; hyphens: auto; overflow-wrap: break-word; }
+.npstep.on { background: var(--surface); box-shadow: var(--shadow); color: var(--text); }
+.npstep.on b { background: var(--accent); color: var(--on-accent); }
+.npstep.done { color: var(--text); }
+.npstep.done b { background: var(--accent-soft); color: var(--accent); }
+html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
+
+.sect.nps { padding: 4px 16px 16px; }
+.nperr, .npsavewarn { margin: 0 0 12px; }
+.nphint { color: var(--hint); font-weight: 400; font-size: 12px; }
+.npnote { color: var(--hint); font-size: 13px; line-height: 1.45; margin-top: 8px; }
+.npnote:empty { display: none; }
+/* Пояснение прямо под подписью поля — отдельной строкой, а не хвостом подписи. */
+.npsub { color: var(--hint); font-size: 12.5px; line-height: 1.4; margin: -2px 0 8px; }
+/* Второстепенная кнопка: обводка, без заливки — заливка у одной «Дальше». */
+.npbtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 16px;
+  border-radius: 12px; border: 1px solid var(--accent); background: transparent; color: var(--accent);
+  font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+.npbtn[hidden] { display: none; }
+.npbtn:disabled { opacity: .5; }
+.nplink { border: none; background: none; padding: 0; color: var(--accent); font: inherit; font-weight: 700;
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.npreset { display: block; margin: 18px auto 0; color: var(--hint); font-size: 13px; font-weight: 600; }
+.nptwin { display: flex; width: 100%; margin-top: 10px; background: var(--surface); }
+
+/* Фото — сеткой по три: видно все шесть сразу, без прокрутки вбок. */
+.npphotos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.npph, .npadd { position: relative; aspect-ratio: 1; max-width: 100%; border-radius: 12px; overflow: hidden; }
+.npph { background: var(--img-bg); }
+.npph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.npph.queued img, .npph.uploading img { opacity: .5; }
+.npph.failed { outline: 2px solid var(--danger); outline-offset: -2px; }
+.npph.failed img { opacity: .35; }
+.npmain { position: absolute; left: 6px; bottom: 6px; padding: 2px 8px; border-radius: 999px;
+  background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 800; }
+.npstar, .npdel { position: absolute; width: 34px; height: 34px; border-radius: 50%; border: none;
+  background: rgba(0,0,0,.5); color: #fff; font-size: 14px; font-weight: 800; cursor: pointer; }
+.npstar { left: 4px; bottom: 4px; }
+.npdel { right: 4px; top: 4px; }
+.npphstate { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); padding: 0 6px;
+  text-align: center; font-size: 12px; font-weight: 800; color: var(--text); }
+.npphstate.bad { left: 8px; right: auto; top: 8px; transform: none; padding: 0; font-size: 20px; }
+.npretry { position: absolute; left: 6px; right: 6px; bottom: 6px; min-height: 34px; border-radius: 9px; border: none;
+  background: var(--danger); color: #fff; font-size: 12.5px; font-weight: 800; cursor: pointer; }
+.npadd { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  border: 2px dashed var(--line); background: transparent; color: var(--accent);
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.npadd b { font-size: 26px; line-height: 1; }
+
+.npdesc { margin-top: 14px; }
+.npdesc summary { list-style: none; cursor: pointer; padding: 8px 0; color: var(--hint); font-size: 13.5px; font-weight: 700; }
+.npdesc summary::-webkit-details-marker { display: none; }
+.npdesc summary::before { content: "＋ "; }
+.npdesc[open] summary::before { content: "− "; }
+
+/* Варианты: чипы с крестиком, под ними поле для списка. */
+.npflv { margin: 2px 0 10px; }
+.npflv:empty { display: none; }
+.npfx { border: none; background: none; padding: 0; min-width: 24px; min-height: 24px;
+  color: var(--hint); font-size: 13px; font-weight: 800; cursor: pointer; }
+#npFlavorAdd { width: 100%; margin-top: 8px; }
+
+/* Точка: чипы точек, цена и закупка рядом, варианты строками. */
+.nphead { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; margin-top: 10px; }
+.nphead b { font-size: 15px; font-weight: 800; }
+.npcity { font-size: 15px; font-weight: 700; }
+.nps .chiprow { margin-top: 6px; margin-bottom: 0; }
+/* Подпись «Закупка за 1 шт, Br» на узком экране в две строки — поля всё равно на одной высоте. */
+.nps .rowf { align-items: flex-end; }
+.form label.npchk, .form label.npvcheck { display: flex; align-items: center; gap: 10px; margin: 14px 0 0;
+  color: var(--text); font-size: 15px; font-weight: 600; }
+.form .npchk input, .form .npvcheck input { width: 22px; height: 22px; min-height: 0; padding: 0; margin: 0;
+  flex: 0 0 auto; accent-color: var(--accent); }
+.form label.npvcheck { margin: 0; min-width: 0; min-height: 44px; }
+.npvcheck span { min-width: 0; overflow-wrap: anywhere; }
+.npvar.off .npvcheck span { color: var(--hint); text-decoration: line-through; }
+.nprows .dlvrow:first-child { border-top: none; }
+/* «Одно число всем» — как в приёме поставки: пять одинаковых чисел
+   не вписывают пять раз. */
+.npall { display: grid; grid-template-columns: 96px auto; justify-content: start; align-items: center; gap: 6px 8px;
+  margin: 4px 0 2px; padding: 10px 0; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line); }
+.form .npall label { grid-column: 1 / -1; margin: 0; color: var(--hint); font-size: 13.5px; font-weight: 700; }
+.form .npall input { min-height: 44px; padding: 8px; text-align: center; font-weight: 700; }
+.npmore { width: 100%; margin-bottom: 16px; background: var(--surface); }
+
+/* Низ: итог по точкам и кнопки. «Назад» скрыт на первом шаге — «Дальше»
+   тогда во всю ширину. */
+.npnav { display: flex; gap: 8px; }
+.npnav .npbtn { min-height: 54px; flex: 0 0 auto; }
+.npnav .bigbtn { flex: 1 1 auto; margin: 0; }
+#npSum div + div { margin-top: 2px; }
+
+/* Итог публикации */
+.sect.npdone { padding: 22px 18px 18px; text-align: center; }
+.npok { width: 56px; height: 56px; margin: 0 auto 8px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); color: var(--accent); font-size: 28px; font-weight: 800; }
+.npdone h3 { margin: 4px 0 6px; font-size: 19px; text-wrap: balance; }
+.view p.npdname { color: var(--text); font-size: 15px; font-weight: 700; margin: 0 0 10px; }
+.npwhere { list-style: none; display: grid; gap: 6px; max-width: 360px; margin: 0 auto 10px; padding: 0; text-align: left; }
+.npwhere li { background: var(--surface-2); border-radius: 10px; padding: 9px 12px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.npdone .dwarn { text-align: left; }
+.npagain { width: 100%; margin-top: 14px; }

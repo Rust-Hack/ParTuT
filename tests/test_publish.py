@@ -16,6 +16,7 @@
 - цена, количества и варианты проверяет сервер, а не форма;
 - продавцу публикация закрыта.
 """
+import datetime
 import io
 import threading
 
@@ -298,7 +299,51 @@ def run_одновременно():
     return c.fails
 
 
+def _состарить(file_id, дней):
+    когда = (db.shop_now() - datetime.timedelta(days=дней)).strftime("%Y-%m-%d %H:%M")
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("UPDATE draft_photos SET created_at = %s WHERE file_id = %s"), (когда, file_id))
+    conn.commit(); conn.close()
+
+
+def run_уборка_черновых_фото():
+    """Фото брошенного черновика не лежит в базе вечно: ночная уборка убирает
+    строки старше срока, свежие не трогает. Опубликовать с убранным фото
+    нельзя — отказ понятный, товара нет."""
+    c = _С("Новый товар: уборка фото брошенных черновиков")
+    _clean()
+    db.add_draft_photo(100, "draft-old", "draft-old-s")
+    db.add_draft_photo(100, "draft-fresh", "draft-fresh-s")
+    _состарить("draft-old", db.DRAFT_PHOTO_KEEP_DAYS + 1)
+    _состарить("draft-fresh", db.DRAFT_PHOTO_KEEP_DAYS - 1)
+    c("убрана одна строка — старше срока", db.purge_draft_photos() == 1)
+    c("фото младше срока на месте", _считать("draft_photos", "WHERE file_id = %s", ("draft-fresh",)) == 1)
+    c("повторная уборка убирать больше нечего", db.purge_draft_photos() == 0)
+    as_admin(100)
+    r = _опубликовать("cleanup-key-0001", фото=["draft-old"])
+    c("публикация с убранным фото — понятный отказ, товара нет",
+      r.status_code == 400 and (r.get_json() or {}).get("error") == "bad_photo" and _считать("models") == 0, r.get_json())
+    r = _опубликовать("cleanup-key-0002", фото=["draft-fresh"])
+    c("с фото младше срока — публикуется", r.status_code == 200 and (r.get_json() or {}).get("ok"), r.get_json())
+
+    # Уборка стоит в ночных делах, а не только существует.
+    from partut.bot import handlers as botmod
+    db.add_draft_photo(100, "draft-night", "")
+    _состарить("draft-night", db.DRAFT_PHOTO_KEEP_DAYS + 5)
+    db.set_setting(botmod._CLEANUP_MARK, "")
+    настоящий_час, botmod.BACKUP_HOUR = botmod.BACKUP_HOUR, 0
+    try:
+        botmod._nightly_cleanup()
+    finally:
+        botmod.BACKUP_HOUR = настоящий_час
+        db.set_setting(botmod._CLEANUP_MARK, "")
+    c("ночью фото брошенного черновика убирается само",
+      _считать("draft_photos", "WHERE file_id = %s", ("draft-night",)) == 0)
+    _clean()
+    return c.fails
+
+
 if __name__ == "__main__":
     import sys
-    fails = run() + run_проверки_сервера() + run_всё_или_ничего() + run_одновременно()
+    fails = run() + run_проверки_сервера() + run_всё_или_ничего() + run_одновременно() + run_уборка_черновых_фото()
     sys.exit(1 if fails else 0)

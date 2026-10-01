@@ -62,8 +62,10 @@ def run():
     обращения = set(re.findall(r'\$\("([A-Za-z0-9_-]+)"\)', html))
     в_разметке = set(re.findall(r'\bid="([A-Za-z0-9_-]+)"', html))
     # Часть элементов создаётся помощниками: их имя передаётся строкой.
-    # pickerHtml("mdBrand", …) создаёт <select id="mdBrand">.
+    # pickerHtml("mdBrand", …) создаёт <select id="mdBrand"> и поле для нового
+    # значения <input id="mdBrand_new"> — всегда парой.
     через_помощников = set(re.findall(r'(?:pickerHtml|bindPicker|pickerValue)\("([A-Za-z0-9_-]+)"', html))
+    через_помощников |= {и + "_new" for и in re.findall(r'pickerHtml\("([A-Za-z0-9_-]+)"', html)}
     пропавшие = sorted(обращения - в_разметке - через_помощников)
     c(f"обращений найдено ({len(обращения)})", len(обращения) > 100)
     c("нет обращений к несуществующим элементам"

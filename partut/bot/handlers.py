@@ -888,8 +888,9 @@ def _nightly_cleanup():
         return
     photos = db.purge_orphan_photos()
     coins = db.trim_coin_log()
-    if photos or coins:
-        print(f"Ночная уборка: картинок {photos}, движений монет {coins}")
+    drafts = db.purge_draft_photos()
+    if photos or coins or drafts:
+        print(f"Ночная уборка: картинок {photos}, движений монет {coins}, фото брошенных черновиков {drafts}")
 
 
 def _remind_sellers():
