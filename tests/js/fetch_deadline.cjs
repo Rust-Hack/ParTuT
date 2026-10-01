@@ -10,6 +10,12 @@
 // запросов из 01-core.js и настоящая быстрая цена из 06-catalog.js; срок
 // сокращён с 20 с до долей секунды.
 //
+// 1 октября 2026 тест упал в CI (sqlite · UTC) ещё до первой проверки: срок
+// был 150 мс, а самый первый fetch в процессе Node заодно загружает сетевую
+// библиотеку и на этом Mac идёт в 15 раз дольше второго. На загруженной
+// машине CI он не уложился в срок и оборвался. Поэтому fetch прогревается до
+// измерений, срок — 400 мс, а «запрос ушёл» ждётся, а не угадывается паузой.
+//
 // Запуск: node tests/js/fetch_deadline.cjs — печатает ✅/❌, код выхода 1 при ❌.
 // Из pytest его зовёт tests/test_js_handlers.py.
 const fs = require("node:fs");
@@ -20,7 +26,7 @@ const vm = require("node:vm");
 const app = path.join(__dirname, "..", "..", "partut", "webapp", "app");
 const ядро = fs.readFileSync(path.join(app, "01-core.js"), "utf8");
 const каталог = fs.readFileSync(path.join(app, "06-catalog.js"), "utf8");
-const СРОК = 150;
+const СРОК = 400;
 const обёртка = ядро.slice(ядро.indexOf("const СРОК_ЗАПРОСА"), ядро.indexOf("// «Сеть недоступна» и «сервер молчит»"))
   .replace("const СРОК_ЗАПРОСА = 20000;", `const СРОК_ЗАПРОСА = ${СРОК};`)
   .replace("const СРОК_ЗАГРУЗКИ = 60000;", `const СРОК_ЗАГРУЗКИ = ${СРОК * 2};`);
@@ -68,6 +74,10 @@ setTimeout(() => {
   const window = { fetch: (url, opts) => { сигналы.push(opts.signal); return fetch(new URL(url, адрес), opts); } };
   const ctx = vm.createContext({ window, AbortController, FormData, setTimeout, clearTimeout, console });
   vm.runInContext(обёртка + "\n" + сбой, ctx);
+
+  // Прогрев: первый fetch в процессе медленный сам по себе (см. шапку). Мимо
+  // обёртки и без срока — он ничего не проверяет.
+  await (await fetch(адрес + "/ok", { method: "POST", body: "{}" })).json();
 
   try {
     // ---------- Сама обёртка ----------
@@ -128,7 +138,9 @@ setTimeout(() => {
       $("priceCancel").onclick();
       vm.runInContext("открытьЦену(1)", ц);
       const второе = vm.runInContext("сохранитьЦену()", ц);
-      await пауза(20);
+      // Ждём, пока запрос дойдёт до сервера, но не дольше половины срока: дальше
+      // его оборвёт срок, и состояние кнопки уже ничего не скажет.
+      for (const конец = Date.now() + СРОК / 2; запросов < было + 2 && Date.now() < конец;) await пауза(5);
       проверка("переоткрыли и сохранили — запрос ушёл, а не «Жду прошлое сохранение» навсегда",
         запросов === было + 2 && !/Жду/.test($("priceSave").textContent), { запросов: запросов - было, кнопка: $("priceSave").textContent });
       await второе;
@@ -141,4 +153,6 @@ setTimeout(() => {
   дошлиДоКонца = true;
   console.log(провалов ? `\nНе прошло: ${провалов}` : "\nВсё прошло");
   process.exit(провалов ? 1 : 0);
-})().catch((e) => { console.log("❌ упало: " + (e && e.stack || e)); process.exit(1); });
+// Стек — в одну строку: из вывода в общий прогон попадают только строки с ❌,
+// и без места падения по журналу CI его не найти.
+})().catch((e) => { console.log("❌ упало: " + String(e && e.stack || e).split("\n").slice(0, 4).join(" | ")); process.exit(1); });
