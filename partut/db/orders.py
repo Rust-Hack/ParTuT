@@ -400,27 +400,105 @@ def point_sales(city=None, day=None):
     return rows
 
 
+def _запереть_чек(cur, order_id, pids):
+    """Замки отмены продажи: заказ, затем вкусы и товары чека — по возрастанию
+    номеров, вкусы раньше товаров, как у прихода, архива и удаления. В SQLite
+    замок один на базу, его берёт первая запись транзакции."""
+    if db.USE_PG:
+        cur.execute("SELECT id FROM orders WHERE id = %s FOR UPDATE", (order_id,))
+        if pids:
+            метки = ",".join(["%s"] * len(pids))
+            cur.execute(f"SELECT id FROM product_variants WHERE product_id IN ({метки}) "
+                        "ORDER BY product_id, id FOR UPDATE", tuple(pids))
+            cur.execute(f"SELECT id FROM products WHERE id IN ({метки}) ORDER BY id FOR UPDATE", tuple(pids))
+    else:
+        cur.execute("UPDATE orders SET id = id WHERE id = ?", (order_id,))
+
+
 def cancel_point_sale(order_id):
     """Отменить продажу на точке (ошиблись) — штуки вернутся на полку.
 
-    Только продажу на точке и только не отменённую. Товар уже в архиве —
-    нет: штуки вернулись бы на полку, которой никто не видит. Отмена — та
-    же cancel_order: статус и возврат склада одной транзакцией."""
+    ОДНОЙ транзакцией под замками товаров чека (приёмка PS-01, PS-02):
+      • товар уже в архиве — отказ: штуки ушли бы на полку, которой никто не
+        видит. Раньше проверка шла до транзакции, и «в архив», успевший в
+        промежуток, всё равно получал назад 7 шт;
+      • вкуса из чека больше нет — отказ: возвращать некуда. Раньше возврат
+        в удалённый вкус тихо менял ноль строк, продажа отменялась, а штуки
+        пропадали;
+      • нашлась хоть одна такая строка — не меняется ничего, ни статус, ни
+        другие строки чека.
+    Возвращает заказ (как был) или бросает PointSaleRefused."""
     order = get_order(order_id)
     if not order or (order["source"] if "source" in order.keys() else None) != "point":
         raise PointSaleRefused("not_found", "Такой продажи нет — обновите список.")
     try:
-        состав = json.loads(order["items"] or "[]")
+        состав = [и for и in json.loads(order["items"] or "[]") if isinstance(и, dict)]
     except (TypeError, ValueError):
         состав = []
-    for it in состав:
-        p = db.get_product(int(it.get("id") or 0))
-        if p and p["archived"]:
-            raise PointSaleRefused("archived", f"«{p['name']}» уже в архиве — сначала верните его, потом отменяйте продажу.")
-    отменён = cancel_order(order_id, allowed=("issued",))
-    if not отменён:
-        raise PointSaleRefused("already", "Эта продажа уже отменена.")
-    return отменён
+    pids = sorted({int(и.get("id") or 0) for и in состав if int(и.get("id") or 0)})
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        _запереть_чек(cur, order_id, pids)
+        cur.execute(db._q("SELECT status FROM orders WHERE id = %s"), (order_id,))
+        r = cur.fetchone()
+        if not r or r["status"] != "issued":
+            raise PointSaleRefused("already", "Эта продажа уже отменена.")
+        товары = {}
+        if pids:
+            метки = ",".join(["%s"] * len(pids))
+            cur.execute(db._q(f"SELECT * FROM products WHERE id IN ({метки})"), tuple(pids))
+            товары = {int(x["id"]): dict(x) for x in cur.fetchall()}
+            cur.execute(db._q(f"SELECT product_id, flavor FROM product_variants WHERE product_id IN ({метки})"),
+                        tuple(pids))
+            вкусы = {}
+            for x in cur.fetchall():
+                вкусы.setdefault(int(x["product_id"]), set()).add(x["flavor"])
+        else:
+            вкусы = {}
+        for и in состав:
+            pid, вкус, имя = int(и.get("id") or 0), и.get("flavor") or None, и.get("name") or "товар"
+            p = товары.get(pid)
+            if not p:
+                raise PointSaleRefused("gone", f"«{имя}» больше нет на точке — штуки вернуть некуда. "
+                                               "Если их и правда вернули, примите их приходом.")
+            if p["archived"]:
+                raise PointSaleRefused("archived", f"«{p['name']}» в архиве — сначала верните его, "
+                                                   "потом отменяйте продажу.")
+            if вкус and вкус not in вкусы.get(pid, set()):
+                raise PointSaleRefused("variant_missing",
+                                       f"У «{p['name']}» больше нет варианта «{вкус}» — штуки вернуть некуда. "
+                                       f"Добавьте «{вкус}» в карточке товара (с 0 шт) и отмените продажу ещё раз.")
+            if not вкус and вкусы.get(pid):
+                raise PointSaleRefused("variant_missing",
+                                       f"«{p['name']}» теперь ведётся по вариантам — непонятно, в какой вернуть "
+                                       "штуки. Примите их приходом в нужный вариант.")
+        cur.execute(db._q("UPDATE orders SET status = 'canceled' WHERE id = %s AND status = 'issued'"), (order_id,))
+        с_вариантами = set()
+        for и in состав:
+            pid, вкус, штук = int(и.get("id") or 0), и.get("flavor") or None, int(и.get("qty") or 0)
+            имя = и.get("name") or "товар"
+            if штук <= 0:
+                continue
+            if вкус:
+                cur.execute(db._q("UPDATE product_variants SET stock = stock + %s WHERE product_id = %s AND flavor = %s"),
+                            (штук, pid, вкус))
+                с_вариантами.add(pid)
+            else:
+                cur.execute(db._q("UPDATE products SET stock = stock + %s WHERE id = %s"), (штук, pid))
+            if cur.rowcount < 1:          # под замком так быть не может — но молча терять штуки нельзя
+                raise PointSaleRefused("gone", f"«{имя}»: возврат не записался — отмена не проведена.")
+        for pid in с_вариантами:
+            cur.execute(db._q("""UPDATE products SET stock =
+                              (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                              WHERE id = %s"""), (pid, pid))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return order
 
 
 # Статусы «заказ ещё живой»: до выдачи или отмены.

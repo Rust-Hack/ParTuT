@@ -324,6 +324,7 @@ function showTab(id) {
   else if (dir < 0) el.classList.add("slide-l");              // назад — слева
   renderNav();
   if (id === "cart") renderCart();
+  if ((id === "cart" || id === "catalog") && city && паузаТочки(city)) перечитатьТочки();
   if (id === "fav") renderFav();
   if (id === "bonus") renderBonus();
   if (id === "profile") renderProfile();
@@ -661,13 +662,19 @@ async function fetchProducts() {
 // не приходит вовсе, а продавцу оно нужно — иначе «скрыть» превращалось бы
 // в «потерять». Пока админский список не загружен, работаем по витрине.
 let adminProducts = [];
+// Подтверждён ли список товаров точек последней загрузкой. Не подтверждён —
+// показываем прежний, а выводов вроде «нигде не продаётся» по нему не делаем
+// (приёмка AR-03): товар, только что вернувшийся из архива, в прежнем ещё не
+// числится.
+let админСписокСвеж = true;
 const shelf = () => adminProducts.length ? adminProducts : allProducts;
 async function fetchAdminProducts() {
   try {
     const r = await fetch("/api/admin/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
-    if (d.ok && Array.isArray(d.products)) { adminProducts = d.products; return true; }
+    if (d.ok && Array.isArray(d.products)) { adminProducts = d.products; админСписокСвеж = true; return true; }
   } catch (e) { /* останемся на витрине — это хуже, но не пусто */ }
+  админСписокСвеж = false;
   return false;
 }
 async function fetchLocations() {
@@ -1039,9 +1046,33 @@ function паузаТочки(name) {
   if (п.until_ms && Date.now() >= п.until_ms) return null;
   return п;
 }
+// Перечитать точки — открыли ли закрытую (приёмка PS-03: владелец открыл,
+// а у покупателя «Оформить» оставалось выключенным до перезагрузки). Зовётся
+// при переходе в корзину и каталог, при возвращении в приложение, по кнопке
+// «Проверить» и в момент, когда наступает время открытия. Не ответил сервер —
+// точка остаётся закрытой: открытой её объявляет только сервер.
+let точкиПрочитаны = Date.now();
+async function перечитатьТочки(сразу) {
+  // Не чаще раза в 5 с при переходах: перечитываем, только пока точка
+  // закрыта, а ответ сервера кэширован — это дёшево.
+  if (!сразу && Date.now() - точкиПрочитаны < 5000) return null;
+  const ок = await fetchLocations();
+  if (ок) точкиПрочитаны = Date.now();
+  обновитьБаннерПаузы();
+  if (activeTab === "cart") renderCart();
+  return ок;
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && city && паузаТочки(city)) перечитатьТочки(true);
+});
+let таймерПаузы = null;
 function обновитьБаннерПаузы() {
   const б = $("pauseBanner"); if (!б) return;
   const п = city ? паузаТочки(city) : null;
+  // Время открытия наступит, пока приложение открыто, — снять паузу сразу,
+  // не дожидаясь перехода по вкладкам.
+  clearTimeout(таймерПаузы);
+  if (п && п.until_ms) таймерПаузы = setTimeout(() => перечитатьТочки(true), Math.max(1000, п.until_ms - Date.now() + 1500));
   б.hidden = !п;
   if (п) б.innerHTML = `<b>⏸ Точка «${esc(city)}» закрыта ${esc(п.words)}</b>`
     + `${п.note ? `<span>${esc(п.note)}</span>` : ""}<span>Каталог можно смотреть и собирать корзину — заказать получится после открытия.</span>`;
@@ -1278,13 +1309,20 @@ function renderCart() {
       : `<div class="freehint">До бесплатной доставки — ещё ${(freeFrom - total).toFixed(2)} ${CUR}</div>`;
   $("tab-cart").innerHTML = `<div class="clist">${rows}</div>${freeHtml}${upsHtml}
     <div class="checkoutbar">${coinsHtml}${totalLine}
-      ${паузаТочки(city) ? `<div class="pausenote">Точка закрыта ${esc(паузаТочки(city).words)} — корзина сохранится, оформить получится после открытия.</div>` : ""}
+      ${паузаТочки(city) ? `<div class="pausenote">Точка закрыта ${esc(паузаТочки(city).words)} — корзина сохранится, оформить получится после открытия.
+        <button type="button" class="linkbtn" id="pauseRecheck">↻ Проверить, открылась ли</button></div>` : ""}
       <button class="bigbtn" id="checkout"${паузаТочки(city) ? " disabled" : ""}>${паузаТочки(city) ? `Точка закрыта ${esc(паузаТочки(city).words)}` : `Оформить · ${payable.toFixed(2)} ${CUR}`}</button>
       ${docsReady() ? `<div class="termsnote">Оформляя заказ, вы соглашаетесь с
         <a id="termsOffer">офертой</a> и <a id="termsPrivacy">обработкой данных</a>.</div>` : ""}</div>`;
   bindCardButtons($("tab-cart"));
   if ($("useCoinsChk")) $("useCoinsChk").onchange = () => { useCoins = $("useCoinsChk").checked; renderCart(); };
   $("checkout").onclick = () => { if (!паузаТочки(city)) openDelivery(); };
+  if ($("pauseRecheck")) $("pauseRecheck").onclick = async () => {
+    $("pauseRecheck").disabled = true; $("pauseRecheck").textContent = "Проверяю…";
+    const ок = await перечитатьТочки(true);
+    if (ок === false) toast("Связи нет — не удалось проверить. Попробуйте ещё раз.");
+    else if (паузаТочки(city)) toast("Точка пока закрыта");
+  };
   // Ссылки рядом с кнопкой, а не в дальнем разделе: согласие, до которого надо
   // искать дорогу, согласием не является.
   if ($("termsOffer")) $("termsOffer").onclick = () => openDocs("offer");

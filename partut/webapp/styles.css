@@ -1351,3 +1351,5 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 .pauserow.closed b { color: var(--warn); }
 #pauseOverlay label { display: block; margin: 12px 0 4px; }
 #pauseChips { flex-wrap: wrap; }
+.pausenote .linkbtn { display: block; margin: 6px auto 0; background: none; border: 0; color: var(--accent); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; min-height: 32px; }
+.dwarn.staleall { margin: 0 0 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

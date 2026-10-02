@@ -539,8 +539,8 @@ function нарисоватьСписокТоваров() {
   const счёт = $("admCount");
   if (!shelf().length) {
     счёт.textContent = "";
-    $("adminList").innerHTML = `<p class="listempty">Товаров пока нет. Первый — кнопкой «✨ Новый товар» выше.</p>` + блокНигде() + блокАрхив();
-    привязатьНигде(); привязатьАрхив();
+    $("adminList").innerHTML = блокНесвежий() + `<p class="listempty">Товаров пока нет. Первый — кнопкой «✨ Новый товар» выше.</p>` + блокНигде() + блокАрхив();
+    привязатьНигде(); привязатьАрхив(); привязатьНесвежий();
     return;
   }
   const q = (admSearch || "").trim().toLowerCase();
@@ -564,16 +564,16 @@ function нарисоватьСписокТоваров() {
     const msg = admStockFilter === "out" ? "Ничего не кончилось — на всех точках есть остаток."
               : admStockFilter === "need" ? "Завозить нечего: везде больше " + LOW_STOCK + " шт."
               : "Ничего не найдено.";
-    $("adminList").innerHTML = `<p class="listempty">${msg}</p>` + блокНигде() + блокАрхив();
-    привязатьНигде(); привязатьАрхив();
+    $("adminList").innerHTML = блокНесвежий() + `<p class="listempty">${msg}</p>` + блокНигде() + блокАрхив();
+    привязатьНигде(); привязатьАрхив(); привязатьНесвежий();
     return;
   }
   // Точку пишем в строке, только когда в списке все точки сразу. Выбран один
   // город или продавец ведёт свою точку — «Минск» в каждой строке ничего не
   // сообщает, а место под сведения на узком телефоне дорого.
   const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
-  $("adminList").innerHTML = list.map(p => строкаТовара(p, сТочкой)).join("") + блокНигде() + блокАрхив();
-  привязатьНигде(); привязатьАрхив();
+  $("adminList").innerHTML = блокНесвежий() + list.map(p => строкаТовара(p, сТочкой)).join("") + блокНигде() + блокАрхив();
+  привязатьНигде(); привязатьАрхив(); привязатьНесвежий();
   $("adminList").querySelectorAll("[data-price]").forEach(b => b.onclick = () => открытьЦену(+b.dataset.price));
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
@@ -591,7 +591,7 @@ function блокНигде() {
   // Архив не подтверждён последней загрузкой — сказать «нигде» нельзя: товар
   // может лежать там. Прежний архив не спасает: товар, убранный в архив
   // после него, в нём ещё не числится (приёмка AR-02 и её перепроверка).
-  if (архивСостояние !== "ok") return "";
+  if (архивСостояние !== "ok" || !админСписокСвеж) return "";
   const стоят = new Set([...shelf(), ...архивТоваров].map(p => p.model_id).filter(Boolean));
   const нигде = models.filter(m => !стоят.has(m.id)
     && (admCatFilter === "all" || m.category === admCatFilter)
@@ -616,6 +616,21 @@ function привязатьНигде() {
   список.querySelectorAll("[data-nwin]").forEach(b => b.onclick = () => openStockIn(+b.dataset.nwin));
   список.querySelectorAll("[data-nwdesc]").forEach(b => b.onclick = () => открытьОписание(+b.dataset.nwdesc));
   список.querySelectorAll("[data-nwdel]").forEach(b => b.onclick = () => delModel(+b.dataset.nwdel));
+}
+
+// Список или архив не обновились — сказать над списком и дать повторить ВСЁ
+// разом (приёмка AR-03: кнопка повтора была только у архива и перечитывала
+// только его, а при загрузившемся архиве её не было вовсе).
+function блокНесвежий() {
+  if (админСписокСвеж && архивСостояние !== "error") return "";
+  const что = !админСписокСвеж && архивСостояние === "error" ? "Список товаров и архив не обновились"
+    : !админСписокСвеж ? "Список товаров не обновился" : "Архив не обновился";
+  return `<div class="dwarn staleall">⚠️ ${что} — показан прежний, он мог устареть.
+    <button type="button" class="barbtn" id="admRetryAll">↻ Повторить</button></div>`;
+}
+function привязатьНесвежий() {
+  const b = $("admRetryAll");
+  if (b) b.onclick = async () => { b.disabled = true; b.textContent = "Загружаю…"; await послеАрхива(); };
 }
 
 // Архив — внизу списка, свёрнутым: «больше не возим» не должно мешать работе
@@ -664,8 +679,7 @@ function привязатьАрхив() {
   const повтор = $("admArchiveRetry");
   if (повтор) повтор.onclick = async () => {
     повтор.disabled = true; повтор.textContent = "Загружаю…";
-    await загрузитьАрхив();
-    renderAdminList();
+    await послеАрхива();                 // всё разом: и товары точек, и архив
   };
   const блок = $("admArchive");
   if (!блок) return;
@@ -1997,7 +2011,7 @@ async function архивПост(путь, тело) {
   const перечитал = await послеАрхива();
   alertMsg("Ответ сервера не дошёл — не знаю, получилось ли. " + (перечитал
     ? "Список обновлён: посмотрите, где товар сейчас."
-    : "Обновить список тоже не вышло — проверьте связь и нажмите «↻ Повторить» у архива."));
+    : "Обновить список тоже не вышло — проверьте связь и нажмите «↻ Повторить» над списком."));
   return null;
 }
 

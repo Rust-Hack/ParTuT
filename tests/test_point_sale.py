@@ -117,3 +117,93 @@ def run():
 
     _чисто()
     return c.fails
+
+
+def run_отмена_удалённого_вкуса():
+    """PS-02: вкус из чека удалили — отмена не «возвращает» штуки в пустоту.
+    Многострочный чек: одна плохая строка — не меняется ничего."""
+    c = Checker("Отмена продажи: вкуса больше нет")
+    _чисто(); as_admin()
+    mid = db.add_model("accessories", "QA Кабель", "QA", "", {}, ["Black", "White"])
+    кабель = db.create_point_product(mid, "Минск", 10.0, 5.0, variants=[{"flavor": "Black", "stock": 2},
+                                                                        {"flavor": "White", "stock": 1}])
+    зарядка = db.create_point_product(db.add_model("accessories", "QA Зарядка 2"), "Минск", 15.0, 5.0, stock=3)
+    d = _продать("Минск", [{"id": кабель, "flavor": "Black", "qty": 2, "price": 10},
+                           {"id": зарядка, "qty": 1, "price": 15}]).get_json()
+    r = client.post("/api/admin/product/variants/change", json={"initData": "x", "id": кабель, "add": [], "remove": ["Black"]})
+    c(f"Black (0 шт) удалён из товара: {r.status_code}", r.status_code == 200
+      and [v["flavor"] for v in db.get_variants(кабель)] == ["White"])
+    r = client.post("/api/admin/sale/cancel", json={"initData": "x", "id": d["id"]})
+    о = r.get_json() or {}
+    c(f"отмена — отказ «варианта больше нет», с подсказкой: {о.get('message')!r}",
+      r.status_code == 409 and о.get("error") == "variant_missing" and "Black" in о.get("message", "") and "с 0 шт" in о.get("message", ""))
+    c("ничего не изменилось: продажа выдана, зарядка 2, White 1",
+      db.get_order(d["id"])["status"] == "issued" and db.get_product(зарядка)["stock"] == 2
+      and {v["flavor"]: v["stock"] for v in db.get_variants(кабель)} == {"White": 1})
+    # Совет выполнен — вариант вернули — отмена проходит, штуки на месте.
+    client.post("/api/admin/product/variants/change", json={"initData": "x", "id": кабель,
+                                                           "add": [{"flavor": "Black", "qty": 0}], "remove": []})
+    r = client.post("/api/admin/sale/cancel", json={"initData": "x", "id": d["id"]})
+    c("вариант вернули — отмена прошла, Black 2, зарядка 3",
+      r.status_code == 200 and {v["flavor"]: v["stock"] for v in db.get_variants(кабель)}.get("Black") == 2
+      and db.get_product(зарядка)["stock"] == 3)
+    _чисто()
+    return c.fails
+
+
+def run_отмена_и_архив_в_одну_секунду():
+    """PS-01: отмена продажи и «в архив» в одну секунду. Раньше архив
+    успевал между проверкой и возвратом — и 7 шт уходили на скрытую полку."""
+    import threading
+    from partut.db import orders as ordmod
+    c = Checker("Отмена продажи и архив в одну секунду")
+    _чисто(); as_admin()
+
+    def наперегонки(первый, второй, модуль, имя):
+        взял, отпустить, итоги, поток = threading.Event(), threading.Event(), {}, []
+        настоящее = getattr(модуль, имя)
+
+        def ждёт(*a, **kw):
+            р = настоящее(*a, **kw)
+            if threading.current_thread() is поток[0]:
+                взял.set(); отпустить.wait(5)
+            return р
+
+        def зап(к, f):
+            try:
+                итоги[к] = f()
+            except Exception as e:      # noqa: BLE001
+                итоги[к] = e
+        setattr(модуль, имя, ждёт)
+        try:
+            т1 = threading.Thread(target=зап, args=("1", первый)); поток.append(т1); т1.start()
+            assert взял.wait(5)
+            т2 = threading.Thread(target=зап, args=("2", второй)); т2.start()
+            т2.join(0.5); ждал = т2.is_alive()
+            отпустить.set(); т1.join(10); т2.join(10)
+        finally:
+            setattr(модуль, имя, настоящее); отпустить.set()
+        return итоги.get("1"), итоги.get("2"), ждал
+
+    # Отмена первой: архив ждёт и видит вернувшиеся 7 шт — отказ.
+    p1 = db.create_point_product(db.add_model("accessories", "QA Гонка А"), "Минск", 10.0, 5.0, stock=7)
+    s1 = db.record_point_sale("Минск", [{"id": p1, "qty": 7, "price": 10}], 1, "qa")[0]
+    отмена, архив, ждал = наперегонки(lambda: db.cancel_point_sale(s1), lambda: db.archive_product(p1, True),
+                                      ordmod, "_запереть_чек")
+    c(f"архив ждал отмену: {ждал}", ждал)
+    c(f"отмена прошла, архив отказал «на полке 7»: {архив!r}",
+      not isinstance(отмена, Exception) and isinstance(архив, db.ArchiveRefused) and архив.code == "on_stock")
+    c("товар не в архиве, 7 шт на полке", not db.get_product(p1)["archived"] and db.get_product(p1)["stock"] == 7)
+
+    # Архив первым: отмена ждёт и видит архив — отказ, штуки не уходят на скрытую полку.
+    p2 = db.create_point_product(db.add_model("accessories", "QA Гонка Б"), "Минск", 10.0, 5.0, stock=7)
+    s2 = db.record_point_sale("Минск", [{"id": p2, "qty": 7, "price": 10}], 1, "qa")[0]
+    архив, отмена, ждал = наперегонки(lambda: db.archive_product(p2, True), lambda: db.cancel_point_sale(s2),
+                                      db, "open_orders_with_product")
+    c(f"отмена ждала архив: {ждал}", ждал)
+    c(f"архив прошёл, отмена отказала «в архиве»: {отмена!r}",
+      isinstance(архив, dict) and архив["changed"] and isinstance(отмена, db.PointSaleRefused) and отмена.code == "archived")
+    c("в архиве с остатком 0, продажа не отменена",
+      db.get_product(p2)["archived"] == 1 and db.get_product(p2)["stock"] == 0 and db.get_order(s2)["status"] == "issued")
+    _чисто()
+    return c.fails
