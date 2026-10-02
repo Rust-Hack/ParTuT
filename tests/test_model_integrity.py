@@ -204,6 +204,27 @@ def run_двойник_на_той_же_точке():
     c("на точке одна строка модели",
       [p["id"] for p in db.get_all_products() if p["model_id"] == mid and p["city"] == "Минск"] == [есть])
 
+    # LM-04: совет из отказа выполняется буквально — и ничего не теряет.
+    # Раньше он звал удалить старый товар и обещал, что отзывы сохранятся, а
+    # удаление стирало отзыв: к модели он не привязан, привязки ведь не было.
+    db.ensure_user(9401)
+    отзыв = db.add_review(старый, 9401, 5, "Хороший, беру второй раз")
+    db.set_review_status(отзыв, "approved")
+    r = client.post("/api/admin/product/to-model", json={"initData": "x", "id": старый})
+    совет = (r.get_json() or {}).get("message") or ""
+    c(f"LM-04: совет не зовёт удалять и не обещает сохранить отзывы: {совет!r}",
+      "удалите" not in совет and "сохранятся" not in совет and "Не удаляйте" in совет)
+    c("LM-04: совет называет, что унесло бы удаление: отзывы (1)", "отзывы (1)" in совет)
+    c("LM-04: совет — снять с витрины", "Снять с витрины" in совет)
+    шаги = [client.post("/api/admin/stock/move", json={"initData": "x", "id": старый, "qty": 4, "reason": "lost"}),
+            client.post("/api/admin/stock/move", json={"initData": "x", "id": есть, "qty": 4, "reason": "in"}),
+            client.post("/api/admin/product/update", json={"initData": "x", "id": старый, "field": "hidden", "value": 1})]
+    c(f"шаги совета прошли: {[ш.status_code for ш in шаги]}", all(ш.status_code == 200 for ш in шаги))
+    c("остаток перенесён: старый 0, модель 6",
+      db.get_product(старый)["stock"] == 0 and db.get_product(есть)["stock"] == 6)
+    c("старого товара нет на витрине", not any(x["id"] == старый for x in client.get("/api/products").get_json()))
+    c("LM-04: отзыв на месте", [x["id"] for x in db.list_reviews(старый)] == [отзыв])
+
     # Двойник на ДРУГОЙ точке привязывается как раньше.
     туров = db.add_product("Туров", "accessories", "qa дубль", 22, 1, cost=12, brand="qa brand")
     r = client.post("/api/admin/product/to-model", json={"initData": "x", "id": туров})
