@@ -704,6 +704,7 @@ def init_db():
     _ensure_stock_move_columns()  # ключ попытки у движения склада — против двойного прихода
     _ensure_price_rev_column()    # номер версии цены — против перестановки запросов
     _ensure_publish_tables()      # новый товар одним маршрутом: фото черновика и ключи публикаций
+    _ensure_location_pause_columns()  # точку закрывают на время — продавца нет на месте
     _ensure_category_columns()  # has_flavors у категорий
     _ensure_photo_columns()     # галерея у модели, а не у товара
     _migrate("0001-модели-собраны-из-товаров", models_seeded_from_products)
@@ -977,6 +978,26 @@ def _ensure_stock_move_columns():
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS stock_moves_client_token_uniq "
                 "ON stock_moves (client_token) "
                 "WHERE client_token IS NOT NULL AND client_token <> ''")
+    conn.commit()
+    conn.close()
+
+
+def _ensure_location_pause_columns():
+    """Точка закрыта на время (db.shop.pause_location): продавца нет на месте.
+    closed_until — время магазина «ГГГГ-ММ-ДД ЧЧ:ММ», пусто — пока не откроют.
+    Имя без «_at»/«_time»: такие колонки разовый перевод истории на время
+    магазина считает своими (см. _TIME_COL), а эта сразу пишется в нём."""
+    conn = connect()
+    cur = conn.cursor()
+    cols = _table_columns(cur, "locations")
+    if "closed" not in cols:
+        cur.execute("ALTER TABLE locations ADD COLUMN closed INTEGER DEFAULT 0")
+    if "closed_until" not in cols:
+        cur.execute("ALTER TABLE locations ADD COLUMN closed_until TEXT")
+    if "closed_note" not in cols:
+        cur.execute("ALTER TABLE locations ADD COLUMN closed_note TEXT")
+    if "closed_by" not in cols:
+        cur.execute("ALTER TABLE locations ADD COLUMN closed_by BIGINT")
     conn.commit()
     conn.close()
 
@@ -2721,6 +2742,8 @@ from partut.db.shop import (                                            # noqa: 
     seed_locations, get_locations, location_names, get_location,            # noqa: F401
     add_location, delete_location, count_products_in_location,              # noqa: F401
     rename_location,                                                        # noqa: F401
+    location_pause, pause_location, open_location, reopen_due_locations,    # noqa: F401
+    пауза_словами,                                                          # noqa: F401
     get_pickup_points, all_pickup_points, add_pickup_point,                 # noqa: F401
     update_pickup_point, delete_pickup_point,                               # noqa: F401
     _category_code, seed_categories, seed_category_specs,                   # noqa: F401

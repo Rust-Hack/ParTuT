@@ -210,6 +210,8 @@ _WRITE_PATHS = {
     "/api/admin/product/archive": _ТОВАРЫ, "/api/admin/model/archive": _ТОВАРЫ,
     # Продажа на точке меняет остаток (витрина) и выручку (статистика).
     "/api/admin/sale": _ТОВАРЫ, "/api/admin/sale/cancel": _ТОВАРЫ,
+    # Пауза точки — в списке точек (покупатель видит «закрыта до …»).
+    "/api/admin/pause": ("locations",), "/api/admin/pause/open": ("locations",),
     "/api/admin/photo": _ТОВАРЫ, "/api/admin/photo/add": _ТОВАРЫ, "/api/admin/photo/delete": _ТОВАРЫ,
     # Оценка живёт в карточке товара, поэтому её публикация обновляет витрину.
     "/api/admin/review/decide": _ТОВАРЫ, "/api/admin/review/delete": _ТОВАРЫ,

@@ -911,7 +911,27 @@ def _close_raffle():
     notifications.close_expired_raffle(bot)
 
 
+def _reopen_paused_points():
+    """Точки, закрытые «до 18:00», открываются сами, когда время прошло.
+
+    Само открытие от этого шага не зависит: оформление заказа сверяет время
+    открытия с часами (db.location_pause), а экран покупателя — со своими.
+    Шаг снимает пометку, сбрасывает кэш списка точек и говорит тем, кому
+    важно: продавцам точки и владельцу. Возвращает открытые точки."""
+    from partut import cache
+    открыты = db.reopen_due_locations()
+    if открыты:
+        cache.bust("locations")
+    for r in открыты:
+        адресаты = set(db.staff_ids_by_city().get(r["name"], set())) | set(config.SUPER_ADMIN_IDS)
+        for uid in адресаты:
+            _safe_send(uid, f"▶️ Точка «{r['name']}» снова открыта — время закрытия вышло. "
+                            "Покупатели снова могут оформлять заказы.")
+    return открыты
+
+
 _BACKGROUND_STEPS = [
+    ("открытие точек по времени", _reopen_paused_points),
     ("напоминания продавцам", _remind_sellers),
     ("авто-отмена неоплаченных", _expire_unpaid_orders),
     ("сводка дня", _maybe_send_daily_summary),

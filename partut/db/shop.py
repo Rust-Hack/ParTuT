@@ -556,6 +556,86 @@ def get_locations():
     return rows
 
 
+def _закрыта_сейчас(row, сейчас=None):
+    """Строка точки закрыта прямо сейчас? Время открытия прошло — уже открыта,
+    даже если ночная уборка ещё не сняла пометку: правильность не зависит от
+    того, успел ли сработать фон."""
+    if not row or not row["closed"]:
+        return False
+    до = row["closed_until"]
+    return not до or (сейчас or db.shop_now().strftime("%Y-%m-%d %H:%M")) < до
+
+
+def location_pause(name):
+    """Точка закрыта сейчас — {"until": "ГГГГ-ММ-ДД ЧЧ:ММ" или "", "note"}; открыта — None."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("SELECT * FROM locations WHERE name = %s"), (name,))
+    row = cur.fetchone()
+    conn.close()
+    if not _закрыта_сейчас(row):
+        return None
+    return {"until": row["closed_until"] or "", "note": row["closed_note"] or "", "by": row["closed_by"]}
+
+
+def пауза_словами(пауза):
+    """«до 18:00», «до 3.10 18:00» или «пока не откроют» — для покупателя и уведомлений."""
+    до = (пауза or {}).get("until") or ""
+    if not до:
+        return "пока не откроют"
+    сегодня = db.shop_now().strftime("%Y-%m-%d")
+    день, время = до[:10], до[11:16]
+    if день == сегодня:
+        return f"до {время}"
+    return f"до {int(день[8:10])}.{день[5:7]} {время}"
+
+
+def pause_location(name, until, note, admin_id):
+    """Закрыть точку до until (время магазина) или, если пусто, пока не откроют.
+    Возвращает True, если такая точка есть."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("UPDATE locations SET closed = 1, closed_until = %s, closed_note = %s, closed_by = %s "
+                      "WHERE name = %s"), (until or None, (note or "").strip()[:120] or None, admin_id, name))
+    есть = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return есть
+
+
+def open_location(name):
+    """Открыть точку. Возвращает прежнюю паузу ({"until", "note", "by"}) или None, если не была закрыта."""
+    было = location_pause(name)
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("UPDATE locations SET closed = 0, closed_until = NULL, closed_note = NULL, closed_by = NULL "
+                      "WHERE name = %s"), (name,))
+    conn.commit()
+    conn.close()
+    return было
+
+
+def reopen_due_locations():
+    """Точки, чьё время открытия прошло, — снять пометку и вернуть их (для
+    уведомлений). Снимаем условно, по одной: два экземпляра сервиса при
+    выкатке не уведомят дважды."""
+    сейчас = db.shop_now().strftime("%Y-%m-%d %H:%M")
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("SELECT * FROM locations WHERE closed = 1 AND closed_until IS NOT NULL AND closed_until <= %s"),
+                (сейчас,))
+    кандидаты = [dict(r) for r in cur.fetchall()]
+    открыты = []
+    for r in кандидаты:
+        cur.execute(db._q("UPDATE locations SET closed = 0, closed_until = NULL, closed_note = NULL, closed_by = NULL "
+                          "WHERE id = %s AND closed = 1 AND closed_until = %s"), (r["id"], r["closed_until"]))
+        if cur.rowcount > 0:
+            открыты.append(r)
+    conn.commit()
+    conn.close()
+    return открыты
+
+
 def location_names():
     """Список названий локаций — для проверок и справочников."""
     return [r["name"] for r in get_locations()]

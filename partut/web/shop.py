@@ -11,7 +11,10 @@ partut/web/shop.py — устройство магазина: точки, спо
 импортируются напрямую — это внешние библиотеки, а не состояние сервера.
 """
 
-from flask import Blueprint, jsonify, request
+import calendar
+import datetime
+
+from flask import Blueprint, g, jsonify, request
 
 from partut import config
 from partut import cache
@@ -40,13 +43,132 @@ def _delivery_json(m):
     }
 
 
+def _пауза_точки(r):
+    """Сведения о паузе точки для экрана покупателя, или None.
+
+    Список точек кэшируется на 5 минут, поэтому «закрыта ли СЕЙЧАС» здесь не
+    решается: отдаём время открытия в миллисекундах UTC, и телефон сам
+    сравнивает его со своими часами. Окончательно решает оформление заказа
+    (db.location_pause) — по часам сервера."""
+    if not r["closed"]:
+        return None
+    до = r["closed_until"] or ""
+    if до and до <= db.shop_now().strftime("%Y-%m-%d %H:%M"):
+        return None
+    мс = None
+    if до:
+        utc = datetime.datetime.strptime(до, "%Y-%m-%d %H:%M") - datetime.timedelta(hours=db.SHOP_TZ_OFFSET)
+        мс = calendar.timegm(utc.timetuple()) * 1000
+    return {"until": до, "until_ms": мс, "words": db.пауза_словами({"until": до}), "note": r["closed_note"] or ""}
+
+
 @bp.route("/api/locations")
 def api_locations():
     cached = cache.get("locations")
     if cached is None:
         cached = cache.put("locations",
-                            [{"id": r["id"], "name": r["name"]} for r in db.get_locations()], 300)
+                            [{"id": r["id"], "name": r["name"], "closed": _пауза_точки(r)} for r in db.get_locations()], 300)
     return cache.json_etag(cached)
+
+
+# ----- Точка закрыта на время -----
+# Продавца нет на месте — он закрывает точку: покупатели видят «закрыта до
+# 18:00» и не оформляют заказ (решение владельца 2.10.2026). Маршрут —
+# /api/admin/pause, а не /api/admin/location/…: тот префикс — владельцу, а
+# закрыть свою точку — дело продавца.
+def _кому_сказать(city, кто_сделал):
+    """Владелец узнаёт, когда точку закрыл или открыл продавец; продавцы
+    точки — когда это сделал владелец. Себе не пишем."""
+    продавцы = db.staff_ids_by_city().get(city, set())
+    сделал_владелец = is_super_admin(int(кто_сделал))
+    адресаты = set(продавцы) if сделал_владелец else set(SUPER_ADMIN_IDS)
+    return [u for u in адресаты if int(u) != int(кто_сделал)]
+
+
+def _сказать(адресаты, текст):
+    for uid in адресаты:
+        tgsend.bg(tgsend.notify_client, uid, текст)
+
+
+@bp.route("/api/admin/pause", methods=["POST"])
+def api_admin_pause():
+    """Закрыть точку: на minutes минут, до at («ЧЧ:ММ», сегодня или завтра, если
+    это время уже прошло) или, без обоих, пока не откроют."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    # Прислали точку — её и проверяем (чужую продавцу — 403, а не молча
+    # свою); не прислали — своя точка продавца.
+    city = inputs._text(data.get("city")) or admin.get("city") or ""
+    if city not in db.location_names():
+        return jsonify({"ok": False, "error": "bad_city", "message": "Выберите точку."}), 400
+    deny = auth.deny_city(admin, city)
+    if deny:
+        return deny
+    сейчас = db.shop_now().replace(second=0, microsecond=0)
+    минут, во = inputs.целое(data.get("minutes")), inputs._text(data.get("at"))
+    if минут is not None:
+        if not 1 <= минут <= 7 * 24 * 60:
+            return jsonify({"ok": False, "error": "bad_time", "message": "Не дольше недели."}), 400
+        до = сейчас + datetime.timedelta(minutes=минут)
+    elif во:
+        try:
+            ч, м = (int(x) for x in во.split(":"))
+            до = сейчас.replace(hour=ч, minute=м)
+        except (ValueError, TypeError):
+            return jsonify({"ok": False, "error": "bad_time", "message": "Время — как 18:00."}), 400
+        if до <= сейчас:
+            до += datetime.timedelta(days=1)             # «до 10:00» вечером — это завтра утром
+    else:
+        до = None
+    до_текст = до.strftime("%Y-%m-%d %H:%M") if до else ""
+    заметка = inputs._text(data.get("note"), 120)
+    db.pause_location(city, до_текст, заметка, int(admin["id"]))
+    слова = db.пауза_словами({"until": до_текст})
+    g.log_note = f"точка «{city}» закрыта {слова}" + (f" ({заметка})" if заметка else "")
+    _сказать(_кому_сказать(city, admin["id"]),
+             f"⏸ Точка «{city}» закрыта {слова}" + (f" — {заметка}" if заметка else "")
+             + f". Закрыл(а): {auth._admin_display(admin)}. Покупатели видят каталог, но заказать не могут.")
+    return jsonify({"ok": True, "closed": {"until": до_текст, "words": слова, "note": заметка}})
+
+
+@bp.route("/api/admin/pause/open", methods=["POST"])
+def api_admin_pause_open():
+    """Открыть точку раньше времени."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    # Прислали точку — её и проверяем (чужую продавцу — 403, а не молча
+    # свою); не прислали — своя точка продавца.
+    city = inputs._text(data.get("city")) or admin.get("city") or ""
+    if city not in db.location_names():
+        return jsonify({"ok": False, "error": "bad_city", "message": "Выберите точку."}), 400
+    deny = auth.deny_city(admin, city)
+    if deny:
+        return deny
+    было = db.open_location(city)
+    if было:
+        g.log_note = f"точка «{city}» открыта"
+        _сказать(_кому_сказать(city, admin["id"]), f"▶️ Точка «{city}» снова открыта. Открыл(а): {auth._admin_display(admin)}.")
+    return jsonify({"ok": True, "was_closed": bool(было)})
+
+
+@bp.route("/api/admin/pauses", methods=["POST"])
+def api_admin_pauses():
+    """Какие точки сейчас закрыты — для «Управления». Продавцу — своя."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    свои = [admin["city"]] if admin.get("city") else db.location_names()
+    out = []
+    for name in свои:
+        п = db.location_pause(name)
+        out.append({"city": name, "closed": ({"until": п["until"], "words": db.пауза_словами(п), "note": п["note"]}
+                                             if п else None)})
+    return jsonify({"ok": True, "points": out})
 
 
 @bp.route("/api/rules")
