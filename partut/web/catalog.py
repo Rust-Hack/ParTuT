@@ -21,6 +21,7 @@ from flask import Blueprint, g, jsonify, request
 
 from partut import cache
 from partut.web import auth
+from partut import channel
 from partut import db
 from partut.web import photos
 from partut.integrations import tgsend
@@ -1141,6 +1142,19 @@ def api_admin_product_publish():
         части.append(f"{т['city']} — {т['price']:.2f} Br, первый приход {штук} шт")
     g.log_note = (f"Новый товар «{имя}»" + (f" · {бренд}" if бренд else "") + ": " + "; ".join(части)
                   + (" (повтор, второй раз не создан)" if итог.get("replay") else ""))
+    # Новый товар с первым приходом — тоже «📦 Поступление» для канала (по
+    # точкам; без штук — нечего объявлять). Повтор — не новое поступление.
+    if not итог.get("replay"):
+        пришло = []
+        for т in итог.get("products") or []:
+            варианты = db.get_variants(т["id"])
+            if варианты:
+                пришло += [(т["id"], v["flavor"], int(v["stock"] or 0)) for v in варианты]
+            else:
+                p_ = db.get_product(т["id"])
+                пришло.append((т["id"], None, int(p_["stock"] or 0) if p_ else 0))
+        if any(x[2] > 0 for x in пришло):
+            tgsend.bg(channel.предложить_поступление, пришло)
     return jsonify({"ok": True, **итог})
 
 

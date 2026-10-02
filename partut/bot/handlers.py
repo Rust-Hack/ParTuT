@@ -270,6 +270,11 @@ def on_button(call):
     chat_id = call.message.chat.id if call.message else call.from_user.id   # message=None для старых (>48ч)
     user_id = call.from_user.id
 
+    # Пост для канала: «📣 В канал» / «Не надо» — решает владелец (partut/channel.py).
+    if data.startswith(("chpost:", "chskip:")):
+        handle_channel_post(call, chat_id, user_id, data)
+        return
+
     # Подтверждение заявок обычных админов — только супер-админ.
     if data.startswith("areq:"):
         handle_approval(call, user_id, data)
@@ -489,6 +494,33 @@ def handle_admin_callback(call, chat_id, user_id, data):
         bot.send_message(chat_id, f"🗄 «{product['name']}» в архиве.")
         show_admin_list(chat_id, user_id)
         return
+
+
+def handle_channel_post(call, chat_id, user_id, data):
+    """Владелец решил судьбу поста для канала. Только владелец: публикация —
+    от имени магазина. Кнопки под предложением снимаем, итог — словами."""
+    from partut import channel
+    if not is_super_admin(user_id):
+        bot.answer_callback_query(call.id, "Публикует в канал только владелец.", show_alert=True)
+        return
+    try:
+        post_id = int(data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id)
+        return
+    if data.startswith("chskip:"):
+        channel.отказаться(post_id, user_id)
+        ок, текст_ = True, "Не публикуем."
+    else:
+        ок, текст_ = channel.опубликовать(post_id, user_id, bot)
+    bot.answer_callback_query(call.id, текст_[:190], show_alert=not ок)
+    try:
+        if call.message:
+            bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+    if not ок:
+        bot.send_message(chat_id, текст_)
 
 
 def _my_product(user_id, product_id):
@@ -922,7 +954,9 @@ def _reopen_paused_points():
     открыты = db.reopen_due_locations()
     if открыты:
         cache.bust("locations")
+    from partut import channel
     for r in открыты:
+        channel.точка_открыта(r["name"], bot)        # пост о закрытии в канале — «снова открыта»
         адресаты = set(db.staff_ids_by_city().get(r["name"], set())) | set(config.SUPER_ADMIN_IDS)
         for uid in адресаты:
             _safe_send(uid, f"▶️ Точка «{r['name']}» снова открыта — время закрытия вышло. "

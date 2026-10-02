@@ -18,6 +18,7 @@ from flask import Blueprint, g, jsonify, request
 
 from partut import config
 from partut import cache
+from partut import channel
 from partut.web import auth
 from partut import db
 from partut.web import shopinfo
@@ -130,6 +131,8 @@ def api_admin_pause():
     _сказать(_кому_сказать(city, admin["id"]),
              f"⏸ Точка «{city}» закрыта {слова}" + (f" — {заметка}" if заметка else "")
              + f". Закрыл(а): {auth._admin_display(admin)}. Покупатели видят каталог, но заказать не могут.")
+    # Пост «⏸ Точка закрыта» для канала — владельцу с кнопкой «📣 В канал».
+    tgsend.bg(channel.предложить_паузу, city, слова, заметка)
     return jsonify({"ok": True, "closed": {"until": до_текст, "words": слова, "note": заметка}})
 
 
@@ -151,6 +154,7 @@ def api_admin_pause_open():
     было = db.open_location(city)
     if было:
         g.log_note = f"точка «{city}» открыта"
+        tgsend.bg(channel.точка_открыта, city)       # пост о закрытии в канале — «снова открыта»
         _сказать(_кому_сказать(city, admin["id"]), f"▶️ Точка «{city}» снова открыта. Открыл(а): {auth._admin_display(admin)}.")
     return jsonify({"ok": True, "was_closed": bool(было)})
 

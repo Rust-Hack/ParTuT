@@ -16,8 +16,10 @@ import re
 from flask import Blueprint, g, jsonify, request
 
 from partut.web import auth
+from partut import channel
 from partut import db
 from partut import inputs
+from partut.integrations import tgsend
 
 # Маршруты объявляются на Blueprint, а не на приложении: так этот модуль
 # НЕ импортирует server, и граф зависимостей остаётся деревом.
@@ -224,6 +226,14 @@ def api_admin_stock_move_batch():
                               "id": item.get("id"), "flavor": вкус}
     g.log_note = (f"Пачкой ({len(done)} из {len(items)}): " + "; ".join(журнал)
                   + (f" · не прошло {len(failed)}" if failed else ""))
+    # Проведённая поставка — повод для поста «📦 Поступление» в канал:
+    # владельцу уходит готовый текст с кнопкой «📣 В канал» (partut/channel.py).
+    # Повтор уже записанного (replay) — не новое поступление.
+    if reason == "in" and общая_заметка == "поставка":
+        пришло = [(int(d["id"]), d.get("flavor") or None, int(d.get("delta") or 0))
+                  for d in done if not d.get("replay") and d.get("id") is not None]
+        if пришло:
+            tgsend.bg(channel.предложить_поступление, пришло)
     return jsonify({"ok": True, "done": done, "failed": failed})
 
 

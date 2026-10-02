@@ -705,6 +705,7 @@ def init_db():
     _ensure_price_rev_column()    # номер версии цены — против перестановки запросов
     _ensure_publish_tables()      # новый товар одним маршрутом: фото черновика и ключи публикаций
     _ensure_location_pause_columns()  # точку закрывают на время — продавца нет на месте
+    _ensure_channel_tables()      # черновики постов для канала: публикует владелец
     _ensure_category_columns()  # has_flavors у категорий
     _ensure_photo_columns()     # галерея у модели, а не у товара
     _migrate("0001-модели-собраны-из-товаров", models_seeded_from_products)
@@ -2723,6 +2724,11 @@ from partut.db.games import (                                          # noqa: E
     do_slot_spin, get_game_stats,                                           # noqa: F401
 )
 
+from partut.db.channel import (                                         # noqa: E402
+    _ensure_channel_tables, get_channel_post, offer_channel_post,           # noqa: F401
+    decide_channel_post, claim_channel_post, finish_channel_post,           # noqa: F401
+    posted_pause_post, close_pause_posts, ПОСТУПЛЕНИЕ_ОКНО_ЧАСОВ,            # noqa: F401
+)
 from partut.db.raffles import (                                        # noqa: E402
     _RAFFLE_EDITABLE, _ensure_raffle_columns, _ensure_raffle_uniques,       # noqa: F401
     get_active_raffle, get_last_finished_raffle, recent_finished_raffle,    # noqa: F401
