@@ -227,8 +227,8 @@ function renderModelFlavors() {
 $("mdFlavorAdd").onclick = () => {
   const v = $("mdFlavorInput").value.trim();
   if (!v) return;
-  v.split(",").map(x => x.trim()).filter(Boolean).forEach(f => {
-    if (!modelFlavors.some(x => x.toLowerCase() === f.toLowerCase())) modelFlavors.push(f);
+  разобратьСписок(v).forEach(f => {          // «0,6 Ом» — одно значение, не два
+    if (!modelFlavors.some(x => ключВарианта(x) === ключВарианта(f))) modelFlavors.push(f);
   });
   $("mdFlavorInput").value = ""; renderModelFlavors();
 };

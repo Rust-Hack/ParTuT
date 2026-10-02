@@ -278,6 +278,21 @@ function confirmMsg(question, onYes) {
 }
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+// ---------- Список вариантов из одной строки ----------
+// Варианты вставляют списком: «Мята, Арбуз» или каждый с новой строки. Но
+// запятая бывает и десятичной: «0,6 Ом» — одно сопротивление, а не «0» и
+// «6 Ом» (приёмка NP-02: из «0,6» и «0,8» получалось «0», «6», «8»).
+// Запятая между двумя цифрами — часть числа; разделители — новая строка,
+// «;» и остальные запятые. Без «(?<=…)» в регулярке: на старых iPhone она
+// не разбирается, и вместе с ней падал бы весь скрипт приложения.
+const _ДЕС = "\u0001";
+function разобратьСписок(текст) {
+  return String(текст || "").replace(/(\d),(?=\d)/g, "$1" + _ДЕС).split(/[,;\n]+/)
+    .map(x => x.split(_ДЕС).join(",").replace(/\s+/g, " ").trim()).filter(Boolean);
+}
+// Ключ для поиска повторов: «Мята» = «мята», «0,6 Ом» = «0.6 ом».
+const ключВарианта = (f) => String(f || "").toLowerCase().replace(/(\d),(?=\d)/g, "$1.").replace(/\s+/g, " ").trim();
+
 // Единый индикатор ожидания данных: крутящееся кольцо вместо голого слова
 // «Загрузка…» — тот же экран, но видно, что приложение работает, а не зависло.
 const loaderHtml = (text) => `<div class="loader-inline"><span class="loader-ring"></span><span>${esc(text || "Загрузка…")}</span></div>`;
@@ -530,7 +545,7 @@ function showCityGate() {
 }
 
 async function pickCity(next) {
-  if (!await админПост("/api/set-city", { city: next }, "выбрать город")) return;
+  if (!await админПост("/api/set-city", { city: next, chosen_at: Date.now(), device: этотТелефон() }, "выбрать город")) return;
   city = next; me.city = next;
   $("pointName").textContent = city;
   $("cityView").classList.remove("show");
@@ -1072,28 +1087,66 @@ $("searchInput").oninput = (e) => {
 // телефоне и досылается при следующем запуске: иначе приложение открылось бы
 // на старой точке, а корзина новой молча пропала бы.
 const ТОЧКА_ЖДЁТ = "partut_city_pending_v1";
-function запомнитьТочку(next) {
-  try { localStorage.setItem(ТОЧКА_ЖДЁТ, next); } catch (e) { /* без хранилища — просто без досылки */ }
-  const снять = () => { try { if (localStorage.getItem(ТОЧКА_ЖДЁТ) === next) localStorage.removeItem(ТОЧКА_ЖДЁТ); } catch (e) {} };
+// Каждый выбор — со временем, когда он сделан, и меткой этого телефона:
+// запросы приходят не по порядку, и поздний старый ответ перебивал новый
+// выбор (приёмка BR-01-R1). Сервер не применит выбор с того же телефона,
+// который старше записанного, а здесь «запомненную точку» меняет только
+// ответ на последний выбор.
+const _ТЕЛЕФОН = "partut_device_v1";
+let _телефонСессии = null, последнийВыбор = null;
+function этотТелефон() {
+  const новый = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  try {
+    let id = localStorage.getItem(_ТЕЛЕФОН);
+    if (!id) { id = новый(); localStorage.setItem(_ТЕЛЕФОН, id); }
+    return id;
+  } catch (e) { return _телефонСессии || (_телефонСессии = новый()); }
+}
+// Ожидающий выбор: {city, at}. Прежний формат — просто название точки.
+function ждущаяТочка() {
+  try {
+    const v = localStorage.getItem(ТОЧКА_ЖДЁТ);
+    if (!v) return null;
+    if (v[0] !== "{") return { city: v, at: null };
+    const d = JSON.parse(v);
+    return d && d.city ? d : null;
+  } catch (e) { return null; }
+}
+function запомнитьТочку(next, at) {
+  const выбор = { city: next, at: at || Date.now() };
+  последнийВыбор = выбор;
+  try { localStorage.setItem(ТОЧКА_ЖДЁТ, JSON.stringify(выбор)); } catch (e) { /* без хранилища — просто без досылки */ }
+  const снять = () => {
+    const ж = ждущаяТочка();
+    if (ж && ж.city === выбор.city && ж.at === выбор.at) { try { localStorage.removeItem(ТОЧКА_ЖДЁТ); } catch (e) {} }
+  };
   return fetch("/api/set-city", { method: "POST", headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ initData, city: next }) })
+                                  body: JSON.stringify({ initData, city: next, chosen_at: выбор.at, device: этотТелефон() }) })
     .then(r => r.json().catch(() => null).then(d => {
-      // Запомнил — ждать нечего. Отказал (такой точки больше нет) — тоже:
-      // досылать бессмысленно. 5xx и недочитанный ответ — досылаем потом.
-      if (r.ok && d && d.ok) { снять(); if (me) me.city = next; }
-      else if (r.status >= 400 && r.status < 500) снять();
+      if (r.ok && d && d.ok) {
+        снять();
+        // Ответ на прежний выбор (пришёл позже нового) запомненную точку не меняет.
+        if (me && последнийВыбор === выбор && d.applied !== false) me.city = next;
+      } else if (r.status === 400 && d && d.error === "bad_input") {
+        снять();                                    // такой точки больше нет — досылать нечего
+      } else if (r.status === 401 || r.status === 403) {
+        // Вход истёк — это не «выбор не нужен» (приёмка BR-01-R2): выбор
+        // остаётся в телефоне и дошлётся, когда приложение откроют заново.
+        toast("Точка не запомнилась: вход устарел. Закройте приложение и откройте снова — выбор сохранится.");
+      }
+      // 5xx и недочитанный ответ — выбор ждёт в телефоне и дошлётся при следующем запуске.
     }))
     .catch(() => { /* выбор ждёт в телефоне и дошлётся при следующем запуске */ });
 }
 // При запуске: выбор, который сервер не успел запомнить, — главнее того, что
-// помнит сервер: он сделан позже. Показываем его и досылаем.
+// помнит сервер: он сделан позже. Показываем его и досылаем — с тем временем,
+// когда его сделали, а не с временем досылки.
 function применитьЖдущуюТочку() {
-  let ждёт = null;
-  try { ждёт = localStorage.getItem(ТОЧКА_ЖДЁТ); } catch (e) {}
+  const ждёт = ждущаяТочка();
   if (!ждёт || !me || !me.city) return;
-  if (ждёт === me.city) { try { localStorage.removeItem(ТОЧКА_ЖДЁТ); } catch (e) {} return; }
-  city = ждёт;
-  запомнитьТочку(ждёт);
+  if (ждёт.city === me.city) { try { localStorage.removeItem(ТОЧКА_ЖДЁТ); } catch (e) {} return; }
+  city = ждёт.city;
+  запомнитьТочку(ждёт.city, ждёт.at || undefined);
 }
 // новаяКорзина — что положить в корзину новой точки (повтор заказа); без
 // неё смена точки начинает корзину с чистого листа.

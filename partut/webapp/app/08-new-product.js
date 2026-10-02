@@ -33,6 +33,39 @@ let нтМестный = 0;                       // номер фото, пок
 const нтФайлы = new Map();               // фото без file_id → файл (только в этой сессии)
 const нтПревью = new Map();              // фото → картинка из самого файла, пока в этой сессии
 
+// Файлы фото, ещё не загруженные. В черновике фото живёт по file_id, но
+// только после загрузки; до неё у него есть лишь файл из браузера, а File
+// после перезапуска не восстановить. Приёмка NP-03: второе фото не
+// загрузилось, приложение перезапустили — и оно исчезло вместе с
+// «Повторить», а публикация уже не напоминала о нём. Поэтому сам файл лежит в
+// IndexedDB телефона до подтверждённой загрузки. Не удалось положить (нет
+// места, приватный режим) — запись о фото в черновике всё равно остаётся, и
+// экран просит выбрать его снова. Подменяется в тестах — поэтому let.
+let нтБлобы = (() => {
+  let база = null;
+  const открыть = () => база || (база = new Promise((готово, беда) => {
+    try {
+      const з = indexedDB.open("partut_newproduct_files", 1);
+      з.onupgradeneeded = () => з.result.createObjectStore("files");
+      з.onsuccess = () => готово(з.result);
+      з.onerror = () => беда(з.error);
+    } catch (e) { беда(e); }
+  }));
+  const сделать = (режим, работа) => открыть().then(б => new Promise((готово, беда) => {
+    const т = б.transaction("files", режим);
+    const з = работа(т.objectStore("files"));
+    т.oncomplete = () => готово(з.result);
+    т.onerror = т.onabort = () => беда(т.error);
+  }));
+  return {
+    положить: (ключ, файл) => сделать("readwrite", хр => хр.put(файл, ключ)),
+    взять: (ключ) => сделать("readonly", хр => хр.get(ключ)),
+    убрать: (ключ) => сделать("readwrite", хр => хр.delete(ключ)),
+  };
+})();
+const нтКлючФайла = (запись) => `${человек()}:${запись.local}`;
+const нтНовыйМестный = () => `l${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}${++нтМестный}`;
+
 // Исход публикации неизвестен: сервер упал, ответ оборвался. Ключ остаётся
 // в черновике — повтор с ним второй товар не создаст.
 class НтНеизвестно extends Error {}
@@ -62,8 +95,11 @@ function нтПрочитать() {
     const d = JSON.parse(localStorage.getItem(нтКлюч()) || "null");
     if (!d || !d.step || !Array.isArray(d.points) || !d.points.length) return null;
     return { ...нтНовый(), ...d,
-      photos: (Array.isArray(d.photos) ? d.photos : []).filter(f => f && f.file_id)
-        .map(f => ({ file_id: f.file_id, thumb: f.thumb || "", status: "ok" })),
+      // Незагруженное фото — запись без file_id: его файл ищем в телефоне
+      // (нтВосстановитьФото), а не выбрасываем молча (NP-03).
+      photos: (Array.isArray(d.photos) ? d.photos : []).filter(f => f && (f.file_id || f.local))
+        .map(f => f.file_id ? { file_id: f.file_id, thumb: f.thumb || "", status: "ok" }
+                            : { local: String(f.local), name: f.name || "", status: "restore" }),
       flavors: (Array.isArray(d.flavors) ? d.flavors : []).filter(f => typeof f === "string"),
       specs: d.specs && typeof d.specs === "object" ? d.specs : {},
       points: d.points.map(т => ({ ...нтТочка([]), ...т,
@@ -71,22 +107,24 @@ function нтПрочитать() {
   } catch (e) { return null; }            // испорченный черновик — начнём заново
 }
 
-// В черновик — только загруженные фото: то, что ещё грузится или не
-// загрузилось, после перезапуска всё равно не восстановить. Не сохраняется
-// вовсе (приватный режим, нет места) — говорим сразу: иначе человек закроет
-// приложение, надеясь на черновик, и потеряет всё.
+// Загруженное фото — в черновик по file_id; незагруженное — записью, а его
+// файл лежит в IndexedDB (см. нтБлобы). Не сохраняется вовсе (приватный
+// режим, нет места) — говорим сразу: иначе человек закроет приложение,
+// надеясь на черновик, и потеряет всё.
 function нтСохранить() {
   if (!нт) return;
   нт.updated = Date.now();
   try {
     localStorage.setItem(нтКлюч(), JSON.stringify({ ...нт,
-      photos: нт.photos.filter(f => f.file_id).map(f => ({ file_id: f.file_id, thumb: f.thumb || "" })) }));
+      photos: нт.photos.map(f => f.file_id ? { file_id: f.file_id, thumb: f.thumb || "" }
+                                            : { local: f.local, name: f.name || "" }) }));
     нтСохраняется = true;
   } catch (e) { нтСохраняется = false; }
   $("npSaveWarn").hidden = нтСохраняется;
 }
 function нтСтереть() {
   try { localStorage.removeItem(нтКлюч()); } catch (e) {}
+  for (const f of (нт ? нт.photos : [])) if (f.local && !f.file_id) нтБлобы.убрать(нтКлючФайла(f)).catch(() => {});
   for (const url of нтПревью.values()) { try { URL.revokeObjectURL(url); } catch (e) {} }
   нтПревью.clear(); нтФайлы.clear();
   нт = null; нтОшибка = null; нтЗаметкаВкусов = "";
@@ -121,7 +159,7 @@ async function openNewProduct() {
   const изТелефона = !нт;
   if (изТелефона) { $("npSteps").innerHTML = ""; $("npBody").innerHTML = loaderHtml(); $("npSum").textContent = ""; }
   await Promise.all([fetchModels(), fetchBrands()]);   // двойники и бренды — свежие
-  if (!нт) нт = нтПрочитать() || нтНовый();
+  if (!нт) { нт = нтПрочитать() || нтНовый(); нтВосстановитьФото(); }
   if (!$("npView").classList.contains("show")) return;  // закрыли, пока грузилось
   нтОшибка = null;
   нтНарисовать();
@@ -206,17 +244,18 @@ function нтФотоHtml() {
   const ячейки = нт.photos.map((f, i) => {
     const src = (f.local && нтПревью.get(f.local)) || f.thumb;
     const картинка = src ? `<img src="${esc(src)}" alt="Фото ${i + 1}" decoding="async">` : "";
-    const состояние = f.status === "failed" ? `<span class="npphstate bad" aria-hidden="true">⚠</span>
+    const состояние = f.status === "lost" ? `<span class="npphstate bad" aria-hidden="true">⚠</span><span class="npphlost">выберите снова</span>`
+      : f.status === "failed" ? `<span class="npphstate bad" aria-hidden="true">⚠</span>
         <button type="button" class="npretry" data-npretry="${i}" aria-label="Повторить загрузку фото ${i + 1}">Повторить</button>`
       : f.status !== "ok" ? `<span class="npphstate">загружаю…</span>` : "";
     const пометка = i === 0 ? `<b class="npmain">главное</b>`
       : f.status === "ok" ? `<button type="button" class="npstar" data-npmain="${i}" aria-label="Сделать фото ${i + 1} главным">★</button>` : "";
-    return `<div class="npph ${f.status || "ok"}">${картинка}${пометка}${состояние}
+    return `<div class="npph ${f.status === "lost" ? "failed lost" : f.status || "ok"}">${картинка}${пометка}${состояние}
       <button type="button" class="npdel" data-npdel="${i}" aria-label="Убрать фото ${i + 1}">✕</button></div>`;
   }).join("");
   const добавить = нт.photos.length < НТ_МАКС_ФОТО
     ? `<button type="button" class="npadd" id="npAddPhoto"><b>＋</b>фото</button>` : "";
-  const сбой = нт.photos.find(f => f.status === "failed" && f.error);
+  const сбой = нт.photos.find(f => (f.status === "failed" || f.status === "lost") && f.error);
   return ячейки + добавить + (сбой ? `<div class="dlverr npphotoerr">${esc(сбой.error)}</div>` : "");
 }
 
@@ -252,8 +291,8 @@ function нтБрендСправочника() {
 function нтВкусыБренда() {
   const бренд = нтБрендСправочника();
   if (!бренд) return [];
-  const есть = new Set(нт.flavors.map(f => f.toLowerCase()));
-  return (бренд.flavors || []).map(f => String(f).trim()).filter(f => f && !есть.has(f.toLowerCase()));
+  const есть = new Set(нт.flavors.map(ключВарианта));
+  return (бренд.flavors || []).map(f => String(f).trim()).filter(f => f && !есть.has(ключВарианта(f)));
 }
 
 // Совместимость вписывают руками: по ней покупатель ищет картридж под своё
@@ -406,7 +445,7 @@ function нтПривязать() {
   на("[data-npfx]", b => b.onclick = () => {
     нтЗабратьВвод(); нт.flavors.splice(+b.dataset.npfx, 1); нтЗаметкаВкусов = ""; нтСохранить(); нтНарисовать();
   });
-  if ($("npFlavorAdd")) $("npFlavorAdd").onclick = нтДобавитьВарианты;
+  if ($("npFlavorAdd")) $("npFlavorAdd").onclick = () => нтДобавитьВарианты();   // без события в «тихо»
   на("[data-npkf]", b => b.onclick = () => нтДобавитьИзСправочника([b.dataset.npkf]));
   if ($("npKnownAll")) $("npKnownAll").onclick = () => нтДобавитьИзСправочника(нтВкусыБренда());
   на("[data-npcity]", b => b.onclick = () => {
@@ -453,22 +492,22 @@ function нтПривязатьДвойника() {
 // Варианты — по одному или списком: через запятую или с новой строки, как
 // их прислал поставщик. Повторы (без учёта регистра) пропускаем и говорим,
 // какие именно, — молча выброшенная строка выглядит как потерянная.
-function нтДобавитьВарианты() {
+function нтДобавитьВарианты(тихо) {
   нтЗабратьВвод();
-  const новые = String(нт.flavorInput || "").split(/[,;\n]+/).map(x => x.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const новые = разобратьСписок(нт.flavorInput);   // «0,6 Ом» — одно значение (NP-02)
   if (!новые.length) { нтЗаметкаВкусов = "Впишите название варианта."; нтНарисовать(); return; }
-  const есть = new Set(нт.flavors.map(f => f.toLowerCase()));
+  const есть = new Set(нт.flavors.map(ключВарианта));
   // Написание — из справочника бренда, если он этот вкус знает (сервер
   // приведёт так же): пусть на экране будет то, что ляжет в базу.
   const бренд = нтБрендСправочника();
-  const эталон = new Map((бренд ? бренд.flavors || [] : []).map(f => [String(f).trim().toLowerCase(), String(f).trim()]));
+  const эталон = new Map((бренд ? бренд.flavors || [] : []).map(f => [ключВарианта(f), String(f).trim()]));
   const повторы = [], длинные = [];
   let лишние = 0;
   for (const f of новые) {
     if (f.length > 60) { длинные.push(f.slice(0, 24) + "…"); continue; }
-    if (есть.has(f.toLowerCase())) { повторы.push(f); continue; }
+    if (есть.has(ключВарианта(f))) { повторы.push(f); continue; }
     if (нт.flavors.length >= 200) { лишние++; continue; }
-    есть.add(f.toLowerCase()); нт.flavors.push(эталон.get(f.toLowerCase()) || f);
+    есть.add(ключВарианта(f)); нт.flavors.push(эталон.get(ключВарианта(f)) || f);
   }
   const заметки = [];
   if (повторы.length) заметки.push(`уже в списке: ${повторы.map(f => `«${f}»`).join(", ")}`);
@@ -476,16 +515,29 @@ function нтДобавитьВарианты() {
   if (лишние) заметки.push(`ещё ${лишние} — больше 200 вариантов у товара не бывает`);
   нтЗаметкаВкусов = заметки.length ? "Не добавлено: " + заметки.join("; ") + "." : "";
   нт.flavorInput = "";
-  нтСохранить(); нтНарисовать();
+  нтСохранить();
+  if (тихо) return новые.length - повторы.length - длинные.length - лишние;
+  нтНарисовать();
   if ($("npFlavorIn")) $("npFlavorIn").focus();
+}
+// Набранное в поле, но не добавленное кнопкой, — тоже вводили для товара.
+// Приёмка NP-01: пять вкусов строками, «Дальше» — и на шаге 3 один общий
+// остаток, а публикация уходила без вариантов. Переходя к продаже или
+// публикуя, забираем набранное тем же разбором. Не вошло что-то (повтор,
+// длинное) — остаёмся на шаге вариантов и говорим, что именно.
+function нтПринятьНабранное() {
+  if (!catHasFlavors(нт.category) || !String(нт.flavorInput || "").trim()) return true;
+  const добавлено = нтДобавитьВарианты(true);
+  if (добавлено > 0) toast(`Добавлено в список: ${добавлено}`);
+  return !нтЗаметкаВкусов;
 }
 
 function нтДобавитьИзСправочника(список) {
   нтЗабратьВвод();
-  const есть = new Set(нт.flavors.map(f => f.toLowerCase()));
+  const есть = new Set(нт.flavors.map(ключВарианта));
   for (const f of список) {
     if (нт.flavors.length >= 200) break;
-    if (f && !есть.has(f.toLowerCase())) { есть.add(f.toLowerCase()); нт.flavors.push(f); }
+    if (f && !есть.has(ключВарианта(f))) { есть.add(ключВарианта(f)); нт.flavors.push(f); }
   }
   нтЗаметкаВкусов = "";
   нтСохранить(); нтНарисовать();
@@ -501,6 +553,7 @@ function нтПривязатьФото() {
     const [f] = нт.photos.splice(+b.dataset.npdel, 1);
     if (f && f.local) {
       нтФайлы.delete(f.local);
+      if (!f.file_id) нтБлобы.убрать(нтКлючФайла(f)).catch(() => {});
       const url = нтПревью.get(f.local);
       if (url) { try { URL.revokeObjectURL(url); } catch (e) {} нтПревью.delete(f.local); }
     }
@@ -526,15 +579,41 @@ $("npFile").onchange = () => {
   const файлы = [...($("npFile").files || [])];
   const места = НТ_МАКС_ФОТО - нт.photos.length;
   for (const файл of файлы.slice(0, Math.max(0, места))) {
-    const запись = { local: `l${++нтМестный}`, status: "queued" };
+    // Номер — уникальный и после перезапуска: по нему файл ищется в телефоне.
+    const запись = { local: нтНовыйМестный(), name: (файл && файл.name) || "", status: "queued" };
     нтФайлы.set(запись.local, файл);
+    нтБлобы.положить(нтКлючФайла(запись), файл).catch(() => { /* не легло — после перезапуска попросим выбрать снова */ });
     try { нтПревью.set(запись.local, URL.createObjectURL(файл)); } catch (e) { /* покажем после загрузки */ }
     нт.photos.push(запись);
   }
   if (файлы.length > места) toast(`Фото — не больше ${НТ_МАКС_ФОТО}: лишние не добавлены`);
+  нтСохранить();
   нтПерерисоватьФото();
   нтЗапуститьОчередь();
 };
+// После перезапуска: файлы незагруженных фото — из телефона, и в очередь.
+// Не нашёлся — фото остаётся в черновике с просьбой выбрать его снова, а не
+// исчезает молча.
+async function нтВосстановитьФото() {
+  const ч = нт;
+  const ждут = ч.photos.filter(f => f.status === "restore");
+  if (!ждут.length) return;
+  for (const f of ждут) {
+    let файл = null;
+    try { файл = await нтБлобы.взять(нтКлючФайла(f)); } catch (e) { файл = null; }
+    if (!ч.photos.includes(f)) continue;           // убрали, пока искали
+    if (файл) {
+      нтФайлы.set(f.local, файл);
+      try { нтПревью.set(f.local, URL.createObjectURL(файл)); } catch (e) {}
+      f.status = "queued"; f.error = "";
+    } else {
+      f.status = "lost";
+      f.error = `Фото${f.name ? ` «${f.name}»` : ""} не загрузилось и не сохранилось в телефоне — выберите его снова или уберите.`;
+    }
+  }
+  if (нт === ч) { нтПерерисоватьФото(); нтЗапуститьОчередь(); }
+}
+
 async function нтЗапуститьОчередь() {
   if (нтГрузит) return;                     // уже идёт — новые фото она подберёт сама
   нтГрузит = true;
@@ -549,12 +628,12 @@ async function нтЗапуститьОчередь() {
 async function нтЗагрузитьФото(запись) {
   const файл = нтФайлы.get(запись.local);
   if (!файл) {
-    запись.status = "failed"; запись.error = "Файла уже нет — уберите это фото и выберите его заново.";
+    запись.status = "lost"; запись.error = "Файла уже нет — уберите это фото и выберите его заново.";
     нтПерерисоватьФото(); return;
   }
   запись.status = "uploading"; запись.error = ""; нтПерерисоватьФото();
   const fd = new FormData();
-  fd.append("initData", initData); fd.append("file", файл);
+  fd.append("initData", initData); fd.append("file", файл, запись.name || (файл && файл.name) || "photo.jpg");
   try {
     const r = await fetch("/api/admin/photo/draft", { method: "POST", body: fd });
     const d = await r.json().catch(() => null);
@@ -563,6 +642,7 @@ async function нтЗагрузитьФото(запись) {
     }
     Object.assign(запись, { file_id: d.file_id, thumb: d.thumb || d.url || "", status: "ok", error: "" });
     нтФайлы.delete(запись.local);
+    нтБлобы.убрать(нтКлючФайла(запись)).catch(() => {});
     нтСохранить();
   } catch (e) {
     запись.status = "failed";
@@ -579,6 +659,7 @@ function нтПерейти(шаг) {
   if (шаг > нт.step) {
     const с = нтСобрать(нт.step);
     if (с.ошибка) { нтПоказать(с.ошибка); return; }
+    if (шаг === 3 && !нтПринятьНабранное()) { нт.step = 2; нтСохранить(); нтНарисовать(); return; }
   }
   нт.step = шаг; нтОшибка = null;
   нтСохранить(); нтНарисовать();
@@ -609,6 +690,8 @@ function нтСобрать(до = 3) {
   if (!CAT_OPTS.some(([c]) => c === нт.category)) return стоп(1, "Выберите категорию.");
   const имя = нт.name.trim();
   if (!имя) return стоп(1, "Впишите название товара.");
+  const пропало = нт.photos.find(f => f.status === "lost");
+  if (пропало) return стоп(1, пропало.error || "Одно из фото не сохранилось — выберите его снова или уберите.");
   if (нт.photos.some(f => f.status === "failed")) return стоп(1, "Одно из фото не загрузилось — нажмите «Повторить» или уберите его.");
   if (до < 3) return {};
   if (нт.photos.some(f => !f.file_id)) return стоп(1, "Фото ещё загружается — дождитесь, пока оно загрузится.");
@@ -659,6 +742,7 @@ function нтСобрать(до = 3) {
 async function нтОпубликовать(подтверждено) {
   if (нтИдёт || !нт || нт.published) return;
   нтЗабратьВвод();
+  if (!нтПринятьНабранное()) { нт.step = 2; нтСохранить(); нтНарисовать(); return; }
   const с = нтСобрать();
   if (с.ошибка) { нтПоказать(с.ошибка); return; }
   // Без фото — только осознанно: покупатель увидит заглушку вместо товара.

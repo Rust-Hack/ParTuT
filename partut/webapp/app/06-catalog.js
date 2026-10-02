@@ -22,9 +22,9 @@ function renderFlavorChips() {
 $("brFlavorAdd").onclick = () => {
   const v = $("brFlavorInput").value.trim();
   if (!v) return;
-  v.split(",").map(s => s.trim()).filter(Boolean).forEach(f => {
+  разобратьСписок(v).forEach(f => {          // «0,6 Ом» — одно значение, не два
     // Сверяем без учёта регистра: «мята» после «Мята» — это тот же вкус.
-    if (!brandFlavors.some(x => x.toLowerCase() === f.toLowerCase())) brandFlavors.push(f);
+    if (!brandFlavors.some(x => ключВарианта(x) === ключВарианта(f))) brandFlavors.push(f);
   });
   $("brFlavorInput").value = ""; renderFlavorChips(); renderKnownFlavors();
 };
@@ -1518,7 +1518,8 @@ function bindVariantAdd(category) {
     } else {
       // Список через запятую или построчно: пять вкусов поставки — одна
       // вставка, а не пять нажатий «＋».
-      имена = $("edNewFlavor").value.split(/[,;\n]/).map(x => x.trim()).filter(Boolean);
+      // «0,6 Ом» при этом — одно значение, а не «0» и «6 Ом» (NP-02).
+      имена = разобратьСписок($("edNewFlavor").value);
       if (!имена.length) return;
     }
     const сырое = String($("edNewQty").value || "").trim();
@@ -1526,10 +1527,10 @@ function bindVariantAdd(category) {
     if (!Number.isInteger(штук) || штук < 0) { alertMsg("Приход — целое число штук (или пусто, если пока ноль)."); return; }
     const уже = [];
     имена.forEach(имя => {
-      const низ = имя.toLowerCase();
-      const был = editVariants.find(v => v.flavor.toLowerCase() === низ);
+      const низ = ключВарианта(имя);
+      const был = editVariants.find(v => ключВарианта(v.flavor) === низ);
       if (был && editRemoves.has(был.flavor)) { editRemoves.delete(был.flavor); return; }   // передумал убирать
-      if (был || editAdds.some(a => a.flavor.toLowerCase() === низ)) { уже.push(имя); return; }
+      if (был || editAdds.some(a => ключВарианта(a.flavor) === низ)) { уже.push(имя); return; }
       editAdds.push({ flavor: имя, qty: штук });
     });
     if (catTwoAxis(category)) { $("edNewAxis2").value = ""; } else { $("edNewFlavor").value = ""; }

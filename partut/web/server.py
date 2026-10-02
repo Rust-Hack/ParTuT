@@ -670,8 +670,12 @@ def api_set_city():
     city = inputs._text(data.get("city"), 80)
     if not city or city not in db.location_names():
         return jsonify({"ok": False, "error": "bad_input"}), 400
-    db.set_user_city(int(user["id"]), city)
-    return jsonify({"ok": True})
+    # Когда и на каком телефоне сделан выбор: опоздавший старый запрос не
+    # перебьёт новый выбор (db.set_user_city, приёмка BR-01-R1).
+    когда = inputs.целое(data.get("chosen_at"), минимум=1)
+    телефон = inputs._text(data.get("device"), 40) or None
+    применён, сейчас = db.set_user_city(int(user["id"]), city, когда, телефон)
+    return jsonify({"ok": True, "applied": применён, "city": сейчас})
 
 
 @app.route("/api/my-settings", methods=["POST"])

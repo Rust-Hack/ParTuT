@@ -911,6 +911,14 @@ def _ensure_user_columns():
         # открытии заново подставлялась первая точка по сортировке, и человек,
         # выбравший вчера «Минск», сегодня снова видел то, что попало первым.
         cur.execute("ALTER TABLE users ADD COLUMN city TEXT")
+    if "city_choice_ms" not in cols:
+        # Не «…_at»: такие колонки разовый перевод истории на часы магазина
+        # считает текстовым временем (_TIME_COL), а здесь — число миллисекунд.
+        # Когда и на каком телефоне сделан выбор, записанный в city: запросы
+        # смены точки приходят не по порядку, и поздний старый перебивал новый
+        # выбор (приёмка BR-01-R1). См. set_user_city.
+        cur.execute("ALTER TABLE users ADD COLUMN city_choice_ms BIGINT")
+        cur.execute("ALTER TABLE users ADD COLUMN city_device TEXT")
     # Тем, кто уже покупал, имя достаём из их заказов: оно там лежало всё это
     # время, просто в списке пользователей его никто не показывал.
     cur.execute("""UPDATE users SET username =
@@ -1859,16 +1867,43 @@ def set_user_point(user_id, point_id):
     conn.close()
 
 
-def set_user_city(user_id, city):
+# Насколько выбор с того же телефона может быть «старше» записанного и всё
+# ещё считаться опоздавшим запросом. Запросы опаздывают на секунды; разница
+# больше — значит, на телефоне перевели часы, и выбор настоящий.
+CITY_LATE_WINDOW_MS = 10 * 60 * 1000
+
+
+def set_user_city(user_id, city, chosen_at=None, device=None):
     """Запоминает выбранный город витрины — чтобы при следующем открытии
-    приложения не подставлялась заново первая точка по сортировке."""
+    приложения не подставлялась заново первая точка по сортировке.
+
+    chosen_at (мс по часам телефона) и device — когда и где сделан выбор.
+    Запросы приходят не по порядку: выбрали A, потом B, ответ на B пришёл
+    первым, а поздний A перебивал B — и приложение открывалось на A без
+    корзины B (приёмка BR-01-R1). Теперь выбор с того же телефона, который
+    старше записанного, не применяется. Проверка и запись — одним запросом.
+    Разные телефоны между собой не сравниваем: часы у них свои.
+
+    Возвращает (применён ли, какая точка записана теперь)."""
     ensure_user(user_id)
+    город = (city or "").strip()[:80] or None
     conn = connect()
     cur = conn.cursor()
-    cur.execute(_q("UPDATE users SET city = %s WHERE user_id = %s"),
-                ((city or "").strip()[:80] or None, user_id))
+    if chosen_at is None or not device:
+        cur.execute(_q("UPDATE users SET city = %s, city_choice_ms = NULL, city_device = NULL WHERE user_id = %s"),
+                    (город, user_id))
+        применён = True
+    else:
+        cur.execute(_q("UPDATE users SET city = %s, city_choice_ms = %s, city_device = %s WHERE user_id = %s "
+                       "AND NOT (COALESCE(city_device, '') = %s AND COALESCE(city_choice_ms, 0) > %s "
+                       "AND COALESCE(city_choice_ms, 0) - %s < %s)"),
+                    (город, int(chosen_at), device, user_id, device, int(chosen_at), int(chosen_at), CITY_LATE_WINDOW_MS))
+        применён = cur.rowcount > 0
+    cur.execute(_q("SELECT city FROM users WHERE user_id = %s"), (user_id,))
+    сейчас = cur.fetchone()["city"]
     conn.commit()
     conn.close()
+    return применён, сейчас
 
 
 

@@ -1228,6 +1228,7 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 .npph.queued img, .npph.uploading img { opacity: .5; }
 .npph.failed { outline: 2px solid var(--danger); outline-offset: -2px; }
 .npph.failed img { opacity: .35; }
+.npphlost { position: absolute; left: 6px; right: 6px; bottom: 8px; text-align: center; font-size: 12px; font-weight: 800; color: var(--danger); }
 .npmain { position: absolute; left: 6px; bottom: 6px; padding: 2px 8px; border-radius: 999px;
   background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 800; }
 .npstar, .npdel { position: absolute; width: 34px; height: 34px; border-radius: 50%; border: none;

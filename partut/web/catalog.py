@@ -569,14 +569,14 @@ def _свести_вкусы(сырые, эталон=None):
     Написание берём из модели, когда она этот вкус знает: пусть во всех городах
     он выглядит одинаково.
     """
-    правильное = {str(f).strip().lower(): str(f).strip() for f in (эталон or [])}
+    правильное = {inputs.ключ_варианта(f): str(f).strip() for f in (эталон or [])}
     свод = {}
     порядок = []
     for v in сырые:
         имя = str((v or {}).get("flavor", "")).strip()
         if not имя:
             continue
-        ключ = имя.lower()
+        ключ = inputs.ключ_варианта(имя)          # «0,6» = «0.6»
         if ключ not in свод:
             свод[ключ] = {"flavor": правильное.get(ключ, имя), "stock": 0}
             порядок.append(ключ)
@@ -689,7 +689,7 @@ def api_admin_variants_change():
     известные = (db.get_model(модель_) or {}).get("flavors", []) if модель_ else []
     # Написание — как в модели: «мята» и «Мята» в разных городах выглядели бы
     # как два разных вкуса. Количество не сводим: отрицательное — это отказ.
-    правильное = {str(f).strip().lower(): str(f).strip() for f in известные}
+    правильное = {inputs.ключ_варианта(f): str(f).strip() for f in известные}
     новые = []
     for a in add:
         if not isinstance(a, dict):
@@ -703,7 +703,7 @@ def api_admin_variants_change():
             return jsonify({"ok": False, "error": "bad_number",
                             "message": f"«{имя}»: проверьте количество."}), 400
         if имя:
-            новые.append({"flavor": правильное.get(имя.lower(), имя), "qty": штук})
+            новые.append({"flavor": правильное.get(inputs.ключ_варианта(имя), имя), "qty": штук})
     try:
         итог = db.change_variants(pid, новые, [inputs._text(x, 120) for x in remove],
                                   admin_id=int(admin["id"]), writeoff=bool(data.get("writeoff")))
@@ -903,8 +903,8 @@ def api_admin_model_save():
     flavors, seen = [], set()
     for f in (data.get("flavors") or []):
         f = str(f).strip()
-        if f and f.lower() not in seen:
-            seen.add(f.lower())
+        if f and inputs.ключ_варианта(f) not in seen:      # «0,6» = «0.6», «Мята» = «мята»
+            seen.add(inputs.ключ_варианта(f))
             flavors.append(f)
     mid = data.get("id")
     # Две одинаковые модели в одной категории — это раздвоенная витрина и
@@ -974,19 +974,25 @@ def api_admin_product_publish():
     найденный = db.find_brand_by_name(бренд) if бренд else None
     if найденный:
         try:
-            эталон = {str(f).strip().lower(): str(f).strip() for f in json.loads(найденный["flavors"] or "[]") if str(f).strip()}
+            эталон = {inputs.ключ_варианта(f): str(f).strip() for f in json.loads(найденный["flavors"] or "[]") if str(f).strip()}
         except (TypeError, ValueError):
             эталон = {}
 
-    def по_эталону(вкус):
-        return эталон.get(вкус.lower(), вкус)
+    # «0,6» и «0.6», «Мята» и «мята» — один вариант (inputs.ключ_варианта): в
+    # модели остаётся первое написание (или справочника), и вариант на точке,
+    # присланный другим написанием, ложится на него же.
+    видели = {}
 
-    вкусы, видели = [], set()
+    def по_эталону(вкус):
+        к = inputs.ключ_варианта(вкус)
+        return видели.get(к) or эталон.get(к, вкус)
+
+    вкусы = []
     сырые = модель.get("flavors") if isinstance(модель.get("flavors"), list) else []
     for f in сырые:
         f = по_эталону(inputs._text(f, 60))
-        if f and f.lower() not in видели:
-            видели.add(f.lower())
+        if f and inputs.ключ_варианта(f) not in видели:
+            видели[inputs.ключ_варианта(f)] = f
             вкусы.append(f)
     if len(вкусы) > 200:
         return _отказ("too_many", "Больше 200 вариантов у одного товара — похоже на ошибку.", "flavors")
@@ -1268,8 +1274,8 @@ def api_admin_brand():
     flavors, seen = [], set()
     for f in (data.get("flavors") or []):
         f = str(f).strip()
-        if f and f.lower() not in seen:
-            seen.add(f.lower())
+        if f and inputs.ключ_варианта(f) not in seen:      # «0,6» = «0.6», «Мята» = «мята»
+            seen.add(inputs.ключ_варианта(f))
             flavors.append(f)
 
     bid = data.get("id")

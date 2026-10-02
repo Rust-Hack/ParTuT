@@ -84,31 +84,38 @@ function хранилище() {
   const m = new Map();
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), _m: m };
 }
-// Сеть для /api/set-city: "ok" — запомнил, "down" — нет связи, "gone" — такой точки нет.
+// Ожидающий выбор точки лежит записью {city, at}; прежний формат — просто название.
+const ждёт = (ls) => { const v = ls.getItem("partut_city_pending_v1"); if (!v) return null; try { return v[0] === "{" ? JSON.parse(v).city : v; } catch (e) { return v; } };
+// Сеть для /api/set-city: "ok" — запомнил, "down" — нет связи, "gone" — такой точки нет,
+// "auth" — вход устарел (401), "руками" — ответ отдаёт сам тест (м.ответы).
 function магазин({ корзина = {}, точка = "Минск", сервер = "ok", ls = хранилище(), помнит = точка } = {}) {
-  const журнал = { вопросы: [], алерты: [], вкладка: null, сохранено: 0, setCity: [], ждалоДоЗапроса: [] };
+  const журнал = { вопросы: [], алерты: [], тосты: [], вкладка: null, сохранено: 0, setCity: [], ждалоДоЗапроса: [], тела: [] };
+  const ответы = [];
   const ctx = vm.createContext({
     me: { city: помнит }, brandFilters: ["x"], prefetchDelivery() {}, initData: "qa", localStorage: ls,
     fetch: async (url, opts) => {
       const тело = JSON.parse(opts.body);
       журнал.setCity.push(тело.city);
-      журнал.ждалоДоЗапроса.push(ls.getItem("partut_city_pending_v1"));
+      журнал.тела.push(тело);
+      журнал.ждалоДоЗапроса.push(ждёт(ls));
       if (сервер === "down") throw new TypeError("Failed to fetch");
       if (сервер === "gone") return { ok: false, status: 400, json: async () => ({ ok: false, error: "bad_input" }) };
+      if (сервер === "auth") return { ok: false, status: 401, json: async () => ({ ok: false, error: "auth" }) };
+      if (сервер === "руками") return new Promise((r) => ответы.push({ тело, r }));
       return { ok: true, status: 200, json: async () => ({ ok: true }) };
     },
     allProducts: товары(), cart: { ...корзина }, city: точка, plural,
     variantStock: (p, f) => ((p.variants || []).find(v => v.flavor === f) || { stock: 0 }).stock,
     esc: (s) => String(s), имяПозиции: (it) => it.name + (it.flavor ? ` · ${it.flavor}` : ""),
     cartKey: (id, flavor) => `${id}|${flavor || ""}`,
-    alertMsg: (m) => журнал.алерты.push(m),
+    alertMsg: (m) => журнал.алерты.push(m), toast: (m) => журнал.тосты.push(m),
     confirmMsg: (m, да) => { журнал.вопросы.push(m); журнал.да = да; },
     сохранитьКорзину: () => { журнал.сохранено++; },
     $: () => ({ classList: { remove() {} }, textContent: "" }),
     updateFilterBtn() {}, renderGrid() {}, renderNav() {}, showTab: (t) => { журнал.вкладка = t; },
   });
   vm.runInContext(смена + "\n" + повтор, ctx);
-  return { журнал, js: (с) => vm.runInContext(с, ctx), ctx, ls };
+  return { журнал, js: (с) => vm.runInContext(с, ctx), ctx, ls, ответы };
 }
 const тик = () => new Promise((r) => setImmediate(r));
 const заказМинск = { city: "Минск", items: [{ id: 3, name: "Husky", flavor: "Мята", qty: 1 }, { id: 1, name: "Картридж", qty: 2 }] };
@@ -162,7 +169,7 @@ const заказТуров = { city: "Туров", items: [{ id: 4, name: "Ка�
     м.ctx.o = заказТуров; м.js("repeatOrder(o)"); м.журнал.да(); await тик(); await тик();
     проверка("BR-01: точка сменилась и запомнена — на сервер ушёл выбор «Туров»",
       м.ctx.city === "Туров" && м.ctx.me.city === "Туров" && м.журнал.setCity.join() === "Туров", { город: м.ctx.city, сервер: м.журнал.setCity });
-    проверка("BR-01: выбор лежал в телефоне ещё до запроса", м.журнал.ждалоДоЗапроса[0] === "Туров");
+    проверка("BR-01: выбор лежал в телефоне ещё до запроса", м.журнал.ждалоДоЗапроса[0] === "Туров", м.журнал.ждалоДоЗапроса);
     проверка("BR-01: сервер запомнил — в телефоне ждать нечего", ls.getItem("partut_city_pending_v1") === null);
     проверка("BR-01: корзина сохранена с новой точкой", м.журнал.сохранено >= 1 && Object.keys(м.ctx.cart).join() === "4|");
   }
@@ -171,12 +178,15 @@ const заказТуров = { city: "Туров", items: [{ id: 4, name: "Ка�
     const ls = хранилище();
     const м = магазин({ ls, сервер: "down" });
     м.ctx.o = заказТуров; м.js("repeatOrder(o)"); await тик(); await тик();
-    проверка("BR-01: связи нет — выбор «Туров» ждёт в телефоне", ls.getItem("partut_city_pending_v1") === "Туров");
+    проверка("BR-01: связи нет — выбор «Туров» ждёт в телефоне", ждёт(ls) === "Туров", ls.getItem("partut_city_pending_v1"));
+    const времяВыбора = JSON.parse(ls.getItem("partut_city_pending_v1")).at;
     const запуск = магазин({ ls, помнит: "Минск", точка: "Минск" });      // сервер помнит Минск
     запуск.js("применитьЖдущуюТочку()"); await тик(); await тик();
     проверка("BR-01: при запуске — «Туров», а не Минск с сервера", запуск.ctx.city === "Туров", запуск.ctx.city);
     проверка("BR-01: и выбор дослан на сервер", запуск.журнал.setCity.join() === "Туров" && ls.getItem("partut_city_pending_v1") === null,
       { сервер: запуск.журнал.setCity, ждёт: ls.getItem("partut_city_pending_v1") });
+    проверка("BR-01-R1: дослан со временем самого выбора, а не досылки — и с меткой телефона",
+      запуск.журнал.тела[0].chosen_at === времяВыбора && !!запуск.журнал.тела[0].device, запуск.журнал.тела[0]);
   }
   {
     // Точки больше нет: сервер отказал — ждать нечего, досылать тоже.
@@ -184,6 +194,35 @@ const заказТуров = { city: "Туров", items: [{ id: 4, name: "Ка�
     const м = магазин({ ls, сервер: "gone" });
     м.ctx.o = заказТуров; м.js("repeatOrder(o)"); await тик(); await тик();
     проверка("BR-01: точки больше нет — ждущий выбор снят, не досылается вечно", ls.getItem("partut_city_pending_v1") === null);
+  }
+  {
+    // BR-01-R2: вход устарел (401) — выбор не стирается, а ждёт и досылается.
+    const ls = хранилище();
+    const м = магазин({ ls, сервер: "auth" });
+    м.ctx.o = заказТуров; м.js("repeatOrder(o)"); await тик(); await тик();
+    проверка("BR-01-R2: 401 — выбор «Туров» по-прежнему ждёт в телефоне", ждёт(ls) === "Туров", ls.getItem("partut_city_pending_v1"));
+    проверка("BR-01-R2: и сказано, что сделать", м.журнал.тосты.some(t => /откройте снова/.test(t)), м.журнал.тосты);
+    const запуск = магазин({ ls, помнит: "Минск", точка: "Минск" });   // открыли заново, вход свежий
+    запуск.js("применитьЖдущуюТочку()"); await тик(); await тик();
+    проверка("BR-01-R2: после нового входа — «Туров», выбор дослан", запуск.ctx.city === "Туров" && запуск.журнал.setCity.join() === "Туров"
+      && ls.getItem("partut_city_pending_v1") === null, { город: запуск.ctx.city, сервер: запуск.журнал.setCity });
+  }
+  {
+    // BR-01-R1: выбрали Туров, потом Лунинец; ответ на Лунинец пришёл раньше.
+    const ls = хранилище();
+    const м = магазин({ ls, сервер: "руками" });
+    м.js('перейтиНаТочку("Туров")'); await тик();
+    м.js('перейтиНаТочку("Лунинец")'); await тик();
+    const [а, б] = м.ответы;
+    проверка("BR-01-R1: у второго выбора время позже, телефон тот же",
+      б.тело.chosen_at >= а.тело.chosen_at && а.тело.device === б.тело.device && !!а.тело.device, [а.тело, б.тело]);
+    б.r({ ok: true, status: 200, json: async () => ({ ok: true, applied: true, city: "Лунинец" }) }); await тик(); await тик();
+    // Старый ответ пришёл позже. Даже если бы сервер его применил (старая версия),
+    // экран не станет считать запомненной точкой Туров.
+    а.r({ ok: true, status: 200, json: async () => ({ ok: true, applied: true, city: "Туров" }) }); await тик(); await тик();
+    проверка("BR-01-R1: опоздавший ответ на прежний выбор не меняет запомненную точку",
+      м.ctx.me.city === "Лунинец" && м.ctx.city === "Лунинец", { me: м.ctx.me.city, city: м.ctx.city });
+    проверка("BR-01-R1: и не оставляет в телефоне чужой ожидающий выбор", ls.getItem("partut_city_pending_v1") === null, ls.getItem("partut_city_pending_v1"));
   }
   {
     // Та же точка — сервер не дёргаем.
