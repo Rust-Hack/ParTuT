@@ -631,7 +631,12 @@ def rename_location(location_id, new_name):
         return False, "exists"
     try:
         cur.execute(db._q("UPDATE locations SET name = %s WHERE id = %s"), (new_name, location_id))
-        for table in ("products", "orders", "delivery_methods", "pickup_points", "staff"):
+        # users — выбранная покупателем точка, seller_payouts — выплаты
+        # продавцам по точке. Без них покупатели переименованной точки
+        # молча оказывались на чужой (их точки «больше нет»), а прошлые
+        # выплаты — у точки-призрака.
+        for table in ("products", "orders", "delivery_methods", "pickup_points", "staff",
+                      "users", "seller_payouts"):
             cur.execute(db._q(f"UPDATE {table} SET city = %s WHERE city = %s"), (new_name, old_name))
         conn.commit()
     except Exception:

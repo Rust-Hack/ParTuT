@@ -11,8 +11,9 @@ from _common import db, client, Checker, as_admin
 
 def _clean():
     conn = db.connect(); cur = conn.cursor()
-    for t in ("products", "orders", "delivery_methods", "pickup_points", "staff"):
+    for t in ("products", "orders", "delivery_methods", "pickup_points", "staff", "seller_payouts"):
         cur.execute(f"DELETE FROM {t} WHERE city LIKE 'Ренейм%'")
+    cur.execute("UPDATE users SET city = NULL WHERE city LIKE 'Ренейм%' OR city LIKE 'ренейм%'")
     cur.execute("DELETE FROM locations WHERE name LIKE 'Ренейм%'")
     conn.commit(); conn.close()
 
@@ -30,6 +31,9 @@ def run():
     db.add_pickup_point("Ренейм-Старое", "ул. Тестовая 1")
     db.add_delivery_method("Ренейм-Старое", "Самовывоз", 0, "", "", 0, 0)
     dm_id = db.get_delivery_methods("Ренейм-Старое")[0]["id"]
+    db.ensure_user(9003)
+    db.set_user_city(9003, "Ренейм-Старое")
+    db.record_seller_payout(9002, "Ренейм-Старое", "2026-09", 100.0, 10, 10.0, 1)
 
     r = client.post("/api/admin/location/rename", json={"initData": "x", "id": lid, "name": "Ренейм-Новое"})
     c("переименовано", (r.get_json() or {}).get("ok") is True)
@@ -41,6 +45,9 @@ def run():
       any(s["city"] == "Ренейм-Новое" for s in db.list_staff() if int(s["user_id"]) == 9002))
     c("точка самовывоза переехала", any(p["city"] == "Ренейм-Новое" for p in db.all_pickup_points()))
     c("способ доставки переехал", db.get_delivery_method(dm_id)["city"] == "Ренейм-Новое")
+    # Без этого покупатель точки молча оказывался на чужой: его точки «больше нет».
+    c("покупатель, выбравший эту точку, остался на ней", db.get_user_row(9003)["city"] == "Ренейм-Новое")
+    c("выплаты продавцу переехали", (db.seller_payouts_for_period("2026-09").get(9002) or {}).get("city") == "Ренейм-Новое")
     c("под старым именем больше ничего нет",
       db.count_products_in_location("Ренейм-Старое") == 0)
 
@@ -57,6 +64,14 @@ def run():
     # Переименование в то же самое имя — не ошибка, а no-op.
     r = client.post("/api/admin/location/rename", json={"initData": "x", "id": lid, "name": "Ренейм-Новое"})
     c("переименование в то же имя не считается ошибкой", r.get_json().get("ok") is True)
+
+    # Только регистр — «туров» → «Туров»: это настоящее переименование, не «то же имя».
+    lid3 = db.add_location("ренейм-регистр")
+    db.ensure_user(9004)
+    db.set_user_city(9004, "ренейм-регистр")
+    r = client.post("/api/admin/location/rename", json={"initData": "x", "id": lid3, "name": "Ренейм-Регистр"})
+    c("смена одного регистра проходит", r.get_json().get("ok") is True and db.get_location(lid3)["name"] == "Ренейм-Регистр")
+    c("и покупатель переезжает вместе с ней", db.get_user_row(9004)["city"] == "Ренейм-Регистр")
 
     r = client.post("/api/admin/location/rename", json={"initData": "x", "id": 999999, "name": "Кто-то"})
     c("несуществующая точка — not_found", r.get_json().get("error") == "not_found")
