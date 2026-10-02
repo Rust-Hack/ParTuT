@@ -288,7 +288,7 @@ def record_point_sale(city, lines, admin_id, seller, payment="", client_token=""
     if token:
         prev = find_order_by_token(0, token, hours=None)
         if prev:
-            return int(prev["id"]), float(prev["total"]), True
+            return _та_же_продажа(prev, lines)
     created_at = db.shop_now().strftime("%Y-%m-%d %H:%M")
     conn = db.connect()
     cur = conn.cursor()
@@ -350,10 +350,32 @@ def record_point_sale(city, lines, admin_id, seller, payment="", client_token=""
         if token:
             prev = find_order_by_token(0, token, hours=None)
             if prev:
-                return int(prev["id"]), float(prev["total"]), True
+                return _та_же_продажа(prev, lines)
         raise
     conn.close()
     return order_id, total, False
+
+
+def _отпечаток_продажи(строки):
+    return sorted((int(с["id"]), с.get("flavor") or "", int(с["qty"]), round(float(с["price"]), 2)) for с in строки)
+
+
+def _та_же_продажа(prev, lines):
+    """Повтор ключа: та же продажа — отдаём её; другая — отказ.
+
+    Ответ на «Провести» не дошёл, продавец поправил чек и нажал снова с тем
+    же ключом — молча вернуть прежнюю продажу значило бы сказать «записано»
+    про чек, которого нет."""
+    try:
+        было = json.loads(prev["items"] or "[]")
+    except (TypeError, ValueError):
+        было = []
+    if _отпечаток_продажи(было) != _отпечаток_продажи(lines):
+        raise PointSaleRefused("token_reused",
+                               f"Прошлая продажа с этого экрана уже записана — №{prev['id']} на "
+                               f"{float(prev['total']):.2f} Br. Проверьте «Сегодня на точке» и проведите этот чек ещё раз.",
+                               id=int(prev["id"]))
+    return int(prev["id"]), float(prev["total"]), True
 
 
 def point_sales(city=None, day=None):

@@ -53,6 +53,12 @@ def run():
       (r2.get_json() or {}).get("id") == d["id"] and r2.get_json().get("replay") is True
       and db.get_product(зарядка)["stock"] == 3)
 
+    r3 = _продать("Минск", [{"id": зарядка, "qty": 2, "price": 15}], ключ="sale-key-000001")
+    d3 = r3.get_json() or {}
+    c(f"тот же ключ, другой чек — не «записано», а отказ с номером прежней: {d3.get('message')!r}",
+      r3.status_code == 409 and d3.get("error") == "token_reused" and d3.get("id") == d["id"]
+      and db.get_product(зарядка)["stock"] == 3)
+
     # --- Выручка — да, покупательское — нет ---
     сегодня = db.seller_today("Минск")
     c(f"сводка дня: выручка с продажей, «выдано заказов» без неё: {сегодня}",
