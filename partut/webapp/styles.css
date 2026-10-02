@@ -1171,8 +1171,8 @@ html[data-theme="dark"] .dlvbar { border: 1px solid rgba(95,242,242,.22); box-sh
 /* Две плитки вместо свёрнутой гармошки с одной кнопкой внутри. Подпись
    под названием говорит, чем они различаются: новый — ещё нет в
    ассортименте, «Завезти» — уже есть. Продавцу видна только вторая. */
-.addrow { display: flex; gap: 10px; margin-bottom: 14px; }
-.addopt { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+.addrow { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.addopt { flex: 1 1 140px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
   min-height: 64px; padding: 12px 14px; border-radius: 16px; border: 1px solid var(--line);
   background: var(--surface); color: var(--text); box-shadow: var(--shadow);
   font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; }
@@ -1322,3 +1322,11 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 .archive[open] .archive-h { margin-bottom: 4px; }
 /* Пояснение над формой — по левому краю, как сама форма (.view p центрирует). */
 .view p.dlvscope { text-align: left; }
+
+/* Продажа на точке (09-point-sale.js): чек — те же карточки, что у поставки. */
+.salesale { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.salesale:first-of-type { border-top: 0; }
+.salesale .salewhat { color: var(--hint); font-size: 13px; grid-column: 1 / -1; }
+.salesale.off { opacity: .55; }
+.salesale.off b { text-decoration: line-through; }
+#salePay { margin-bottom: 8px; }

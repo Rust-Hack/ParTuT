@@ -695,6 +695,7 @@
          завезти на точку. Раньше здесь была свёрнутая гармошка с одной кнопкой
          внутри: два нажатия ради одного действия. -->
     <div class="addrow" id="addRow">
+      <button class="addopt" id="saleOpen"><b>🧾 Продажа на точке</b><small>продал у прилавка, мимо приложения</small></button>
       <button class="addopt" id="npOpen" hidden><b>✨ Новый товар</b><small id="npOpenNote">описание, фото, цена и приход</small></button>
       <button class="addopt" id="openStockPick"><b>📥 Завезти на точку</b><small>то, что уже есть в ассортименте</small></button>
     </div>
@@ -767,6 +768,30 @@
     <div class="dlvbar" id="dlvBar">
       <div class="dlvsum" id="dlvSum"></div>
       <button class="bigbtn" id="dlvPost">Провести поставку</button>
+    </div>
+  </div>
+
+  <!-- Продажа на точке: человек купил у прилавка, мимо приложения. Чек —
+       черновиком в телефоне вместе с ключом попытки: свернул приложение,
+       пропала связь — чек на месте и дважды не запишется (09-point-sale.js). -->
+  <div class="view ontop" id="saleView">
+    <div class="viewhead"><h2>🧾 Продажа на точке</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="saleClose">‹ Назад</button></div>
+    <div class="sect dlvtop">
+      <div class="ochips chiprow" id="salePoints"></div>
+      <div class="dlvscope" id="saleScope"></div>
+      <input id="saleFind" class="admsearch" placeholder="🔍 Что продали?" autocomplete="off">
+      <div id="saleFound"></div>
+    </div>
+    <div id="saleDoc"></div>
+    <div class="sect dlvtop" id="saleToday"></div>
+    <div class="dlvbar" id="saleBar">
+      <div class="ochips" id="salePay">
+        <button class="ochip" data-spay="cash">💵 Наличные</button>
+        <button class="ochip" data-spay="card">💳 Карта</button>
+      </div>
+      <div class="dlvsum" id="saleSum"></div>
+      <button class="bigbtn" id="salePost">Провести продажу</button>
     </div>
   </div>
 

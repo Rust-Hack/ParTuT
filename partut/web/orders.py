@@ -852,6 +852,9 @@ def api_admin_sales():
             состав = []
         out.append({"id": o["id"], "city": o["city"], "created_at": o["created_at"], "total": float(o["total"] or 0),
                     "status": o["status"], "payment": o["payment_method"] or "", "seller": o["username"] or "",
+                    # Ключ попытки: экран с потерянным ответом узнаёт по нему,
+                    # что его чек уже записан, и не просит провести ещё раз.
+                    "token": o["client_token"] or "",
                     "items": [{"name": и.get("name"), "qty": и.get("qty"), "price": и.get("price")} for и in состав]})
     return jsonify({"ok": True, "sales": out})
 
