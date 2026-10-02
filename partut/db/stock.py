@@ -143,8 +143,11 @@ def _запереть(cur, product_id, flavor):
         if flavor:
             cur.execute("SELECT id FROM product_variants WHERE product_id = %s AND flavor = %s FOR UPDATE",
                         (product_id, flavor))
-        else:
-            cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (product_id,))
+        # Товар — всегда, и после варианта. Без него приход по вкусу и «в
+        # архив» той же полки расходились: архив видел остаток 0 и убирал
+        # товар, а приход, прочитавший «не в архиве» раньше, дописывал штуки
+        # уже архивному товару — остаток, которого не видно нигде.
+        cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (product_id,))
     else:
         # У SQLite замок один на всю базу, и берёт его первая же запись,
         # даже пустая: дальше внутри транзакции никто не вклинится.
@@ -282,6 +285,9 @@ def stock_operation(product_id, reason, qty, flavor=None, cost=0, note="", admin
         товар = cur.fetchone()
         if not товар:
             raise StockRefused("not_found", "Товар не найден — возможно, его уже убрали с точки.")
+        if товар["archived"]:
+            raise StockRefused("archived", f"«{товар['name']}» на точке «{товар['city']}» в архиве. "
+                                           "Сначала верните его: «🛍 Товары» → внизу «🗄 Архив» → «↩ Вернуть».")
         cur.execute(db._q("SELECT flavor, stock FROM product_variants WHERE product_id = %s"), (product_id,))
         варианты = {r["flavor"]: int(r["stock"] or 0) for r in cur.fetchall()}
         # У товара с вариантами остаток — сумма вариантов. Движение мимо них

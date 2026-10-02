@@ -87,11 +87,24 @@ def run():
         c3("правка из чата записана в журнал", len(after) > before)
         c3("и видно, кто правил", any(int(r["admin_id"]) == SELLER for r in after[:3]))
 
+        # «Убрать с точки» в чате теперь — «В архив», как в приложении. Та же
+        # кнопка из старых сообщений («Да, удалить») тоже архивирует, а не стирает.
+        reset_sent(); botmod.on_button(_call(SELLER, f"admdel:{mine}"))
+        c3("бот спрашивает про архив, не про удаление", "в архив" in _said() and "удал" not in _said().lower())
+        reset_sent(); botmod.on_button(_call(SELLER, f"admdelyes:{mine}"))
+        c3("на полке 4 шт — в архив не убран, сказано почему",
+           "На полке ещё 4 шт" in _said() and not db.get_product(mine)["archived"])
+        пустой = db.add_product("Туров", "disposable", "Туровский пустой", 32.0, 0)
+        reset_sent(); botmod.on_button(_call(SELLER, f"admdelyes:{пустой}"))
+        c3("пустой — в архиве, запись цела", db.get_product(пустой) is not None and db.get_product(пустой)["archived"] == 1)
+        c3("в журнале — архив", any("убран в архив" in (r["details"] or "") for r in db.list_admin_log(20)))
+
         c4 = Checker("Кнопки от покупателя")
         reset_sent(); botmod.on_button(_call(BUYER, f"admcard:{mine}"))
         c4("покупателю карточка не открывается", "Туровский" not in _said())
         reset_sent(); botmod.on_button(_call(BUYER, f"admdelyes:{mine}"))
         c4("и удалить он не может", db.get_product(mine) is not None)
+        c4("и в архив убрать — тоже", not db.get_product(mine)["archived"])
 
         c5 = Checker("Копия базы")
         reset_sent(); botmod.cmd_backup(_msg(BUYER, "/backup"))

@@ -147,7 +147,8 @@ def run_галерея_модели_не_уходит_с_точкой():
         "initData": "x", "model_id": mid, "city": "Туров", "price": 20, "cost": 10, "stock": 0})
     второй = (r.get_json() or {}).get("id")
     c("модель завезена на вторую точку", bool(второй))
-    c("исходная точка удалена", (client.post("/api/admin/product/delete", json={"initData": "x", "id": старый}).get_json() or {}).get("ok"))
+    c("исходная точка убрана в архив", (client.post("/api/admin/product/archive", json={"initData": "x", "id": старый}).get_json() or {}).get("ok"))
+    c("и удалена насовсем (истории у неё нет)", (client.post("/api/admin/product/delete", json={"initData": "x", "id": старый}).get_json() or {}).get("ok"))
     c("галерея модели цела — её видит вторая точка", [g["file_id"] for g in db.model_photos(mid)] == ["qa-extra-1"])
     витрина = next((x for x in client.get("/api/products").get_json() if x["id"] == второй), {})
     c("и витрина показывает фото на второй точке", any("qa-extra-1" in ph["url"] for ph in витрина.get("photos") or []))
@@ -215,10 +216,10 @@ def run_двойник_на_той_же_точке():
     c(f"LM-04: совет не зовёт удалять и не обещает сохранить отзывы: {совет!r}",
       "удалите" not in совет and "сохранятся" not in совет and "Не удаляйте" in совет)
     c("LM-04: совет называет, что унесло бы удаление: отзывы (1)", "отзывы (1)" in совет)
-    c("LM-04: совет — снять с витрины", "Снять с витрины" in совет)
+    c("LM-04: совет — убрать в архив", "В архив" in совет)
     шаги = [client.post("/api/admin/stock/move", json={"initData": "x", "id": старый, "qty": 4, "reason": "lost"}),
             client.post("/api/admin/stock/move", json={"initData": "x", "id": есть, "qty": 4, "reason": "in"}),
-            client.post("/api/admin/product/update", json={"initData": "x", "id": старый, "field": "hidden", "value": 1})]
+            client.post("/api/admin/product/archive", json={"initData": "x", "id": старый, "archived": True})]
     c(f"шаги совета прошли: {[ш.status_code for ш in шаги]}", all(ш.status_code == 200 for ш in шаги))
     c("остаток перенесён: старый 0, модель 6",
       db.get_product(старый)["stock"] == 0 and db.get_product(есть)["stock"] == 6)

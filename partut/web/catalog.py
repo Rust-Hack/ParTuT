@@ -394,8 +394,9 @@ def _проверить_поле(admin, pid, field, raw):
             if mid and value != cur["city"] and any(
                     p["city"] == value and p["id"] != pid
                     and (p["model_id"] if "model_id" in p.keys() else None) == mid
-                    for p in db.get_all_products()):
-                # Перенос на точку, где эта модель уже стоит, создал бы двойника.
+                    for p in db.get_all_products(include_archived=True)):
+                # Перенос на точку, где эта модель уже стоит (или лежит в
+                # архиве), создал бы двойника.
                 return None, ("already_here", "На этой точке товар уже есть.")
         elif field in ("is_hit", "hidden"):
             value = 1 if raw else 0
@@ -716,7 +717,48 @@ def api_admin_variants_change():
 
 @bp.route("/api/admin/product/delete", methods=["POST"])
 def api_admin_delete():
-    """Удалить товар."""
+    """Удалить товар насовсем — только из архива и только без истории.
+
+    Раньше «Удалить с точки» стоял рядом с повседневными действиями и уносил
+    историю склада (движения теряли товар: выпадали из журнала точки) и
+    отзывы. На «больше не возим» теперь отвечает архив; удаление осталось
+    для товара, заведённого по ошибке: ни одного движения склада и ни одного
+    заказа. Только владелец (auth._OWNER_ONLY_EXACT)."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    pid = inputs.целое(data.get("id"))
+    if pid is None:
+        return jsonify({"ok": False, "error": "bad_id"}), 400
+    товар_ = db.get_product(pid)
+    if not товар_:
+        return jsonify({"ok": False, "error": "not_found", "message": "Этого товара больше нет — обновите список."}), 404
+    if not товар_["archived"]:
+        # Страница, открытая до обновления, ещё пришлёт старое «Удалить с точки».
+        return jsonify({"ok": False, "error": "use_archive",
+                        "message": "Товар больше не удаляется с точки — его убирают в архив (⋯ → «🗄 В архив»): "
+                                   "история склада и отзывы сохранятся. Если видите это — закройте приложение "
+                                   "и откройте заново."}), 409
+    история = db.product_history(pid)
+    if история["moves"] or история["orders"]:
+        части = [x for x in (f"движений склада: {история['moves']}" if история["moves"] else "",
+                             f"заказов: {история['orders']}" if история["orders"] else "") if x]
+        return jsonify({"ok": False, "error": "has_history", **история,
+                        "message": f"У товара есть история ({', '.join(части)}) — удалить его значит потерять её. "
+                                   "Он останется в архиве: там его не видно ни покупателям, ни в списках."}), 409
+    db.delete_variants(pid)
+    db.delete_product(pid)
+    g.log_note = f"«{товар_['name']}» · {товар_['city']}: удалён из архива насовсем (истории не было)"
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/admin/product/archive", methods=["POST"])
+def api_admin_product_archive():
+    """В архив («больше не возим») или обратно — db.archive_product.
+
+    Продавцу — на своей точке: раньше он мог удалить свой товар, архив
+    мягче удаления."""
     data = request.get_json(force=True, silent=True) or {}
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
@@ -727,28 +769,65 @@ def api_admin_delete():
     deny = auth.deny_product(admin, pid)
     if deny:
         return deny
+    в_архив = bool(data.get("archived", True))
+    try:
+        итог = db.archive_product(pid, в_архив)
+    except db.ArchiveRefused as e:
+        статус = {"not_found": 404}.get(e.code, 409)
+        return jsonify({"ok": False, "error": e.code, "message": e.message, **e.extra}), статус
+    p = итог["product"]
+    if итог["changed"]:
+        g.log_note = f"«{p['name']}» · {p['city']}: " + ("убран в архив" if в_архив else "возвращён из архива")
+    return jsonify({"ok": True, "changed": итог["changed"], "archived": в_архив})
 
-    # Незакрытые заказы по этому товару — повод остановиться и спросить.
-    # Заказ удаление переживёт (состав хранится в самом заказе), но продавец
-    # останется с обязательством выдать то, чего в магазине больше нет, и
-    # узнает об этом от покупателя. Не запрещаем — предупреждаем: бывает, что
-    # убрать надо именно сейчас.
-    if not data.get("force"):
-        живых = db.open_orders_with_product(pid)
-        if живых:
-            слово = "заказ" if живых == 1 else ("заказа" if живых < 5 else "заказов")
-            return jsonify({"ok": False, "error": "open_orders", "count": живых,
-                            "message": f"По этому товару есть {живых} незакрытых {слово}. "
-                                       f"Сначала выдайте или отклоните их — или удаляйте, "
-                                       f"понимая, что выдавать будет нечего."}), 409
 
-    товар_ = db.get_product(pid)
-    db.delete_variants(pid)
-    db.delete_product(pid)
-    if товар_:
-        g.log_note = (f"«{товар_['name']}» · {товар_['city']}: удалён с точки"
-                      + (f" (на остатке было {int(товар_['stock'] or 0)} шт)" if товар_["stock"] else ""))
-    return jsonify({"ok": True})
+@bp.route("/api/admin/model/archive", methods=["POST"])
+def api_admin_model_archive():
+    """Товар в архив на всех точках — одним нажатием, по точке за раз.
+
+    Каждая точка проверяется сама: где остаток или невыданные заказы, товар
+    остаётся, и человек получает список «где и почему»."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not auth.get_admin(data.get("initData", "")):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    mid = inputs.целое(data.get("model_id"))
+    модель = db.get_model(mid) if mid is not None else None
+    if not модель:
+        return jsonify({"ok": False, "error": "not_found", "message": "Этого товара больше нет — обновите список."}), 404
+    убраны, остались = [], []
+    for p in db.get_all_products():
+        if p["model_id"] != mid:
+            continue
+        try:
+            if db.archive_product(p["id"], True)["changed"]:
+                убраны.append(p["city"])
+        except db.ArchiveRefused as e:
+            остались.append({"city": p["city"], "id": p["id"], "error": e.code, "message": e.message})
+    if убраны:
+        g.log_note = (f"«{модель['name']}»: в архив — {', '.join(убраны)}"
+                      + (f"; осталось: {', '.join(x['city'] for x in остались)}" if остались else ""))
+    return jsonify({"ok": True, "archived": убраны, "left": остались})
+
+
+@bp.route("/api/admin/archive", methods=["POST"])
+def api_admin_archive_list():
+    """Блок «🗄 Архив» внизу «🛍 Товаров». Продавцу — своя точка."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    владелец = admin.get("role") in ("dev", "owner")       # «удалить насовсем» — только ему
+    out = []
+    for p in db.archived_products(admin.get("city") or None):
+        строка = {"id": p["id"], "name": p["name"], "brand": p["brand"] or "", "city": p["city"],
+                  "category": p["category"], "model_id": p["model_id"], "price": float(p["price"] or 0),
+                  "hidden": bool(p["hidden"]),
+                  "thumb": f"/api/photo?file_id={p['photo_thumb'] or p['photo']}" if p["photo"] else ""}
+        if владелец:
+            история = db.product_history(p["id"])
+            строка["can_delete"] = not (история["moves"] or история["orders"])
+        out.append(строка)
+    return jsonify({"ok": True, "items": out})
 
 
 def _не_картинка(file):
@@ -1112,11 +1191,15 @@ def api_admin_model_delete():
     итог = db.delete_model(mid)
     if итог == "has_products":
         города = db.cities_of_model(mid)
+        в_архиве = sorted({p["city"] for p in db.archived_products() if p["model_id"] == mid})
+        стоит = [г for г in города if г not in в_архиве]
+        где = "; ".join(x for x in (f"стоит на точках: {', '.join(стоит)}" if стоит else "",
+                                    f"в архиве на точках: {', '.join(в_архиве)}" if в_архиве else "") if x)
         return jsonify({"ok": False, "error": "has_products", "count": db.count_products_of_model(mid), "cities": города,
-                        "message": f"«{модель['name']}» стоит на точках: {', '.join(города)}. Удалить модель вместе "
-                                   "с ними нельзя — пропали бы остаток, история склада и отзывы. Больше не продаёте — "
-                                   "снимите модель с витрины (🚫). Удалить совсем — сначала уберите товар с каждой "
-                                   "точки (⋯ → «Удалить с точки»)."}), 400
+                        "archived_cities": в_архиве,
+                        "message": f"«{модель['name']}» {где}. Удалить описание вместе с товаром нельзя — пропали бы "
+                                   "история склада и отзывы. Больше не продаёте — уберите в архив "
+                                   "(⋯ → «🗄 В архив на всех точках»): там всё сохранится, и вернуть можно в любой момент."}), 400
     if итог == "not_found":
         return jsonify({"ok": False, "error": "not_found"}), 404
     g.log_note = f"модель «{модель['name']}» удалена из ассортимента"
@@ -1254,6 +1337,11 @@ def api_admin_product_from_model():
                         "message": "Эту модель только что удалили из ассортимента — обновите список."}), 409
     if pid == "already_here":
         return jsonify({"ok": False, "error": "already_here"}), 400
+    if pid == "in_archive":
+        архивный = next((p for p in db.archived_products(city) if p["model_id"] == mid), None)
+        return jsonify({"ok": False, "error": "in_archive", "id": архивный["id"] if архивный else None,
+                        "message": f"На точке «{city}» этот товар в архиве. Верните его оттуда — с прежними "
+                                   "отзывами и историей, — а не заводите второй: «🛍 Товары» → внизу «🗄 Архив»."}), 409
     if норм_вкусы:
         db.merge_model_flavors(mid, [v["flavor"] for v in норм_вкусы])
     всего = sum(v["stock"] for v in норм_вкусы) if норм_вкусы else stock

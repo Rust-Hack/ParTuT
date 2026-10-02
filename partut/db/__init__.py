@@ -834,6 +834,11 @@ def _ensure_product_columns():
     # продаём» и «этого не было» — разные действия.
     if "hidden" not in cols:
         cur.execute("ALTER TABLE products ADD COLUMN hidden INTEGER DEFAULT 0")
+    # Архив: «больше не возим» без удаления. Товар уходит с глаз — с витрины,
+    # из списков, поставки и бота, — но запись, отзывы, фото и история склада
+    # остаются, и вернуть его можно той же записью (db.catalog.archive_product).
+    if "archived" not in cols:
+        cur.execute("ALTER TABLE products ADD COLUMN archived INTEGER DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -2761,6 +2766,7 @@ from partut.db.catalog import (                                         # noqa: 
     add_product_from_model, create_point_product,                           # noqa: F401
     PublishRefused, publish_product, add_draft_photo, purge_draft_photos,   # noqa: F401
     ToModelRefused, product_to_model,                                       # noqa: F401
+    ArchiveRefused, archive_product, archived_products, product_history,    # noqa: F401
     DRAFT_PHOTO_KEEP_DAYS,                                                  # noqa: F401
     get_variants, get_all_variants, add_variant, delete_variants,           # noqa: F401
     replace_variants_if, change_variants,                                   # noqa: F401

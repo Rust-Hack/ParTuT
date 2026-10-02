@@ -181,6 +181,7 @@ def get_business_stats(days=None):
     # владелец видел цифру и не знал, что открыть. Теперь знает.
     cur.execute("""SELECT name, city FROM products
                     WHERE (cost IS NULL OR cost <= 0) AND (hidden IS NULL OR hidden = 0)
+                      AND COALESCE(archived, 0) = 0
                     ORDER BY name""")
     без_закупки = [{"name": r["name"], "city": r["city"]} for r in cur.fetchall()]
 

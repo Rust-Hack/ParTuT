@@ -207,6 +207,7 @@ _WRITE_PATHS = {
     "/api/admin/category/spec": ("categories",), "/api/admin/category/spec/update": ("categories",),
     "/api/admin/category/spec/delete": ("categories",),
     "/api/admin/product/variants": _ТОВАРЫ, "/api/admin/product/delete": _ТОВАРЫ,
+    "/api/admin/product/archive": _ТОВАРЫ, "/api/admin/model/archive": _ТОВАРЫ,
     "/api/admin/photo": _ТОВАРЫ, "/api/admin/photo/add": _ТОВАРЫ, "/api/admin/photo/delete": _ТОВАРЫ,
     # Оценка живёт в карточке товара, поэтому её публикация обновляет витрину.
     "/api/admin/review/decide": _ТОВАРЫ, "/api/admin/review/delete": _ТОВАРЫ,
@@ -869,9 +870,10 @@ def api_admin_reviews():
 
 
 def _sold_here(city):
-    """Что продаётся на точке: id товаров и id их моделей."""
+    """Что продаётся на точке: id товаров и id их моделей. С архивом: отзывы
+    об архивном товаре остаются, и разбирать их продавец должен по-прежнему."""
     pids, mids = set(), set()
-    for p in db.get_all_products():
+    for p in db.get_all_products(include_archived=True):
         if p["city"] == city:
             pids.add(p["id"])
             mid = p["model_id"] if "model_id" in p.keys() else None

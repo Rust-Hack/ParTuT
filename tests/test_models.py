@@ -107,9 +107,9 @@ def run():
     c4("модель с товарами так не удалить", r.status_code == 400 and r.get_json()["error"] == "has_products")
     c4("и сказано, сколько точек затронуто", r.get_json()["count"] == 2)
     d = r.get_json()
-    c4("названы точки и что делать вместо — снять с витрины или убрать с точек",
+    c4("названы точки и что делать вместо — убрать в архив на всех точках",
        d.get("cities") == sorted({db.get_product(p1)["city"], db.get_product(p2)["city"]})
-       and "снимите модель с витрины" in d.get("message", "") and "Удалить с точки" in d.get("message", ""))
+       and "В архив на всех точках" in d.get("message", "") and "Удалить с точки" not in d.get("message", ""))
     # Раньше «force» удалял модель, оставляя товары без модели, без галереи и
     # без отзывов. Теперь не действует.
     r = client.post("/api/admin/model/delete", json={"initData": "x", "id": mid, "force": True})

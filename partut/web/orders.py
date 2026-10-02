@@ -167,6 +167,10 @@ def api_order():
         # по остальному не рушим, тихо пропускаем эту позицию.
         if "hidden" in p.keys() and p["hidden"]:
             continue
+        # Архив — то же «больше не возим», только насовсем: остаток у него 0,
+        # но пропускаем явно, не полагаясь на это.
+        if "archived" in p.keys() and p["archived"]:
+            continue
         known = ctx["variants"].get(pid, {})
         if flavor:
             # товар-модель со вкусами: остаток берём у нужного варианта

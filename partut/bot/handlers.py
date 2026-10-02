@@ -458,34 +458,35 @@ def handle_admin_callback(call, chat_id, user_id, data):
         if not product:
             bot.send_message(chat_id, "Товар уже не найден.")
             return
-        # Та же проверка, что и в приложении (partut/web/catalog.py:api_admin_delete):
-        # незакрытые заказы по товару — повод спросить ещё раз, а не удалить молча.
-        живых = db.open_orders_with_product(product_id)
-        предупреждение = ""
-        if живых:
-            слово = "заказ" if живых == 1 else ("заказа" if живых < 5 else "заказов")
-            предупреждение = f"\n\n⚠️ По товару есть {живых} незакрытых {слово} — выдавать будет нечего."
+        # Как в приложении (partut/web/catalog.py): удаления с точки больше нет,
+        # «больше не возим» — это архив. Остаток и невыданные заказы проверит
+        # db.archive_product и откажет с объяснением.
         kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🗑 Да, удалить", callback_data=f"admdelyes:{product_id}"))
+        kb.add(types.InlineKeyboardButton("🗄 Да, в архив", callback_data=f"admdelyes:{product_id}"))
         kb.add(types.InlineKeyboardButton("Отмена", callback_data=f"admcard:{product_id}"))
-        bot.send_message(chat_id, f"Точно удалить «{product['name']}»?{предупреждение}", reply_markup=kb)
+        bot.send_message(chat_id, f"Убрать «{product['name']}» в архив? С витрины и из списков он уйдёт, "
+                                  "а отзывы и история склада останутся — вернуть можно в приложении, "
+                                  "«🛍 Товары» → внизу «🗄 Архив».", reply_markup=kb)
         return
 
     if data.startswith("admdelyes:"):
+        # Имя кнопки прежнее: в старых сообщениях чата осталась «🗑 Да, удалить» —
+        # теперь и она убирает в архив, а не стирает товар.
         product_id = int(parts[1])
         product = _my_product(user_id, product_id)
         if not product:
             bot.answer_callback_query(call.id, "Товар другой точки", show_alert=True)
             return
-        # Вариантов (вкус/сопротивление/цвет) без этого удаления товар не
-        # чистит — раньше они оставались мусором в product_variants, потому
-        # что чат удалял только сам товар (в отличие от api_admin_delete).
-        db.delete_variants(product_id)
-        db.delete_product(product_id)
-        _log_bot(user_id, "product/delete", f"id={product_id} · name={product['name']}")
-        name = product["name"]
-        bot.answer_callback_query(call.id, "Удалено")
-        bot.send_message(chat_id, f"🗑 «{name}» удалён.")
+        try:
+            итог = db.archive_product(product_id, True)
+        except db.ArchiveRefused as e:
+            bot.answer_callback_query(call.id)
+            bot.send_message(chat_id, f"Не убрал «{product['name']}» в архив.\n\n{e.message}")
+            return
+        if итог["changed"]:
+            _log_bot(user_id, "product/archive", f"id={product_id} · «{product['name']}» · {product['city']}: убран в архив")
+        bot.answer_callback_query(call.id, "В архиве")
+        bot.send_message(chat_id, f"🗄 «{product['name']}» в архиве.")
         show_admin_list(chat_id, user_id)
         return
 
@@ -565,7 +566,7 @@ def show_product_card(chat_id, product_id):
     )
     kb.add(
         types.InlineKeyboardButton("🔥 Хит вкл/выкл", callback_data=f"admhit:{product_id}"),
-        types.InlineKeyboardButton("🗑 Убрать с точки", callback_data=f"admdel:{product_id}"),
+        types.InlineKeyboardButton("🗄 В архив", callback_data=f"admdel:{product_id}"),
     )
     kb.add(types.InlineKeyboardButton("⬅️ К списку", callback_data="adm:list"))
 

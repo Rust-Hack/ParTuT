@@ -24,7 +24,7 @@ def get_products(city, category):
     cur = conn.cursor()
     cur.execute(db._q(
         """SELECT * FROM products
-           WHERE city = %s AND category = %s
+           WHERE city = %s AND category = %s AND COALESCE(archived, 0) = 0
            ORDER BY (stock > 0) DESC, is_hit DESC, price ASC"""),
         (city, category),
     )
@@ -42,10 +42,13 @@ def get_product(product_id):
     return row
 
 
-def get_all_products():
+def get_all_products(include_archived=False):
+    """Товары точек. Архив — только по просьбе: витрине, боту, поставке,
+    спискам и счётчикам «мало/нет» он не нужен, ради этого он и архив."""
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM products ORDER BY city, category, name")
+    cur.execute("SELECT * FROM products " + ("" if include_archived else "WHERE COALESCE(archived, 0) = 0 ")
+                + "ORDER BY city, category, name")
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -126,6 +129,114 @@ def delete_product(product_id):
     cur.execute(db._q("DELETE FROM favorites WHERE product_id = %s"), (product_id,))
     conn.commit()
     conn.close()
+
+
+class ArchiveRefused(Exception):
+    """Товар не убран в архив (или не возвращён) — с причиной для человека."""
+
+    def __init__(self, code, message, **extra):
+        super().__init__(message)
+        self.code, self.message, self.extra = code, message, extra
+
+
+def archive_product(product_id, archived=True):
+    """Убрать товар точки в архив или вернуть его — та же запись, ничего не стирая.
+
+    Архив — ответ на «больше не возим». Раньше на него было два ответа, оба
+    плохие: «Удалить с точки» уносил историю склада и отзывы, а «Снять с
+    витрины» оставлял товар висеть в списках и счётчиках «нет в наличии»
+    навсегда. Архивный товар не виден нигде, кроме блока «🗄 Архив»; его
+    отзывы, фото, история склада, избранное и «жду поступления» покупателей
+    остаются как были. Вернуть — значит та же запись снова на месте, ровно
+    такой, какой была (снятая с витрины — снятой).
+
+    В архив только пустую полку и без невыданных заказов: остаток в архиве —
+    штуки, которых не видно ни в одном списке, а заказ — обязательство выдать
+    то, что убрали. Проверка под замком товара: приход по вкусу, пришедший в
+    ту же секунду, либо закончится раньше (и мы увидим остаток), либо увидит
+    архив и откажет (db.stock_operation).
+
+    Возвращает {"changed": bool, "product": строка товара до изменения}."""
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        if db.USE_PG:
+            cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (product_id,))
+        else:
+            cur.execute("UPDATE products SET id = id WHERE id = ?", (product_id,))
+        cur.execute(db._q("SELECT * FROM products WHERE id = %s"), (product_id,))
+        p = cur.fetchone()
+        if not p:
+            raise ArchiveRefused("not_found", "Этого товара больше нет — обновите список.")
+        p = dict(p)
+        if bool(p["archived"]) == bool(archived):
+            conn.rollback()
+            conn.close()
+            return {"changed": False, "product": p}
+        if archived:
+            штук = int(p["stock"] or 0)
+            if штук > 0:
+                raise ArchiveRefused(
+                    "on_stock",
+                    f"На полке ещё {штук} шт. В архив убирают то, чего на точке больше нет: продайте остаток "
+                    "или спишите его в «📦 Склад» с причиной. Если просто не хотите пока продавать — "
+                    "«🚫 Снять с витрины».", stock=штук)
+            живых = db.open_orders_with_product(product_id)
+            if живых:
+                сколько = (f"{живых} невыданный заказ" if живых % 10 == 1 and живых % 100 != 11
+                           else f"{живых} невыданных заказа" if 2 <= живых % 10 <= 4 and not 12 <= живых % 100 <= 14
+                           else f"{живых} невыданных заказов")
+                raise ArchiveRefused(
+                    "open_orders",
+                    f"По этому товару {сколько}. Сначала выдайте или отклоните "
+                    + ("его" if живых == 1 else "их") + ", потом убирайте в архив.", count=живых)
+        cur.execute(db._q("UPDATE products SET archived = %s WHERE id = %s"), (1 if archived else 0, product_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return {"changed": True, "product": p}
+
+
+def archived_products(city=None):
+    """Архив — для блока «🗄 Архив» в «🛍 Товарах». city — точка продавца."""
+    conn = db.connect()
+    cur = conn.cursor()
+    if city:
+        cur.execute(db._q("SELECT * FROM products WHERE archived = 1 AND city = %s ORDER BY name"), (city,))
+    else:
+        cur.execute("SELECT * FROM products WHERE archived = 1 ORDER BY name, city")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def product_history(product_id):
+    """Есть ли у товара история: движения склада и заказы, где он был.
+
+    Удалить насовсем можно только товар без неё — заведённый по ошибке.
+    Удаление товара с историей оставляло её висеть без товара: движения
+    выпадали из журнала точки, а в журнале магазина теряли название."""
+    conn = db.connect()
+    cur = conn.cursor()
+    cur.execute(db._q("SELECT COUNT(*) AS n FROM stock_moves WHERE product_id = %s"), (product_id,))
+    движений = int(cur.fetchone()["n"])
+    # Связи «заказ — товар» в базе нет, состав — строка JSON. LIKE отсеивает
+    # заказы без этого числа вовсе, разбор отличает 12 от 120.
+    cur.execute(db._q("SELECT items FROM orders WHERE items LIKE %s"), (f"%{int(product_id)}%",))
+    заказов = 0
+    for строка in cur.fetchall():
+        try:
+            состав = json.loads(строка["items"] or "[]")
+        except (TypeError, ValueError):
+            continue
+        if any(isinstance(и, dict) and int(и.get("id") or и.get("product_id") or 0) == int(product_id)
+               for и in состав):
+            заказов += 1
+    conn.close()
+    return {"moves": движений, "orders": заказов}
 
 
 def change_stock(product_id, delta):
@@ -644,11 +755,14 @@ def create_point_product(model_id, city, price, cost=0, is_hit=0, stock=0, varia
             conn.rollback()
             conn.close()
             return None
-        cur.execute(db._q("SELECT 1 AS x FROM products WHERE model_id = %s AND city = %s"), (model_id, city))
-        if cur.fetchone():
+        cur.execute(db._q("SELECT archived FROM products WHERE model_id = %s AND city = %s"), (model_id, city))
+        есть = cur.fetchone()
+        if есть:
+            # В архиве — вернуть ту же запись (с её отзывами и историей), а не
+            # завести вторую: из архива она вернулась бы двойником.
             conn.rollback()
             conn.close()
-            return "already_here"
+            return "in_archive" if есть["archived"] else "already_here"
         cur.execute(db._q("SELECT * FROM models WHERE id = %s"), (model_id,))
         m = _model_json(cur.fetchone())
         pid = _на_точку(cur, m, model_id, city, price, cost, is_hit, stock, variants, admin_id)
@@ -808,8 +922,14 @@ def publish_product(admin_id, token, fingerprint, модель, фото, точ
         cur.execute(db._q("SELECT id, name, brand FROM models WHERE category = %s"), (категория,))
         for r in cur.fetchall():
             if (r["name"] or "").strip().lower() == имя.lower() and (r["brand"] or "").strip().lower() == бренд.lower():
-                raise PublishRefused("exists", f"Такая модель уже есть: «{r['name']}». Завезите её на точку, а не заводите вторую.",
-                                     model_id=int(r["id"]), name=r["name"])
+                cur.execute(db._q("SELECT COALESCE(SUM(CASE WHEN archived = 1 THEN 0 ELSE 1 END), 0) AS живых, "
+                                  "COUNT(*) AS всего FROM products WHERE model_id = %s"), (int(r["id"]),))
+                н = cur.fetchone()
+                в_архиве = int(н["всего"] or 0) > 0 and int(н["живых"] or 0) == 0
+                raise PublishRefused("exists", f"Такая модель уже есть: «{r['name']}». "
+                                     + ("Она в архиве — верните её: «🛍 Товары» → внизу «🗄 Архив» → «↩ Вернуть»."
+                                        if в_архиве else "Завезите её на точку, а не заводите вторую."),
+                                     model_id=int(r["id"]), name=r["name"], archived=в_архиве)
 
         # Фото — только загруженные в черновик этим же человеком.
         миниатюры = {}
@@ -930,7 +1050,7 @@ def product_to_model(product_id, link_to=None):
             # вещи на одной точке: две цены, два остатка, две карточки на
             # витрине. Сливать их молча нельзя (заказы и история склада у
             # каждой свои), поэтому отказываем и говорим, как разобрать руками.
-            cur.execute(db._q("SELECT id FROM products WHERE model_id = %s AND city = %s"),
+            cur.execute(db._q("SELECT id, archived FROM products WHERE model_id = %s AND city = %s"),
                         (int(двойник["id"]), p["city"]))
             занято = cur.fetchone()
             if занято:
@@ -943,10 +1063,13 @@ def product_to_model(product_id, link_to=None):
                 отзывов = int(cur.fetchone()["n"])
                 raise ToModelRefused(
                     "twin_on_point",
-                    f"На точке «{p['city']}» «{двойник['name']}» уже стоит отдельным товаром из ассортимента. "
+                    f"На точке «{p['city']}» «{двойник['name']}» уже стоит отдельным товаром из ассортимента"
+                    + (" (сейчас в архиве). " if занято["archived"] else ". ") +
                     "Привязать к нему этот — значит завести одну вещь на одной точке дважды: с двумя ценами "
-                    "и двумя остатками.\n\nКак разобрать: в «📦 Склад» этого товара спишите остаток, в том — "
-                    "примите столько же, потом снимите этот товар с витрины (⋯ → «🚫 Снять с витрины»). "
+                    "и двумя остатками.\n\nКак разобрать: "
+                    + ("верните тот товар из архива («🗄 Архив» внизу списка), затем " if занято["archived"] else "")
+                    + "в «📦 Склад» этого товара спишите остаток, в том — примите столько же, потом уберите "
+                    "этот товар в архив (⋯ → «🗄 В архив»): в архиве его отзывы и история склада остаются. "
                     "Не удаляйте его: удаление унесёт его историю склада"
                     + (f" и отзывы ({отзывов}) — к модели они не перейдут." if отзывов else "."),
                     model_id=int(двойник["id"]), product_id=int(занято["id"]), reviews=отзывов)
@@ -1094,6 +1217,8 @@ def change_variants(product_id, add=None, remove=None, admin_id=None, writeoff=F
         товар = cur.fetchone()
         if not товар:
             raise db.StockRefused("not_found", "Товар не найден — возможно, его уже убрали с точки.")
+        if товар["archived"]:
+            raise db.StockRefused("archived", "Товар в архиве — сначала верните его: «🛍 Товары» → внизу «🗄 Архив».")
         cur.execute(db._q("SELECT flavor, stock FROM product_variants WHERE product_id = %s ORDER BY id"),
                     (product_id,))
         было = {r["flavor"]: int(r["stock"] or 0) for r in cur.fetchall()}
