@@ -29,6 +29,11 @@ def _ensure_photo_columns():
         # Прежние фото товаров переносим на их модели.
         cur.execute("UPDATE product_photos SET model_id = ("
                     "SELECT model_id FROM products WHERE products.id = product_photos.product_id)")
+    # Фото модели принадлежит модели, а не точке: product_id = 0, как у
+    # add_model_photo. Перенос выше и «Сделать моделью» до 2.10 оставляли
+    # прежний номер товара, и удаление этой точки стирало галерею модели на
+    # всех остальных. Повторный запуск ничего не меняет.
+    cur.execute("UPDATE product_photos SET product_id = 0 WHERE model_id IS NOT NULL AND product_id <> 0")
     conn.commit()
     conn.close()
 

@@ -110,7 +110,12 @@ def delete_product(product_id):
     cur.execute(db._q("DELETE FROM products WHERE id = %s"), (product_id,))
     # Галерея без товара никому не видна, но место занимает и мешает считать
     # картинки — убираем вместе с товаром.
-    cur.execute(db._q("DELETE FROM product_photos WHERE product_id = %s"), (product_id,))
+    # Только своя галерея товара. Фото с model_id — галерея модели: она одна
+    # на все точки и уходит лишь вместе с моделью. Номер товара у них бывает
+    # (так перенесла галерею миграция на модели, так «Сделать моделью»
+    # переносил фото до 2.10), и прежнее «всё с этим product_id» стирало
+    # фото модели, которая осталась на других точках.
+    cur.execute(db._q("DELETE FROM product_photos WHERE product_id = %s AND model_id IS NULL"), (product_id,))
     # Отзывы о модели переживают снятие с точки: человек оценивал вещь, а не
     # факт её наличия в Турове. Раньше товар уносил с собой чужие слова —
     # вернул модель на точку через месяц, а отзывов уже нет.
@@ -565,24 +570,46 @@ def delete_model(model_id):
     формами. Теперь такую модель снимают с витрины или сначала убирают товар
     с точек.
 
-    Проверка и удаление — одним запросом: товар, заведённый в ту же секунду,
-    без модели не останется. Возвращает "deleted", "has_products" или
-    "not_found"."""
+    Сначала берём строку модели (_держать_модель), потом смотрим товары:
+    завоз держит ту же строку, пока не допишет товар, поэтому удаление либо
+    увидит его товар, либо завоз увидит, что модели больше нет. Одного
+    запроса «удалить, если товаров нет» для этого мало: в Postgres он
+    проверяет товары по снимку на своё начало и не видит товар, дописанный,
+    пока он ждал. Возвращает "deleted", "has_products" или "not_found"."""
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("DELETE FROM models WHERE id = %s "
-                      "AND NOT EXISTS (SELECT 1 FROM products WHERE model_id = %s)"), (model_id, model_id))
-    if cur.rowcount > 0:
-        # Галерея модели — не товара: без этого фото оставались бы в базе
-        # навсегда, ничем больше не удерживаемые.
-        cur.execute(db._q("DELETE FROM product_photos WHERE model_id = %s"), (model_id,))
-        итог = "deleted"
-    else:
-        cur.execute(db._q("SELECT 1 AS x FROM models WHERE id = %s"), (model_id,))
-        итог = "has_products" if cur.fetchone() else "not_found"
-    conn.commit()
+    try:
+        if not _держать_модель(cur, model_id):
+            итог = "not_found"
+        else:
+            cur.execute(db._q("SELECT 1 AS x FROM products WHERE model_id = %s"), (model_id,))
+            if cur.fetchone():
+                итог = "has_products"
+            else:
+                cur.execute(db._q("DELETE FROM models WHERE id = %s"), (model_id,))
+                # Галерея модели — не товара: без этого фото оставались бы в базе
+                # навсегда, ничем больше не удерживаемые.
+                cur.execute(db._q("DELETE FROM product_photos WHERE model_id = %s"), (model_id,))
+                итог = "deleted"
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
     conn.close()
     return итог
+
+
+def _держать_модель(cur, model_id):
+    """Берёт строку модели до конца транзакции. False — модели нет.
+
+    Пустая запись (id = id) — не ради изменения: в Postgres она запирает
+    строку так же, как SELECT … FOR UPDATE, а в SQLite первая запись
+    транзакции берёт замок на всю базу. Так один и тот же код держит модель
+    в обеих базах. Если модель удалили, пока мы ждали замка, запись не
+    найдёт строки — это и есть ответ «модели нет»."""
+    cur.execute(db._q("UPDATE models SET id = id WHERE id = %s"), (model_id,))
+    return cur.rowcount > 0
 
 
 def add_product_from_model(model_id, city, price, cost=0, stock=0, is_hit=0):
@@ -601,14 +628,29 @@ def create_point_product(model_id, city, price, cost=0, is_hit=0, stock=0, varia
     упиралось в пустоту.
 
     variants — [{"flavor", "stock"}] у модели с вариантами; у остальных — stock.
-    Возвращает id товара или None, если модели нет.
+    Возвращает id товара, None — если модели уже нет, или "already_here" —
+    если эта модель на точке уже стоит.
+
+    Модель и точку проверяем ВНУТРИ транзакции, держа строку модели: раньше
+    модель читалась до неё, и удаление, успевшее в этот промежуток, оставляло
+    на точке товар с остатком, ссылающийся на модель, которой нет. Два
+    одновременных завоза одной модели на одну точку по той же причине давали
+    две строки.
     """
-    m = get_model(model_id)
-    if not m:
-        return None
     conn = db.connect()
     cur = conn.cursor()
     try:
+        if not _держать_модель(cur, model_id):
+            conn.rollback()
+            conn.close()
+            return None
+        cur.execute(db._q("SELECT 1 AS x FROM products WHERE model_id = %s AND city = %s"), (model_id, city))
+        if cur.fetchone():
+            conn.rollback()
+            conn.close()
+            return "already_here"
+        cur.execute(db._q("SELECT * FROM models WHERE id = %s"), (model_id,))
+        m = _model_json(cur.fetchone())
         pid = _на_точку(cur, m, model_id, city, price, cost, is_hit, stock, variants, admin_id)
         conn.commit()
     except Exception:
@@ -880,6 +922,25 @@ def product_to_model(product_id, link_to=None):
         двойник = next((m for m in cur.fetchall()
                         if (m["name"] or "").strip().lower() == имя.lower()
                         and (m["brand"] or "").strip().lower() == бренд.lower()), None)
+        if двойник and not _держать_модель(cur, двойник["id"]):
+            # Модель удалили, пока мы её искали: привязывать не к чему.
+            raise ToModelRefused("bad_link", "Такую модель только что удалили. Обновите экран и повторите.")
+        if двойник:
+            # Модель уже стоит на этой точке — привязка дала бы две строки одной
+            # вещи на одной точке: две цены, два остатка, две карточки на
+            # витрине. Сливать их молча нельзя (заказы и история склада у
+            # каждой свои), поэтому отказываем и говорим, как разобрать руками.
+            cur.execute(db._q("SELECT id FROM products WHERE model_id = %s AND city = %s"),
+                        (int(двойник["id"]), p["city"]))
+            занято = cur.fetchone()
+            if занято:
+                raise ToModelRefused(
+                    "twin_on_point",
+                    f"На точке «{p['city']}» «{двойник['name']}» уже стоит отдельным товаром из ассортимента. "
+                    "Привязать к нему этот — значит завести одну вещь на одной точке дважды: с двумя ценами "
+                    "и двумя остатками.\n\nКак разобрать: в «📦 Склад» этого товара спишите остаток, в том — "
+                    "примите столько же, потом удалите этот товар с точки. Отзывы о нём сохранятся.",
+                    model_id=int(двойник["id"]), product_id=int(занято["id"]))
         if link_to is None and двойник:
             raise ToModelRefused("exists", f"Такая модель уже есть: «{двойник['name']}».",
                                  model_id=int(двойник["id"]), name=двойник["name"])
@@ -932,7 +993,9 @@ def product_to_model(product_id, link_to=None):
                     (product_id,))
         свои = [int(r["id"]) for r in cur.fetchall()]
         for фид in свои[:места]:
-            cur.execute(db._q("UPDATE product_photos SET model_id = %s WHERE id = %s"), (mid, фид))
+            # Фото теперь принадлежит модели, а не точке: product_id = 0, как у
+            # любого фото галереи модели (add_model_photo).
+            cur.execute(db._q("UPDATE product_photos SET model_id = %s, product_id = 0 WHERE id = %s"), (mid, фид))
         # Отзывы — к модели: у товара с моделью они ищутся по ней.
         cur.execute(db._q("UPDATE reviews SET model_id = %s WHERE product_id = %s AND model_id IS NULL"),
                     (mid, product_id))

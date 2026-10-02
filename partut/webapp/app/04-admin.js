@@ -189,6 +189,11 @@ $("mBrands").onclick = openBrands;
 // модель» здесь больше нет: окно только правит описание существующего.
 let models = [], editingModelId = null, modelFlavors = [], modelPhotoFile = null;
 let описаниеСнимок = null;          // поля при открытии — чтобы не закрыть молча с правками
+// Номер открытия окна описания: растёт при каждом открытии и закрытии.
+// Сохранение помнит свой номер и, если ответ пришёл, когда окно уже закрыли
+// или открыли в нём другой товар, не трогает чужое окно.
+let описаниеСеанс = 0;
+const описаниеСохраняется = new Set();   // id товаров, чьё описание сейчас в пути
 
 async function fetchModels() {
   try {
@@ -244,7 +249,9 @@ function снимокОписания() {
 // который нигде не продаётся). Описание общее для всех точек — так и написано.
 async function открытьОписание(id) {
   if (!isOwner()) return;
+  const сеанс = ++описаниеСеанс;
   await Promise.all([fetchModels(), fetchBrands(), fetchFlavors()]);
+  if (сеанс !== описаниеСеанс) return;      // пока грузили, открыли другой товар
   const m = models.find(x => x.id === id);
   if (!m) { alertMsg("Этого товара больше нет — обновите список."); return; }
   $("mdCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
@@ -255,9 +262,17 @@ async function открытьОписание(id) {
     : "Этот товар пока нигде не продаётся. Завезти его на точку — в списке товаров, «📥 Завезти».";
   $("descView").classList.add("show");
   $("descView").scrollTop = 0;
+  кнопкаОписания();
   описаниеСнимок = снимокОписания();
 }
-function закрытьОписание() { $("descView").classList.remove("show"); описаниеСнимок = null; }
+function закрытьОписание() { $("descView").classList.remove("show"); описаниеСнимок = null; описаниеСеанс++; }
+// «Сохраняю…» — только у того товара, чьё описание в пути: открыли другой —
+// у него своя кнопка.
+function кнопкаОписания() {
+  const занято = описаниеСохраняется.has(editingModelId);
+  $("mdSave").disabled = занято;
+  $("mdSave").textContent = занято ? "Сохраняю…" : "Сохранить описание";
+}
 $("descClose").onclick = () => {
   if (описаниеСнимок && снимокОписания() !== описаниеСнимок) {
     confirmMsg("Есть несохранённые изменения описания. Закрыть без сохранения?", закрытьОписание);
@@ -265,47 +280,56 @@ $("descClose").onclick = () => {
 };
 
 $("mdSave").onclick = async () => {
-  if (!editingModelId) return;
+  if (!editingModelId || описаниеСохраняется.has(editingModelId)) return;
   const name = $("mdName").value.trim();
   if (!name) { alertMsg("Введите название."); return; }
+  // Всё, что относится к ЭТОМУ сохранению, берём до первого ожидания: пока
+  // идёт запрос, окно могут закрыть и открыть в нём другой товар — с другими
+  // полями и другим выбранным фото. Раньше фото и закрытие окна читались уже
+  // после ответа, и запоздавшее сохранение A уносило фото, выбранное для B,
+  // в товар A и закрывало окно B.
+  const сеанс = описаниеСеанс, id = editingModelId, фото = modelPhotoFile;
   const brandName = pickerValue("mdBrand");
-  await ensureBrandExists(brandName);
-  const body = { initData, id: editingModelId, category: $("mdCat").value, name, brand: brandName,
-                 description: $("mdDesc").value.trim(), specs: collectSpecs("mdSpecs"), flavors: modelFlavors };
-  $("mdSave").disabled = true; $("mdSave").textContent = "Сохраняю…";
+  const body = { initData, id, category: $("mdCat").value, name, brand: brandName,
+                 description: $("mdDesc").value.trim(), specs: collectSpecs("mdSpecs"), flavors: [...modelFlavors] };
+  let закрыто = false;                                              // своё окно закрыли мы сами, после успеха
+  const своё = () => !закрыто && сеанс === описаниеСеанс;
+  const чьё = (текст) => закрыто || своё() ? текст : `«${name}»: ${текст}`;   // окно уже о другом — называем товар
+  описаниеСохраняется.add(id); кнопкаОписания();
   try {
+    await ensureBrandExists(brandName);
     const r = await fetch("/api/admin/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json();
     if (!d.ok) {
-      alertMsg(d.error === "exists"
+      alertMsg(чьё(d.error === "exists"
         ? `Товар «${d.name}» с таким брендом уже есть. Переименовать в него нельзя — остатки и продажи разъехались бы по двум карточкам.`
-        : "Не удалось сохранить — проверьте название и категорию.");
+        : "Не удалось сохранить — проверьте название и категорию."));
       return;
     }
-    if (modelPhotoFile) {
+    if (фото) {
       const fd = new FormData();
-      fd.append("initData", initData); fd.append("id", d.id); fd.append("file", modelPhotoFile);
+      fd.append("initData", initData); fd.append("id", id); fd.append("file", фото);
       // Описание сохранится и без фото, поэтому не выходим: говорим про фото и
       // идём дальше. Молчать нельзя — снимок бы просто пропал.
       await админФайл("/api/admin/model/photo", fd, "загрузить фото");
-      modelPhotoFile = null;
+      if (своё() && modelPhotoFile === фото) modelPhotoFile = null;
     }
     await Promise.all([fetchModels(), fetchFlavors()]);
     await refreshAll();          // правка описания меняет и товары на точках, и справочник вкусов
-    закрытьОписание();
+    if (своё()) { закрытьОписание(); закрыто = true; }
     обновитьКарточкуПослеОписания();
     const orphans = (d.orphans || []).filter(o => o.stock > 0);
     if (orphans.length) {
       // Вкус убрали из описания, а на полке он есть — он и дальше продаётся.
-      alertMsg(`Сохранено ✅ Обновлено товаров на точках: ${d.updated}\n\n`
+      alertMsg(чьё(`Сохранено ✅ Обновлено товаров на точках: ${d.updated}\n\n`
         + `На точках остались варианты, которых больше нет в описании: `
         + orphans.map(o => `${o.flavor} (${o.stock} шт)`).join(", ")
-        + `.\nОни продолжают продаваться. Уберите их в карточке товара, если больше не возите.`);
+        + `.\nОни продолжают продаваться. Уберите их в карточке товара, если больше не возите.`));
     } else {
-      toast(d.updated ? `Сохранено · точек: ${d.updated}` : "Сохранено");
+      toast(чьё(d.updated ? `Сохранено · точек: ${d.updated}` : "Сохранено"));
     }
-  } catch (e) { alertMsg(текстСбоя(e)); }
-  finally { $("mdSave").disabled = false; $("mdSave").textContent = "Сохранить описание"; }
+  } catch (e) { alertMsg(чьё(текстСбоя(e))); }
+  finally { описаниеСохраняется.delete(id); кнопкаОписания(); }
 };
 
 function editModel(id) {

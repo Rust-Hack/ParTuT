@@ -1247,6 +1247,13 @@ def api_admin_product_from_model():
                                   is_hit=1 if data.get("is_hit") else 0,
                                   stock=0 if норм_вкусы else stock, variants=норм_вкусы,
                                   admin_id=int(admin["id"]))
+    # Проверки выше — по прочитанному до транзакции; окончательный ответ даёт
+    # она сама: модель могли удалить, а ту же модель — завезти сюда же.
+    if pid is None:
+        return jsonify({"ok": False, "error": "model_gone",
+                        "message": "Эту модель только что удалили из ассортимента — обновите список."}), 409
+    if pid == "already_here":
+        return jsonify({"ok": False, "error": "already_here"}), 400
     if норм_вкусы:
         db.merge_model_flavors(mid, [v["flavor"] for v in норм_вкусы])
     всего = sum(v["stock"] for v in норм_вкусы) if норм_вкусы else stock
