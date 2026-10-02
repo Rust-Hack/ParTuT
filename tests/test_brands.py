@@ -61,17 +61,26 @@ def run():
     # --- Переименование тянет за собой товары ---
     c2 = Checker("Переименование и удаление")
     pid = db.add_product("Минск", "coils", "Картридж XROS", 12.0, 3, brand="Vaporesso")
+    # Товар с описанием (моделью): бренд хранится и в модели, и на точке.
+    mid = db.add_model("podsystem", "XROS 6 MINI", "Vaporesso")
+    pmid = db.create_point_product(mid, "Минск", 38.0, 30.0, stock=1)
     r = client.post("/api/admin/brand", json={"initData": "x", "id": bid, "name": "Vaporesso Tech",
                                               "category": "", "flavors": ["Мята"]})
     c2("переименование прошло", (r.get_json() or {}).get("ok"))
-    c2("товары перенесены", r.get_json()["moved"] == 1)
+    c2("товары перенесены", r.get_json()["moved"] == 2)
     c2("у товара новое имя бренда", db.get_product(pid)["brand"] == "Vaporesso Tech")
+    c2("и у описания товара (модели) — тоже", db.get_model(mid)["brand"] == "Vaporesso Tech")
+    # Сохранение описания переписывает бренд на точках из модели: со старым
+    # брендом в модели оно вернуло бы товару имя, которого в справочнике нет.
+    client.post("/api/admin/model", json={"initData": "x", "id": mid, "category": "podsystem", "name": "XROS 6 MINI",
+                                          "brand": db.get_model(mid)["brand"], "description": "", "specs": {}, "flavors": []})
+    c2("после «Сохранить описание» бренд на точке не откатился", db.get_product(pmid)["brand"] == "Vaporesso Tech")
     c2("призрака в фильтре не осталось", db.count_products_of_brand("Vaporesso") == 0)
 
     # --- Удаление с товарами ---
     r = client.post("/api/admin/brand/delete", json={"initData": "x", "id": bid})
     c2("удаление бренда с товарами остановлено", r.status_code == 400 and r.get_json()["error"] == "has_products")
-    c2("и сказано, сколько товаров", r.get_json()["count"] == 1)
+    c2("и сказано, сколько товаров: две точки и одно описание", r.get_json()["count"] == 3)
     c2("бренд на месте", any(x["id"] == bid for x in _brands()))
     r = client.post("/api/admin/brand/delete", json={"initData": "x", "id": bid, "force": True})
     c2("с подтверждением удаляется", (r.get_json() or {}).get("ok"))

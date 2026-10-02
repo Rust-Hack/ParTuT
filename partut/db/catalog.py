@@ -466,6 +466,10 @@ def rename_brand_in_products(old_name, new_name):
     cur = conn.cursor()
     cur.execute(db._q("UPDATE products SET brand = %s WHERE brand = %s"), (new_name, old_name))
     n = cur.rowcount
+    # И в описаниях товаров (моделях): сохранение описания переписывает бренд
+    # на всех точках из модели — без этого первое же «Сохранить описание»
+    # возвращало товарам старое имя бренда, которого в справочнике уже нет.
+    cur.execute(db._q("UPDATE models SET brand = %s WHERE brand = %s"), (new_name, old_name))
     conn.commit()
     conn.close()
     return n
