@@ -81,6 +81,8 @@ function deliveryBlocker() {
   // он стоит у подъезда, а Telegram у покупателя выключен.
   if (m.needs_address && (selPhone.replace(/\D/g, "").length < 7)) return "Укажите телефон для курьера";
   if (m.needs_payment && !selPayment) return "Выберите способ оплаты";
+  // Точку закрыли, пока человек оформлял (или окно было открыто раньше).
+  if (паузаТочки(city)) return `Точка закрыта ${паузаТочки(city).words}`;
   return null;
 }
 
@@ -329,6 +331,16 @@ async function doSubmitOrder() {
         selPromo = ""; promoOff = 0; promoErr = "";
         renderDelivery();
         alertMsg(d.message || "Промокод больше не действует.");
+        return;
+      }
+      // Точку закрыли, пока человек оформлял: говорим словами сервера (там
+      // время открытия) и перечитываем точки — баннер и кнопка в корзине
+      // покажут то же самое.
+      if (d.error === "point_closed") {
+        await fetchLocations();
+        closeOverlay($("deliveryOverlay"));
+        renderGrid(); renderCart(); renderNav();
+        alertMsg(d.message || "Точка сейчас закрыта — заказать получится после открытия.");
         return;
       }
       if (d.error === "sold_out") {

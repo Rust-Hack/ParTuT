@@ -3,6 +3,12 @@
    тёмная включается атрибутом <html data-theme="dark">.
    Меняя значения здесь, вы меняете весь дизайн разом.
    ============================================================ */
+
+/* Атрибут hidden прячет ВСЕГДА. Без этого любое правило с display (flex,
+   grid) у класса перебивает его: так уже трижды выходило — плитки, кнопки
+   мастера, баннер закрытой точки (пустая рамка над каталогом у каждого
+   покупателя). Одно правило вместо заплатки у каждого класса. */
+[hidden] { display: none !important; }
 /* Светлая тема — «пар на свету». Тёмная показывает пар ночью: неон светит
    сквозь него. Светлая — тот же пар днём, поэтому фон не нейтрально-серый,
    а холодный молочный с бирюзой, и даже текст уведён в фирменный оттенок:
@@ -1330,3 +1336,18 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 .salesale.off { opacity: .55; }
 .salesale.off b { text-decoration: line-through; }
 #salePay { margin-bottom: 8px; }
+
+/* Точка закрыта на время — над каталогом и в корзине. */
+.pausebanner { display: flex; flex-direction: column; gap: 4px; margin: 12px 16px 0; padding: 12px 14px; border-radius: 14px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface)); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); }
+.pausebanner b { font-size: 15px; }
+.pausebanner span { color: var(--hint); font-size: 13px; line-height: 1.35; }
+.pausenote { color: var(--warn); font-size: 13px; font-weight: 600; margin: 0 0 8px; text-align: center; }
+.sect.pausecard { padding: 4px 16px; }
+.pauserow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; }
+.pauserow + .pauserow { border-top: 1px solid var(--line); }
+.pauserow > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pauserow small { color: var(--hint); font-size: 12.5px; }
+.pauserow.closed b { color: var(--warn); }
+#pauseOverlay label { display: block; margin: 12px 0 4px; }
+#pauseChips { flex-wrap: wrap; }

@@ -1028,7 +1028,27 @@ function cardHtml(p) {
       ${sub ? `<div class="csub">${esc(sub)}</div>` : ""}
       <div class="crow"><span class="cprice">${p.price.toFixed(2)} ${CUR}</span>${ctrl}</div></div></div>`;
 }
+// Точка закрыта на время (продавца нет на месте) — сведения о паузе или null.
+// Список точек кэшируется сервером на 5 минут, поэтому «закрыта ли сейчас»
+// решают часы телефона по until_ms: время вышло — точка уже открыта, не
+// дожидаясь свежего списка. Последнее слово — за оформлением на сервере.
+function паузаТочки(name) {
+  const l = (locations || []).find(x => x.name === name);
+  const п = l && l.closed;
+  if (!п) return null;
+  if (п.until_ms && Date.now() >= п.until_ms) return null;
+  return п;
+}
+function обновитьБаннерПаузы() {
+  const б = $("pauseBanner"); if (!б) return;
+  const п = city ? паузаТочки(city) : null;
+  б.hidden = !п;
+  if (п) б.innerHTML = `<b>⏸ Точка «${esc(city)}» закрыта ${esc(п.words)}</b>`
+    + `${п.note ? `<span>${esc(п.note)}</span>` : ""}<span>Каталог можно смотреть и собирать корзину — заказать получится после открытия.</span>`;
+}
+
 function renderGrid() {
+  обновитьБаннерПаузы();
   const list = sortProducts(visibleProducts());
   $("grid").innerHTML = list.map(cardHtml).join("");
   $("catEmpty").innerHTML = list.length ? "" : `<div class="empty"><div class="circ">🔎</div><h3>Ничего не найдено</h3><p>Другая категория или точка.</p></div>`;
@@ -1258,12 +1278,13 @@ function renderCart() {
       : `<div class="freehint">До бесплатной доставки — ещё ${(freeFrom - total).toFixed(2)} ${CUR}</div>`;
   $("tab-cart").innerHTML = `<div class="clist">${rows}</div>${freeHtml}${upsHtml}
     <div class="checkoutbar">${coinsHtml}${totalLine}
-      <button class="bigbtn" id="checkout">Оформить · ${payable.toFixed(2)} ${CUR}</button>
+      ${паузаТочки(city) ? `<div class="pausenote">Точка закрыта ${esc(паузаТочки(city).words)} — корзина сохранится, оформить получится после открытия.</div>` : ""}
+      <button class="bigbtn" id="checkout"${паузаТочки(city) ? " disabled" : ""}>${паузаТочки(city) ? `Точка закрыта ${esc(паузаТочки(city).words)}` : `Оформить · ${payable.toFixed(2)} ${CUR}`}</button>
       ${docsReady() ? `<div class="termsnote">Оформляя заказ, вы соглашаетесь с
         <a id="termsOffer">офертой</a> и <a id="termsPrivacy">обработкой данных</a>.</div>` : ""}</div>`;
   bindCardButtons($("tab-cart"));
   if ($("useCoinsChk")) $("useCoinsChk").onchange = () => { useCoins = $("useCoinsChk").checked; renderCart(); };
-  $("checkout").onclick = openDelivery;
+  $("checkout").onclick = () => { if (!паузаТочки(city)) openDelivery(); };
   // Ссылки рядом с кнопкой, а не в дальнем разделе: согласие, до которого надо
   // искать дорогу, согласием не является.
   if ($("termsOffer")) $("termsOffer").onclick = () => openDocs("offer");

@@ -83,11 +83,17 @@ def get_checkout_data(user_id, product_ids, method_id):
                 ("pay_cash", "pay_card"))
     способы = {r["key"]: r["value"] for r in cur.fetchall()}
 
+    # Закрытые на время точки — тем же подключением (горячий путь, см. выше).
+    # Строк тут единицы: только те, что прямо сейчас помечены закрытыми.
+    cur.execute("SELECT * FROM locations WHERE closed = 1")
+    закрыты = {r["name"]: dict(r) for r in cur.fetchall()}
+
     conn.close()
     return {"age_ok": age_ok, "coins": coins, "products": products,
             "variants": variants, "method": method, "points": points,
             "pay_cash": str(способы.get("pay_cash", "1")) != "0",
-            "pay_card": str(способы.get("pay_card", "1")) != "0"}
+            "pay_card": str(способы.get("pay_card", "1")) != "0",
+            "closed": закрыты}
 
 
 class PromoGone(Exception):

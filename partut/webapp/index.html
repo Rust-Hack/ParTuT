@@ -84,6 +84,8 @@
 
   <div class="content">
     <section class="tab show" id="tab-catalog">
+      <!-- Точка закрыта на время: каталог смотреть можно, заказать — нет. -->
+      <div class="pausebanner" id="pauseBanner" hidden></div>
       <div class="searchrow">
         <div class="search">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
@@ -132,6 +134,28 @@
   <!-- Редкие действия со строкой товара. Раньше «снять с витрины» и
        «удалить» стояли в каждой строке вровень с ценой и складом, и
        удаление было в одном касании от ежедневной работы. -->
+  <!-- Закрыть точку на время: покупатели видят «закрыта до …» и не
+       оформляют заказ; время вышло — точка открывается сама. -->
+  <div class="overlay" id="pauseOverlay">
+    <div class="sheet">
+      <h2 id="pauseTitle">Закрыть точку</h2>
+      <div class="pricescope">Покупатели увидят каталог и «закрыта до …», но заказать не смогут. Время выйдет — точка откроется сама.</div>
+      <div class="ochips" id="pauseChips">
+        <button class="ochip" data-pmin="30">На 30 минут</button>
+        <button class="ochip" data-pmin="60">На 1 час</button>
+        <button class="ochip" data-pmin="120">На 2 часа</button>
+        <button class="ochip" data-pmin="">Пока не открою</button>
+      </div>
+      <label for="pauseAt">Или до времени</label>
+      <input id="pauseAt" type="time" step="300">
+      <label for="pauseNote">Что сказать покупателям <small>· необязательно</small></label>
+      <input id="pauseNote" maxlength="120" placeholder="Например: обед, скоро вернусь" autocomplete="off">
+      <div class="dlvsum" id="pauseSum"></div>
+      <button class="bigbtn" id="pauseGo">Закрыть точку</button>
+      <button class="closebtn" id="pauseCancel">Отмена</button>
+    </div>
+  </div>
+
   <div class="overlay" id="rowMoreOverlay">
     <div class="sheet">
       <h2 id="rowMoreTitle">Товар</h2>
@@ -140,7 +164,7 @@
       <button class="opt" id="rowMoreHideAll" hidden>🚫 Снять с витрины на всех точках</button>
       <button class="opt" id="rowMoreArch">🗄 В архив</button>
       <button class="opt" id="rowMoreArchAll" hidden>🗄 В архив на всех точках</button>
-      <div class="dnote" style="margin:4px 0 0">Снятый с витрины товар покупатели не видят, а остаток, история и отзывы остаются. Удаление уносит всё это с собой.</div>
+      <div class="dnote" style="margin:4px 0 0">Снятый с витрины товар покупатели не видят, а в списке он остаётся. В архив убирают то, что больше не возят: он уходит и из списка, а отзывы и история остаются.</div>
       <button class="closebtn" id="rowMoreCancel">Отмена</button>
     </div>
   </div>
@@ -284,6 +308,8 @@
     <!-- Управление открывалось голым меню: чтобы понять, есть ли работа, надо
          было зайти в заказы, потом в товары, потом в статистику. -->
     <div id="todayCard"></div>
+    <!-- Точка закрыта на время: продавца нет на месте (окно #pauseOverlay). -->
+    <div id="pauseCard"></div>
 
     <!-- Порядок — по частоте: заказы продавец открывает каждый день, категории —
          раз в полгода. Без групп всё это лежало вперемешку одним списком из 13 строк. -->

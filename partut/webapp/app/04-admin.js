@@ -42,6 +42,7 @@ async function openAdmin() {
   loadPendingReviews(true);          // счётчик отзывов — без открытия раздела
   loadOrdersBadge();                 // сколько заказов ждут продавца
   loadToday();                       // сводка дня — первое, что видно на входе
+  загрузитьПаузы();                  // открыта ли точка — продавца может не быть на месте
   _adminBoot = Promise.all([fetchAdminProducts(), fetchBrands()]);
   await _adminBoot;
   renderLowBadge();                  // сколько позиций надо завезти — ждёт товары
@@ -99,7 +100,10 @@ function renderToday(t) {
     { n: t.waiting, lab: "ждут подтверждения", cls: t.waiting ? "act" : "calm", go: () => { ordersStatusFilter = "paid"; openOrders(); } },
     { n: t.to_issue, lab: "к выдаче", cls: "calm", go: () => { ordersStatusFilter = "confirmed"; openOrders(); } },
     { n: `${(+t.revenue_today).toFixed(2)} ${CUR}`,
-      lab: `выдано сегодня${t.issued_today ? ` · ${t.issued_today} ${plural(t.issued_today, "заказ", "заказа", "заказов")}` : ""}`,
+      // Выручка дня — вместе с продажами на точке: называем и их, иначе сумма
+      // не сходилась бы с числом заказов под ней.
+      lab: `выдано сегодня${t.issued_today ? ` · ${t.issued_today} ${plural(t.issued_today, "заказ", "заказа", "заказов")}` : ""}`
+        + (t.point_today ? ` · ${t.point_today} на точке` : ""),
       cls: "calm",
       // Продавцу точки статистика магазина закрыта — ведём его в свои выданные.
       go: () => { if (isOwner()) openStats(); else { ordersStatusFilter = "issued"; openOrders(); } } },
@@ -111,6 +115,73 @@ function renderToday(t) {
   $("todayCard").innerHTML = `<div class="today">${tiles.map((x, i) =>
     `<button class="tcard ${x.cls}" data-t="${i}"><div class="tnum">${x.n}</div><div class="tlab">${x.lab}</div></button>`).join("")}</div>${quiet}`;
   $("todayCard").querySelectorAll("[data-t]").forEach(b => b.onclick = () => tiles[+b.dataset.t].go());
+}
+
+// ----- Точка закрыта на время -----
+// Продавца нет на месте — он закрывает точку: покупатели видят «закрыта до
+// 18:00» и не оформляют заказ. Время выйдет — точка откроется сама (сервер
+// сверяет время). Продавцу — своя точка, владельцу — все.
+let паузыТочек = null, паузаТочка = null, паузаМинут = 60;
+async function загрузитьПаузы() {
+  try {
+    const r = await fetch("/api/admin/pauses", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ initData }) });
+    const d = await r.json();
+    паузыТочек = d && d.ok && Array.isArray(d.points) ? d.points : null;
+  } catch (e) { паузыТочек = null; }
+  нарисоватьПаузы();
+}
+function нарисоватьПаузы() {
+  const узел = $("pauseCard"); if (!узел) return;
+  if (!паузыТочек || !паузыТочек.length) { узел.innerHTML = ""; return; }
+  узел.innerHTML = `<div class="sect pausecard">${паузыТочек.map(т => т.closed
+    ? `<div class="pauserow closed"><div><b>⏸ «${esc(т.city)}» закрыта ${esc(т.closed.words)}</b>${т.closed.note ? `<small>${esc(т.closed.note)}</small>` : ""}</div>
+         <button type="button" class="barbtn" data-popen="${esc(т.city)}">▶ Открыть</button></div>`
+    : `<div class="pauserow"><div><b>«${esc(т.city)}» открыта</b><small>покупатели оформляют заказы</small></div>
+         <button type="button" class="barbtn" data-pclose="${esc(т.city)}">⏸ Закрыть</button></div>`).join("")}</div>`;
+  узел.querySelectorAll("[data-pclose]").forEach(b => b.onclick = () => открытьПаузу(b.dataset.pclose));
+  узел.querySelectorAll("[data-popen]").forEach(b => b.onclick = () => открытьТочку(b.dataset.popen));
+}
+function открытьПаузу(точка) {
+  паузаТочка = точка; паузаМинут = 60;
+  $("pauseTitle").textContent = `Закрыть точку «${точка}»`;
+  $("pauseAt").value = ""; $("pauseNote").value = "";
+  отметитьПаузу();
+  $("pauseOverlay").classList.add("show");
+}
+// Что выбрано: минуты (чип), время (поле) или «пока не открою» (чип без минут).
+function отметитьПаузу() {
+  const до = $("pauseAt").value;
+  document.querySelectorAll("#pauseChips [data-pmin]").forEach(b =>
+    b.classList.toggle("active", !до && String(паузаМинут ?? "") === b.dataset.pmin));
+  $("pauseSum").textContent = до ? `Закроется до ${до}${до <= new Date().toTimeString().slice(0, 5) ? " завтра" : ""}.`
+    : паузаМинут ? `Закроется на ${паузаМинут >= 60 ? `${паузаМинут / 60} ${plural(паузаМинут / 60, "час", "часа", "часов")}` : `${паузаМинут} минут`}.`
+    : "Закроется, пока не откроете сами.";
+}
+document.querySelectorAll("#pauseChips [data-pmin]").forEach(b => b.onclick = () => {
+  паузаМинут = b.dataset.pmin ? +b.dataset.pmin : null;
+  $("pauseAt").value = "";
+  отметитьПаузу();
+});
+$("pauseAt").oninput = отметитьПаузу;
+$("pauseCancel").onclick = () => closeOverlay($("pauseOverlay"));
+$("pauseGo").onclick = async () => {
+  const тело = { city: паузаТочка, note: $("pauseNote").value.trim() };
+  if ($("pauseAt").value) тело.at = $("pauseAt").value;
+  else if (паузаМинут) тело.minutes = паузаМинут;
+  if (!await админПост("/api/admin/pause", тело, "закрыть точку")) return;
+  closeOverlay($("pauseOverlay"));
+  toast("Точка закрыта — покупатели видят это в каталоге");
+  await Promise.all([загрузитьПаузы(), fetchLocations()]);
+  renderGrid();
+};
+function открытьТочку(точка) {
+  confirmMsg(`Открыть точку «${точка}»? Покупатели снова смогут оформлять заказы.`, async () => {
+    if (!await админПост("/api/admin/pause/open", { city: точка }, "открыть точку")) return;
+    toast("Точка открыта");
+    await Promise.all([загрузитьПаузы(), fetchLocations()]);
+    renderGrid();
+  });
 }
 
 function renderLowBadge() {

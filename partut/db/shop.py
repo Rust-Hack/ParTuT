@@ -566,13 +566,16 @@ def _закрыта_сейчас(row, сейчас=None):
     return not до or (сейчас or db.shop_now().strftime("%Y-%m-%d %H:%M")) < до
 
 
-def location_pause(name):
-    """Точка закрыта сейчас — {"until": "ГГГГ-ММ-ДД ЧЧ:ММ" или "", "note"}; открыта — None."""
-    conn = db.connect()
-    cur = conn.cursor()
-    cur.execute(db._q("SELECT * FROM locations WHERE name = %s"), (name,))
-    row = cur.fetchone()
-    conn.close()
+def location_pause(name, row=None):
+    """Точка закрыта сейчас — {"until": "ГГГГ-ММ-ДД ЧЧ:ММ" или "", "note"}; открыта — None.
+    row — уже прочитанная строка точки (оформление берёт её вместе с прочим
+    одним подключением, см. get_checkout_data); без неё — читаем сами."""
+    if row is None:
+        conn = db.connect()
+        cur = conn.cursor()
+        cur.execute(db._q("SELECT * FROM locations WHERE name = %s"), (name,))
+        row = cur.fetchone()
+        conn.close()
     if not _закрыта_сейчас(row):
         return None
     return {"until": row["closed_until"] or "", "note": row["closed_note"] or "", "by": row["closed_by"]}
