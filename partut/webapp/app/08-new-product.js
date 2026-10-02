@@ -76,7 +76,7 @@ function нтНовый() {
   // specs — по категориям: «Объём» у жидкости — миллилитры, у одноразки —
   // затяжки; перенос значения при смене категории был бы враньём.
   // points[].variants — по названию варианта: {on — продаётся ли здесь, qty}.
-  return { step: 1, category: (CAT_OPTS[0] || [""])[0], brand: "", name: "", description: "",
+  return { step: 1, category: (CAT_OPTS[0] || [""])[0], brand: "", name: "", nameAuto: true, description: "",
            photos: [], flavors: [], flavorInput: "", specs: {}, points: [нтТочка([])],
            token: null, published: null, updated: Date.now() };
 }
@@ -95,6 +95,10 @@ function нтПрочитать() {
     const d = JSON.parse(localStorage.getItem(нтКлюч()) || "null");
     if (!d || !d.step || !Array.isArray(d.points) || !d.points.length) return null;
     return { ...нтНовый(), ...d,
+      // Черновик до «названия из бренда» флага не знает: название следует за
+      // брендом, только если его не вписывали или оно и есть бренд.
+      nameAuto: typeof d.nameAuto === "boolean" ? d.nameAuto
+        : !String(d.name || "").trim() || String(d.name || "").trim() === String(d.brand || "").trim(),
       // Незагруженное фото — запись без file_id: его файл ищем в телефоне
       // (нтВосстановитьФото), а не выбрасываем молча (NP-03).
       photos: (Array.isArray(d.photos) ? d.photos : []).filter(f => f && (f.file_id || f.local))
@@ -204,7 +208,8 @@ function нтШаг1() {
     <label for="npBrand">Бренд</label>
     <div id="npBrandBox">${pickerHtml("npBrand", нт.brand, brandNames(нт.category), "+ Новый бренд…")}</div>
     <label for="npName">Название</label>
-    <input id="npName" value="${esc(нт.name)}" placeholder="Например: XROS 3 Mini" autocomplete="off" maxlength="120">
+    <div class="npsub">Подставляется из бренда. Есть линейка или модель — допишите: «ЗЛАЯ МИЛФА ACID», «PILOW TALK IC40000».</div>
+    <input id="npName" value="${esc(нт.name)}" placeholder="Совпадает с брендом" autocomplete="off" maxlength="120">
     <div id="npTwin">${нтДвойникHtml()}</div>
     <label>Фото</label>
     <div class="npsub">До ${НТ_МАКС_ФОТО}. Первое — главное: его видно в каталоге.</div>
@@ -222,7 +227,7 @@ function нтШаг1() {
 // примет, а здесь это видно ещё до публикации. Похожие по названию —
 // подсказкой: вдруг это они.
 function нтДвойникHtml() {
-  const имя = нт.name.trim().toLowerCase();
+  const имя = нтИмя().toLowerCase();
   if (имя.length < 2) return "";
   const бренд = (нт.brand || "").trim().toLowerCase();
   const своя = models.filter(m => m.category === нт.category);
@@ -368,7 +373,7 @@ function нтШаг3() {
 function нтИтог() {
   if (!нт || нт.published) { $("npSum").textContent = ""; return; }
   if (нт.step !== 3) {
-    const имя = нт.name.trim();
+    const имя = нтИмя();
     const фото = нт.photos.length ? `фото: ${нт.photos.length}` : "без фото";
     $("npSum").textContent = имя ? `«${имя}» · ${catName(нт.category)} · ${фото}` : "Впишите название товара";
     return;
@@ -419,6 +424,21 @@ function нтЗабратьВвод() {
 }
 function нтПравка() { нтЗабратьВвод(); нтСохранить(); }
 
+// Название — из бренда (решение владельца 2.10.2026): у большинства товаров
+// это и есть бренд («ANNIMA LOVE»), а линейку или модель дописывают
+// («ЗЛАЯ МИЛФА ACID»). Пока название не трогали, оно следует за брендом;
+// вписали своё — больше не меняется; стёрли — снова следует.
+const нтИмя = () => (нт.name || "").trim() || (нт.brand || "").trim();
+function нтБрендСменился() {
+  нтПравка();
+  if (нт.nameAuto) {
+    нт.name = (нт.brand || "").trim();
+    if ($("npName")) $("npName").value = нт.name;
+    нтСохранить();
+  }
+  нтОбновитьДвойника(); нтИтог();
+}
+
 function нтПривязать() {
   const тело = $("npBody");
   const на = (sel, fn) => тело.querySelectorAll(sel).forEach(fn);
@@ -428,9 +448,14 @@ function нтПривязать() {
     нтСохранить(); нтНарисовать();
   });
   bindPicker("npBrand");
-  if ($("npBrand")) $("npBrand").addEventListener("change", () => { нтПравка(); нтОбновитьДвойника(); });
-  if ($("npBrand_new")) $("npBrand_new").oninput = () => { нтПравка(); нтОбновитьДвойника(); };
-  if ($("npName")) $("npName").oninput = () => { нтПравка(); нтОбновитьДвойника(); нтИтог(); };
+  if ($("npBrand")) $("npBrand").addEventListener("change", нтБрендСменился);
+  if ($("npBrand_new")) $("npBrand_new").oninput = нтБрендСменился;
+  if ($("npName")) $("npName").oninput = () => {
+    нтПравка();
+    const v = $("npName").value.trim();
+    нт.nameAuto = !v || v === (нт.brand || "").trim();
+    нтСохранить(); нтОбновитьДвойника(); нтИтог();
+  };
   if ($("npDesc")) $("npDesc").oninput = нтПравка;
   if ($("npFlavorIn")) $("npFlavorIn").oninput = нтПравка;
   if ($("npReset")) $("npReset").onclick = () => confirmMsg("Стереть черновик? Всё вписанное и загруженные фото пропадут.", () => {
@@ -688,8 +713,8 @@ $("npNext").onclick = () => {
 function нтСобрать(до = 3) {
   const стоп = (step, message) => ({ ошибка: { step, message } });
   if (!CAT_OPTS.some(([c]) => c === нт.category)) return стоп(1, "Выберите категорию.");
-  const имя = нт.name.trim();
-  if (!имя) return стоп(1, "Впишите название товара.");
+  const имя = нтИмя();
+  if (!имя) return стоп(1, "Выберите бренд или впишите название.");
   const пропало = нт.photos.find(f => f.status === "lost");
   if (пропало) return стоп(1, пропало.error || "Одно из фото не сохранилось — выберите его снова или уберите.");
   if (нт.photos.some(f => f.status === "failed")) return стоп(1, "Одно из фото не загрузилось — нажмите «Повторить» или уберите его.");
