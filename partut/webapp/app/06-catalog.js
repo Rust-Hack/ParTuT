@@ -501,7 +501,7 @@ function renderStockPick() {
   const q = ($("stockPickSearch").value || "").trim().toLowerCase();
   const список = models.filter(m => !q || `${m.name} ${m.brand || ""}`.toLowerCase().includes(q));
   if (!models.length) {
-    $("stockPickList").innerHTML = `<p style="color:var(--hint);font-size:13.5px;margin:8px 0 0">Ассортимент пуст. Модели — название, вкусы, фото — заводит владелец в разделе «Ассортимент».</p>`;
+    $("stockPickList").innerHTML = `<p style="color:var(--hint);font-size:13.5px;margin:8px 0 0">Товаров пока нет. Новый товар заводит владелец — кнопкой «✨ Новый товар».</p>`;
     return;
   }
   if (!список.length) { $("stockPickList").innerHTML = `<p style="color:var(--hint);margin:8px 0 0">Ничего не найдено.</p>`; return; }
@@ -539,7 +539,9 @@ function нарисоватьСписокТоваров() {
   const счёт = $("admCount");
   if (!shelf().length) {
     счёт.textContent = "";
-    $("adminList").innerHTML = `<p class="listempty">Товаров пока нет.</p>`; return;
+    $("adminList").innerHTML = `<p class="listempty">Товаров пока нет. Первый — кнопкой «✨ Новый товар» выше.</p>` + блокНигде();
+    привязатьНигде();
+    return;
   }
   const q = (admSearch || "").trim().toLowerCase();
   // Продавец точки ведёт свою точку — чужие товары ему не показываем даже
@@ -562,17 +564,53 @@ function нарисоватьСписокТоваров() {
     const msg = admStockFilter === "out" ? "Ничего не кончилось — на всех точках есть остаток."
               : admStockFilter === "need" ? "Завозить нечего: везде больше " + LOW_STOCK + " шт."
               : "Ничего не найдено.";
-    $("adminList").innerHTML = `<p class="listempty">${msg}</p>`; return;
+    $("adminList").innerHTML = `<p class="listempty">${msg}</p>` + блокНигде();
+    привязатьНигде();
+    return;
   }
   // Точку пишем в строке, только когда в списке все точки сразу. Выбран один
   // город или продавец ведёт свою точку — «Минск» в каждой строке ничего не
   // сообщает, а место под сведения на узком телефоне дорого.
   const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
-  $("adminList").innerHTML = list.map(p => строкаТовара(p, сТочкой)).join("");
+  $("adminList").innerHTML = list.map(p => строкаТовара(p, сТочкой)).join("") + блокНигде();
+  привязатьНигде();
   $("adminList").querySelectorAll("[data-price]").forEach(b => b.onclick = () => открытьЦену(+b.dataset.price));
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
   $("adminList").querySelectorAll("[data-more]").forEach(b => b.onclick = () => открытьЕщё(+b.dataset.more));
+}
+
+// Товары, у которых есть описание, но нет ни одной точки. Раньше их видно
+// было только в «Ассортименте»; теперь раздел один — они внизу списка, для
+// владельца, при «Все точки» и «Любой остаток» (отбор по точке и остатку
+// их всё равно не касается). Здесь же — завезти, описание, удалить.
+function блокНигде() {
+  if (!isOwner() || myScope() || admLocFilter !== "all" || admStockFilter !== "all") return "";
+  const q = (admSearch || "").trim().toLowerCase();
+  const стоят = new Set(shelf().map(p => p.model_id).filter(Boolean));
+  const нигде = models.filter(m => !стоят.has(m.id)
+    && (admCatFilter === "all" || m.category === admCatFilter)
+    && (!q || `${m.name} ${m.brand || ""}`.toLowerCase().includes(q)));
+  if (!нигде.length) return "";
+  return `<div class="nowhere"><div class="nowhere-h">Нигде не продаётся · ${нигде.length}</div>
+    <p class="dlvscope">Описание есть, а на точках товара нет. Завезите его или удалите, если больше не нужен.</p>
+    ${нигде.map(m => {
+      const n = (m.flavors || []).length, [один, два, пять] = формыВарианта(m);
+      return `<div class="admrow prodrow">
+        <div class="prodname">${esc((m.brand ? m.brand + " " : "") + m.name)}</div>
+        <div class="prodstock">${esc(catName(m.category))}${n ? ` · ${n} ${plural(n, один, два, пять)}` : ""}${m.photo_url ? "" : " · без фото"}</div>
+        <div class="prodacts">
+          <button type="button" class="actbtn" data-nwin="${m.id}">📥 Завезти</button>
+          <button type="button" class="actbtn" data-nwdesc="${m.id}">📝 Описание</button>
+          <button type="button" class="actbtn more" data-nwdel="${m.id}" aria-label="Удалить «${esc(m.name)}»">🗑</button>
+        </div></div>`;
+    }).join("")}</div>`;
+}
+function привязатьНигде() {
+  const список = $("adminList");
+  список.querySelectorAll("[data-nwin]").forEach(b => b.onclick = () => openStockIn(+b.dataset.nwin));
+  список.querySelectorAll("[data-nwdesc]").forEach(b => b.onclick = () => открытьОписание(+b.dataset.nwdesc));
+  список.querySelectorAll("[data-nwdel]").forEach(b => b.onclick = () => delModel(+b.dataset.nwdel));
 }
 
 // «3 вкуса», «4 цвета», «2 сопротивления» — словом категории, а не безликим
@@ -658,8 +696,20 @@ function открытьЕщё(id) {
   $("rowMoreTitle").textContent = p.name;
   $("rowMoreScope").textContent = `Точка «${p.city}»`;
   $("rowMoreHide").textContent = p.hidden ? "👁 Вернуть на витрину" : "🚫 Снять с витрины";
+  // Товар на нескольких точках — можно снять сразу везде (владельцу): так
+  // отвечают на «больше не возим». Раньше это было только в «Ассортименте».
+  const везде = p.model_id ? shelf().filter(x => x.model_id === p.model_id) : [];
+  const всеСняты = везде.length && везде.every(x => x.hidden);
+  $("rowMoreHideAll").hidden = !(isOwner() && везде.length > 1);
+  $("rowMoreHideAll").textContent = всеСняты ? `👁 Вернуть на витрину на всех точках (${везде.length})`
+                                             : `🚫 Снять с витрины на всех точках (${везде.length})`;
+  $("rowMoreHideAll").dataset.on = всеСняты ? "1" : "0";
   $("rowMoreOverlay").classList.add("show");
 }
+$("rowMoreHideAll").onclick = () => {
+  const p = ещёТовар; closeOverlay($("rowMoreOverlay"));
+  if (p && p.model_id) hideModel(p.model_id, $("rowMoreHideAll").dataset.on !== "1");
+};
 $("rowMoreHide").onclick = () => {
   const p = ещёТовар; closeOverlay($("rowMoreOverlay"));
   if (p) toggleHidden(p.id);
@@ -1109,6 +1159,24 @@ function delEditPhoto(photoId) {
   });
 }
 
+// Описание товара одной строкой: бренд, категория, сколько вариантов и фото.
+function описаниеКратко(p, md) {
+  const n = md ? (md.flavors || []).length : (p.variants || []).length;
+  const [один, два, пять] = формыВарианта(p);
+  const фото = md ? (md.photo_url ? `фото${(md.gallery || []).length ? ` + ${md.gallery.length} в галерее` : ""}` : "без фото")
+                  : (p.photo_url ? "фото" : "без фото");
+  return [p.brand, catName(p.category), n ? `${n} ${plural(n, один, два, пять)}` : "", фото].filter(Boolean).map(esc).join(" · ");
+}
+// Описание сохранили поверх открытой карточки — обновить в ней название и
+// строку описания. Набранное в карточке (цена, вкусы, точки) не трогаем.
+function обновитьКарточкуПослеОписания() {
+  if (!editId || !$("editView").classList.contains("show")) return;
+  const p = shelf().find(x => x.id === editId);
+  if (!p) return;
+  if ($("edTitle")) $("edTitle").textContent = p.name;
+  if ($("edDescSum")) $("edDescSum").innerHTML = описаниеКратко(p, models.find(m => m.id === p.model_id));
+}
+
 function renderEdit(p) {
   const isVar = hasVariants(p);
   const catOptions = CAT_OPTS.map(([c, n]) => `<option value="${c}" ${p.category === c ? 'selected' : ''}>${n}</option>`).join("");
@@ -1121,8 +1189,13 @@ function renderEdit(p) {
     const md = models.find(m => m.id === p.model_id);
     $("editBody").innerHTML = `
       <div class="card-block form">
-        <div style="font-weight:800">${esc(p.name)}</div>
-        <div class="csub" style="margin-top:4px">${esc(p.brand || "")} · ${catName(p.category)} · ${esc(p.city)}</div>
+        <div style="font-weight:800" id="edTitle">${esc(p.name)}</div>
+        <div class="descsum">
+          <div class="descsum-h">Описание — для всех точек</div>
+          <div class="descsum-t" id="edDescSum">${описаниеКратко(p, md)}</div>
+          ${isOwner() ? `<button type="button" class="npbtn" id="edOpenDesc">📝 Описание, фото, варианты</button>` : ""}
+        </div>
+        <div class="descsum-h" style="margin-top:16px">На точке «${esc(p.city)}»</div>
         <div class="rowf">
           <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
           <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
@@ -1134,18 +1207,14 @@ function renderEdit(p) {
         ${editHitBlock(p)}
         <label style="margin-top:18px">Точки продаж</label>
         <div id="edPoints"></div>
-        <div class="dnote" style="margin-top:12px">Название, характеристики, вкусы и фото — в «Ассортименте»: там они правятся сразу для всех точек.</div>
-        <button class="closebtn" id="edToModel" style="margin-top:6px">📚 Открыть модель</button>
-        <button class="bigbtn" id="edSave" style="margin-top:10px">Сохранить</button>
+        <button class="bigbtn" id="edSave" style="margin-top:16px">Сохранить</button>
       </div>`;
     if (isVar) { renderEditVariants(); bindVariantAdd(p.category); }
     bindQty($("editView"));
     bindОстатокВКарточке(p);
     renderEditPoints(p, md);
-    $("edToModel").onclick = () => закрытьРедактор(() => {
-      $("editView").classList.remove("show");
-      openModels().then(() => editModel(p.model_id));
-    });
+    // Описание открывается поверх карточки: введённое здесь не теряется.
+    if ($("edOpenDesc")) $("edOpenDesc").onclick = () => открытьОписание(p.model_id);
     $("edSave").onclick = () => saveEdit(p);
     return;
   }
@@ -1257,7 +1326,7 @@ function toModelBlock() {
   if (!isOwner()) {
     return `<div style="border-top:1px solid var(--line);margin:20px 0 0"></div>
       <label style="margin-top:16px">Точки продаж</label>
-      <div class="dnote" style="margin:0 0 10px">Этот товар заведён без модели — на других точках его заводит владелец через «Ассортимент».</div>`;
+      <div class="dnote" style="margin:0 0 10px">Этот товар заведён по-старому, без общего описания, — на другие точки его переносит владелец («📚 Сделать моделью»).</div>`;
   }
   return `<div style="border-top:1px solid var(--line);margin:20px 0 0"></div>
     <label style="margin-top:16px">Точки продаж</label>
@@ -1291,7 +1360,7 @@ async function сделатьМоделью(p, привязатьК) {
   if (d.photos_left) ещё.push(`не поместилось фото: ${d.photos_left} (в галерее модели до ${MAX_EXTRA_PHOTOS})`);
   if (d.reviews) ещё.push(`отзывы товара теперь у модели: ${d.reviews}`);
   if (d.added_flavors && d.added_flavors.length) ещё.push(`в модель добавлены варианты: ${d.added_flavors.join(", ")}`);
-  alertMsg((d.linked ? "Готово ✅\n\nТовар привязан к модели из «Ассортимента»." : "Готово ✅\n\nОписание уехало в «Ассортимент».") +
+  alertMsg((d.linked ? "Готово ✅\n\nТовар привязан к такому же товару: описание у них теперь общее." : "Готово ✅\n\nУ товара теперь общее описание — «📝 Описание» в карточке.") +
            " Ниже появились точки продаж." + (ещё.length ? "\n\n" + ещё.join("\n") : ""));
 }
 

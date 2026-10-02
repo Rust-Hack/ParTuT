@@ -137,6 +137,7 @@
       <h2 id="rowMoreTitle">Товар</h2>
       <div class="pricescope" id="rowMoreScope"></div>
       <button class="opt" id="rowMoreHide">🚫 Снять с витрины</button>
+      <button class="opt" id="rowMoreHideAll" hidden>🚫 Снять с витрины на всех точках</button>
       <button class="opt dangeropt" id="rowMoreDel">🗑 Удалить с точки</button>
       <div class="dnote" style="margin:4px 0 0">Снятый с витрины товар покупатели не видят, а остаток, история и отзывы остаются. Удаление уносит всё это с собой.</div>
       <button class="closebtn" id="rowMoreCancel">Отмена</button>
@@ -288,12 +289,14 @@
     <div class="mgroup">Каждый день</div>
     <div class="prow" id="mRequests" style="display:none"><span>📥 Заявки на подтверждение <b id="reqBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
     <div class="prow" id="mOrders"><span>📦 Заказы <b id="ordBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
-    <div class="prow" id="mProducts"><span>🏬 Цены и остатки <b id="lowBadge" class="reqbadge warn" style="display:none">0</b></span><span>›</span></div>
+    <div class="prow" id="mProducts"><span>🛍 Товары <b id="lowBadge" class="reqbadge warn" style="display:none">0</b></span><span>›</span></div>
     <div class="prow" id="mReviews"><span>⭐ Отзывы <b id="revBadge" class="reqbadge" style="display:none">0</b></span><span>›</span></div>
     <div class="prow" id="mPayroll"><span>💰 Зарплата продавцов</span><span>›</span></div>
 
-    <div class="mgroup" id="gCatalog">Что мы продаём</div>
-    <div class="prow" id="mModels"><span>📚 Ассортимент</span><span>›</span></div>
+    <!-- «Ассортимент» и «Цены и остатки» — теперь один раздел «🛍 Товары»:
+         описание товара открывается из его карточки («📝 Описание»), цена и
+         остаток — там же, по точкам. Здесь остались справочники. -->
+    <div class="mgroup" id="gCatalog">Справочники</div>
     <div class="prow" id="mBrands"><span>🏷 Бренды</span><span>›</span></div>
     <div class="prow" id="mCats"><span>🗂 Категории товара</span><span>›</span></div>
 
@@ -474,7 +477,7 @@
       <div class="dnote" style="margin:8px 0 0">Человек узнаёт свой ID командой <b>/myid</b> боту — пусть пришлёт его вам.</div>
       <label>Точка продаж</label>
       <select id="stCity"></select>
-      <div class="dnote" style="margin:6px 0 0">Продавец видит и правит только свою точку: её заказы, склад и цены. Ассортимент, настройки, деньги и статистика — у владельцев. «Все точки» — тот же продавец, только по всем городам сразу.</div>
+      <div class="dnote" style="margin:6px 0 0">Продавец видит и правит только свою точку: её заказы, склад и цены. Описание товаров, настройки, деньги и статистика — у владельцев. «Все точки» — тот же продавец, только по всем городам сразу.</div>
       <label>Подпись (для вас)</label>
       <input id="stNote" placeholder="@username или имя">
       <button class="bigbtn" id="stAdd" style="margin-top:14px">Выдать доступ</button>
@@ -683,7 +686,7 @@
 
   <!-- Раздел: Товары (добавление + список) -->
   <div class="view" id="productsView">
-    <div class="viewhead"><h2>🏬 Цены и остатки</h2>
+    <div class="viewhead"><h2>🛍 Товары</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="productsClose">‹ Назад</button></div>
 
     <!-- Добавить товар. Новый — одним маршрутом (владельцу): описание, фото,
@@ -866,47 +869,6 @@
     </div>
   </div>
 
-  <!-- Раздел: Ассортимент (модели) -->
-  <div class="view" id="modelsView">
-    <div class="viewhead"><h2>📚 Ассортимент</h2>
-      <button class="closebtn" style="width:auto;padding:8px 12px" id="modelsClose">‹ Назад</button></div>
-
-    <details class="sect" id="mdFormSect">
-      <summary class="secthead">➕ Новая модель</summary>
-      <div class="sectbody form">
-        <p style="color:var(--hint);font-size:13px;margin:0 0 6px;text-align:left">Здесь описывается сам товар: бренд, характеристики, варианты и фото. Цена и остаток — в «Ценах и остатках», отдельно по каждой точке. Новый товар целиком — сразу с ценой и первым приходом — быстрее завести кнопкой «✨ Новый товар» в «Ценах и остатках».</p>
-        <label>Категория</label><select id="mdCat"></select>
-        <label>Бренд</label><div id="mdBrandBox"></div>
-        <label>Название модели</label><input id="mdName" placeholder="Например: XROS 3">
-        <label>Описание (необязательно)</label><input id="mdDesc" placeholder="Коротко">
-        <div id="mdSpecs"></div>
-        <div id="mdFlavorsWrap">
-          <label id="mdFlavorsLabel">Вкусы</label>
-          <div style="display:flex;gap:8px">
-            <input id="mdFlavorInput" placeholder="Например: Манго" style="flex:1" list="mdFlavorKnown">
-            <datalist id="mdFlavorKnown"></datalist>
-            <button class="iconbtn ok" id="mdFlavorAdd" style="width:auto;padding:0 16px">＋</button>
-          </div>
-          <div id="mdFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
-        </div>
-        <label>Главное фото</label>
-        <div class="edphoto"><img id="mdPhotoPrev" alt="" style="display:none"><input type="file" id="mdPhoto" accept="image/*"></div>
-        <label style="margin-top:12px" id="mdGalLabel">Ещё фото <span style="color:var(--hint);font-weight:400">— покупатель листает их в карточке</span></label>
-        <div class="edgal" id="mdGal"></div>
-        <button class="bigbtn" id="mdSave" style="margin-top:14px">Сохранить модель</button>
-        <button class="closebtn" id="mdCancel" style="display:none">Отменить редактирование</button>
-      </div>
-    </details>
-
-    <details class="sect" open>
-      <summary class="secthead">Что мы продаём</summary>
-      <div class="sectbody">
-        <input id="mdSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
-        <div id="mdList"></div>
-      </div>
-    </details>
-  </div>
-
   <!-- Раздел: Бренды -->
   <div class="view" id="brandsView">
     <div class="viewhead"><h2>🏷 Бренды</h2>
@@ -941,9 +903,41 @@
 
   <!-- Редактор товара-модели (вкусы/остаток/характеристики) -->
   <div class="view" id="editView">
-    <div class="viewhead"><h2>✏️ Редактировать</h2>
+    <div class="viewhead"><h2>✏️ Карточка товара</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="editClose">Закрыть</button></div>
     <div id="editBody"></div>
+  </div>
+
+  <!-- Описание товара — общее для всех точек: название, бренд, категория,
+       характеристики, варианты, фото. Раньше это был отдельный раздел
+       «Ассортимент» со своим списком; теперь открывается из карточки товара
+       поверх неё. Стоит в разметке СРАЗУ ПОСЛЕ карточки: «Назад» Telegram
+       закрывает последний открытый экран по порядку разметки. -->
+  <div class="view ontop" id="descView">
+    <div class="viewhead"><h2>📝 Описание</h2>
+      <button class="closebtn" style="width:auto;padding:8px 12px" id="descClose">‹ Назад</button></div>
+    <p class="dlvscope" id="descScope"></p>
+    <div class="card-block form">
+      <label>Категория</label><select id="mdCat"></select>
+      <label>Бренд</label><div id="mdBrandBox"></div>
+      <label>Название</label><input id="mdName" placeholder="Например: XROS 3">
+      <label>Описание (необязательно)</label><input id="mdDesc" placeholder="Коротко">
+      <div id="mdSpecs"></div>
+      <div id="mdFlavorsWrap">
+        <label id="mdFlavorsLabel">Вкусы</label>
+        <div style="display:flex;gap:8px">
+          <input id="mdFlavorInput" placeholder="Например: Манго" style="flex:1" list="mdFlavorKnown">
+          <datalist id="mdFlavorKnown"></datalist>
+          <button class="iconbtn ok" id="mdFlavorAdd" style="width:auto;padding:0 16px">＋</button>
+        </div>
+        <div id="mdFlavorChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px"></div>
+      </div>
+      <label>Главное фото</label>
+      <div class="edphoto"><img id="mdPhotoPrev" alt="" style="display:none"><input type="file" id="mdPhoto" accept="image/*"></div>
+      <label style="margin-top:12px" id="mdGalLabel">Ещё фото <span style="color:var(--hint);font-weight:400">— покупатель листает их в карточке</span></label>
+      <div class="edgal" id="mdGal"></div>
+      <button class="bigbtn" id="mdSave" style="margin-top:14px">Сохранить описание</button>
+    </div>
   </div>
 
   <!-- Заказы (управление продавцом) -->

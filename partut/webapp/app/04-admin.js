@@ -59,9 +59,9 @@ const isOwner = () => !!me && (me.role === "owner" || me.role === "dev");
 
 function applyAdminScope() {
   const shopWide = isOwner();
-  // Ассортимент продавцу нужен: оттуда он завозит модель на свою точку.
-  // Заводить и править модели там он не сможет — это прячется внутри.
-  ["mBrands", "mCats", "gShop", "mStats", "mReferrals", "mPromos", "mRaffle",
+  // Справочники (бренды, категории) — дело владельца. Продавец завозит
+  // товар к себе из «🛍 Товаров» («📥 Завезти на точку»).
+  ["gCatalog", "mBrands", "mCats", "gShop", "mStats", "mReferrals", "mPromos", "mRaffle",
    "gSetup", "mLocations", "mSettings", "gAccess"].forEach(id => {
     const el = $(id); if (el) el.style.display = shopWide ? "" : "none";
   });
@@ -178,14 +178,17 @@ $("mProducts").onclick = openProducts;
 $("mLocations").onclick = openLocations;
 $("mBrands").onclick = openBrands;
 
-// ---------- Ассортимент: модели ----------
-// Модель описывается один раз. Товар на точке — это её наличие: цена,
-// закупка, остаток. Раньше одна подсистема на трёх точках описывалась
-// трижды, и три описания расходились после первой же правки.
-let models = [], editingModelId = null, modelFlavors = [], modelPhotoFile = null, modelSearch = "";
-$("mModels").onclick = openModels;
-$("modelsClose").onclick = () => $("modelsView").classList.remove("show");
-$("mdSearch").oninput = () => { modelSearch = $("mdSearch").value; renderModelList(); };
+// ---------- Описание товара (модель) ----------
+// Модель — описание товара, общее для всех точек: название, бренд,
+// характеристики, варианты, фото. Товар на точке — её наличие: цена, закупка,
+// остаток. Раньше описание жило в отдельном разделе «Ассортимент» со своим
+// списком, а цена и остаток — в «Ценах и остатках»; из карточки товара
+// уводило в другой раздел. Теперь раздел один — «🛍 Товары», а описание
+// открывается из карточки товара поверх неё («📝 Описание»). Новый товар
+// заводится «✨ Новым товаром» (08-new-product.js), поэтому формы «новая
+// модель» здесь больше нет: окно только правит описание существующего.
+let models = [], editingModelId = null, modelFlavors = [], modelPhotoFile = null;
+let описаниеСнимок = null;          // поля при открытии — чтобы не закрыть молча с правками
 
 async function fetchModels() {
   try {
@@ -193,17 +196,6 @@ async function fetchModels() {
     const d = await r.json();
     models = d.ok ? d.models : [];
   } catch (e) { models = []; }
-}
-async function openModels() {
-  $("modelsView").classList.add("show");
-  // Продавец точки приходит сюда за одним — завезти модель к себе. Описание
-  // модели общее для всех точек, поэтому форму и правку ему не показываем:
-  // сервер их всё равно не примет.
-  if ($("mdFormSect")) $("mdFormSect").style.display = isOwner() ? "" : "none";
-  $("mdCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
-  await Promise.all([fetchModels(), fetchBrands(), fetchFlavors()]);
-  resetModelForm();
-  renderModelList();
 }
 function renderModelForm() {
   const cat = $("mdCat").value;
@@ -237,113 +229,149 @@ $("mdPhoto").onchange = () => {
   const f = $("mdPhoto").files[0]; modelPhotoFile = f || null;
   if (f) { $("mdPhotoPrev").src = URL.createObjectURL(f); $("mdPhotoPrev").style.display = ""; }
 };
-// Дополнительные фото грузятся сразу, а у новой модели ещё нет id, к которому
-// их привязать — поэтому блок появляется после первого сохранения.
 function showModelGallery(on) {
   $("mdGalLabel").style.display = on ? "" : "none";
   $("mdGal").style.display = on ? "" : "none";
   if (on) renderEditGallery();
 }
-function resetModelForm() {
-  editingModelId = null; modelFlavors = []; modelPhotoFile = null; editPhotos = [];
-  showModelGallery(false);
-  $("mdName").value = ""; $("mdDesc").value = ""; $("mdPhoto").value = "";
-  $("mdPhotoPrev").style.display = "none"; $("mdPhotoPrev").removeAttribute("src");
-  $("mdCancel").style.display = "none"; $("mdSave").textContent = "Сохранить модель";
-  renderModelForm();
+// Что сейчас в полях описания — для сравнения при закрытии.
+function снимокОписания() {
+  return JSON.stringify([$("mdCat").value, pickerValue("mdBrand"), $("mdName").value.trim(), $("mdDesc").value.trim(),
+                         collectSpecs("mdSpecs"), modelFlavors, !!modelPhotoFile]);
 }
-$("mdCancel").onclick = resetModelForm;
+
+// Открыть описание товара поверх карточки (или поверх списка — для товара,
+// который нигде не продаётся). Описание общее для всех точек — так и написано.
+async function открытьОписание(id) {
+  if (!isOwner()) return;
+  await Promise.all([fetchModels(), fetchBrands(), fetchFlavors()]);
+  const m = models.find(x => x.id === id);
+  if (!m) { alertMsg("Этого товара больше нет — обновите список."); return; }
+  $("mdCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+  editModel(id);
+  const города = [...new Set(shelf().filter(p => p.model_id === id).map(p => p.city))];
+  $("descScope").textContent = города.length
+    ? `Общее для всех точек: ${города.join(", ")}. Цена, закупка и остаток — в карточке товара на каждой точке.`
+    : "Этот товар пока нигде не продаётся. Завезти его на точку — в списке товаров, «📥 Завезти».";
+  $("descView").classList.add("show");
+  $("descView").scrollTop = 0;
+  описаниеСнимок = снимокОписания();
+}
+function закрытьОписание() { $("descView").classList.remove("show"); описаниеСнимок = null; }
+$("descClose").onclick = () => {
+  if (описаниеСнимок && снимокОписания() !== описаниеСнимок) {
+    confirmMsg("Есть несохранённые изменения описания. Закрыть без сохранения?", закрытьОписание);
+  } else закрытьОписание();
+};
 
 $("mdSave").onclick = async () => {
+  if (!editingModelId) return;
   const name = $("mdName").value.trim();
-  if (!name) { alertMsg("Введите название модели."); return; }
+  if (!name) { alertMsg("Введите название."); return; }
   const brandName = pickerValue("mdBrand");
   await ensureBrandExists(brandName);
-  const body = { initData, category: $("mdCat").value, name, brand: brandName,
+  const body = { initData, id: editingModelId, category: $("mdCat").value, name, brand: brandName,
                  description: $("mdDesc").value.trim(), specs: collectSpecs("mdSpecs"), flavors: modelFlavors };
-  if (editingModelId) body.id = editingModelId;
   $("mdSave").disabled = true; $("mdSave").textContent = "Сохраняю…";
   try {
     const r = await fetch("/api/admin/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json();
     if (!d.ok) {
       alertMsg(d.error === "exists"
-        ? `Такая модель уже есть: «${d.name}». Правьте её, а не заводите вторую — иначе остатки и продажи разъедутся по двум карточкам.`
-        : "Не удалось сохранить модель — проверьте название и категорию.");
+        ? `Товар «${d.name}» с таким брендом уже есть. Переименовать в него нельзя — остатки и продажи разъехались бы по двум карточкам.`
+        : "Не удалось сохранить — проверьте название и категорию.");
       return;
     }
     if (modelPhotoFile) {
       const fd = new FormData();
       fd.append("initData", initData); fd.append("id", d.id); fd.append("file", modelPhotoFile);
-      // Модель сохранится и без фото, поэтому не выходим: говорим про фото и
+      // Описание сохранится и без фото, поэтому не выходим: говорим про фото и
       // идём дальше. Молчать нельзя — снимок бы просто пропал.
-      await админФайл("/api/admin/model/photo", fd, "загрузить фото модели");
+      await админФайл("/api/admin/model/photo", fd, "загрузить фото");
+      modelPhotoFile = null;
     }
-    const updated = d.updated, wasNew = !editingModelId;
-    resetModelForm();
     await Promise.all([fetchModels(), fetchFlavors()]);
-    await refreshAll();          // правка модели меняет и товары, и справочник вкусов
-    renderModelList();
-    // У новой модели галерея появляется только сейчас — id для неё уже есть.
-    if (wasNew) editModel(d.id);
+    await refreshAll();          // правка описания меняет и товары на точках, и справочник вкусов
+    закрытьОписание();
+    обновитьКарточкуПослеОписания();
     const orphans = (d.orphans || []).filter(o => o.stock > 0);
     if (orphans.length) {
-      // Вкус убрали из модели, а на полке он есть — он и дальше продаётся.
-      alertMsg(`Сохранено ✅ Обновлено товаров на точках: ${updated}\n\n`
-        + `На точках остались варианты, которых больше нет в модели: `
+      // Вкус убрали из описания, а на полке он есть — он и дальше продаётся.
+      alertMsg(`Сохранено ✅ Обновлено товаров на точках: ${d.updated}\n\n`
+        + `На точках остались варианты, которых больше нет в описании: `
         + orphans.map(o => `${o.flavor} (${o.stock} шт)`).join(", ")
-        + `.\nОни продолжают продаваться. Уберите их в «Товарах», если больше не возите.`);
+        + `.\nОни продолжают продаваться. Уберите их в карточке товара, если больше не возите.`);
     } else {
-      alertMsg(updated ? `Сохранено ✅ Обновлено товаров на точках: ${updated}`
-                       : "Модель сохранена ✅ Теперь можно добавить ещё фото и завезти её на точку.");
+      toast(d.updated ? `Сохранено · точек: ${d.updated}` : "Сохранено");
     }
   } catch (e) { alertMsg(текстСбоя(e)); }
-  finally { $("mdSave").disabled = false; $("mdSave").textContent = editingModelId ? "Обновить модель" : "Сохранить модель"; }
+  finally { $("mdSave").disabled = false; $("mdSave").textContent = "Сохранить описание"; }
 };
 
-function renderModelList() {
-  const q = modelSearch.trim().toLowerCase();
-  const list = models.filter(m => !q || `${m.name} ${m.brand}`.toLowerCase().includes(q));
-  if (!list.length) {
-    $("mdList").innerHTML = `<p style="color:var(--hint)">${models.length ? "Ничего не найдено." : "Ассортимент пуст — добавьте первую модель."}</p>`;
+function editModel(id) {
+  const m = models.find(x => x.id === id); if (!m) return;
+  editingModelId = id; modelFlavors = [...m.flavors]; modelPhotoFile = null;
+  $("mdCat").value = m.category;
+  $("mdBrandBox").innerHTML = "";                  // бренд — этого товара, а не прошлого открытого
+  renderModelForm();
+  $("mdName").value = m.name; $("mdDesc").value = m.description || "";
+  if ($("mdBrand")) { $("mdBrandBox").innerHTML = pickerHtml("mdBrand", m.brand || "", brandNames(m.category), "+ Новый бренд…"); bindPicker("mdBrand"); }
+  $("mdSpecs").innerHTML = specFieldsHtml(m.category, m.specs, "mds_");
+  $("mdPhoto").value = "";
+  if (m.thumb_url) { $("mdPhotoPrev").src = m.thumb_url; $("mdPhotoPrev").style.display = ""; }
+  else { $("mdPhotoPrev").style.display = "none"; $("mdPhotoPrev").removeAttribute("src"); }
+  editPhotos = (m.gallery || []).map(g => ({ id: g.id, url: g.thumb || g.url }));
+  showModelGallery(true);
+}
+// Снять товар с витрины на всех точках сразу — обычный ответ на «мы это
+// больше не возим». Удаление на этот вопрос отвечает слишком грубо: уносит
+// остаток, историю движений и отзывы.
+async function hideModel(id, hidden) {
+  const m = models.find(x => x.id === id) || {};
+  const имя = m.name || (shelf().find(p => p.model_id === id) || {}).name || "";
+  const ask = hidden
+    ? `Снять «${имя}» с витрины на всех точках? Покупатели его не увидят, остаток, история и отзывы останутся.`
+    : `Вернуть «${имя}» на витрину на всех точках?`;
+  confirmMsg(ask, async () => {
+    try {
+      const r = await fetch("/api/admin/model/hide", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData, id, hidden }) });
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d || !d.ok) { alertMsg((d && d.message) || "Не получилось — обновите список и попробуйте ещё раз."); return; }
+      await refreshProducts();
+      toast(hidden ? `Снят с витрины · точек: ${d.count}` : `Снова продаётся · точек: ${d.count}`);
+    } catch (e) { alertMsg(текстСбоя(e)); }
+  });
+}
+
+// Товар, который стоит на точках, целиком не удаляется: остались бы товары
+// без описания, а галерея и отзывы — потеряны. Удалить можно только
+// описание товара, который нигде не продаётся (они — внизу списка товаров).
+function delModel(id) {
+  const m = models.find(x => x.id === id);
+  if (m && m.products > 0) {
+    alertMsg(`«${m.name}» стоит на точках (${m.products}). Удалить его вместе с ними нельзя — пропали бы остаток, ` +
+             "история склада и отзывы.\n\nБольше не продаёте — снимите с витрины (⋯ → «Снять с витрины на всех точках»).\n" +
+             "Удалить совсем — сначала уберите товар с каждой точки (⋯ → «Удалить с точки»).");
     return;
   }
-  let html = "";
-  for (const [code, cn] of группыКатегорий(list)) {
-    const group = list.filter(m => (m.category || "") === code);
-    if (!group.length) continue;
-    html += `<div class="brgroup">${cn} · ${group.length}</div>`;
-    html += group.map(m => {
-      const specs = specsOf(m.category).map(s => {
-        const v = (m.specs || {})[s.key];
-        return (v === undefined || String(v).trim() === "") ? null : `${s.label}: ${withUnit(v, s.unit)}`;
-      }).filter(Boolean).join(" · ");
-      // «1 точка» не отвечало на вопрос, ради которого сюда и заходят: где
-      // эта модель лежит и сколько её там. Показываем точки с остатком.
-      const mine = shelf().filter(p => p.model_id === m.id);
-      const where = mine.length
-        ? mine.map(p => `${esc(p.city)} <b style="color:${p.stock <= 0 ? "var(--danger)" : p.stock <= LOW_STOCK ? "var(--warn)" : "inherit"}">${p.stock}</b>`).join(" · ")
-        : `<span style="color:var(--danger)">нет ни на одной точке</span>`;
-      // Снята везде — значит «больше не возим». Остаток и отзывы при этом целы.
-      const allOff = mine.length && mine.every(p => p.hidden);
-      const off = allOff ? ` · <span style="color:var(--hint)">снята с витрины</span>` : "";
-      const own = !isOwner() ? "" :
-        `<button class="iconbtn" data-mdhide="${m.id}" data-on="${allOff ? 1 : 0}"
-                 title="${allOff ? 'Вернуть на витрину везде' : 'Снять с витрины на всех точках'}">${allOff ? '👁' : '🚫'}</button>
-         <button class="iconbtn" data-mdedit="${m.id}">✏️</button>
-         <button class="iconbtn danger" data-mddel="${m.id}">🗑</button>`;
-      return `<div class="admrow">
-        <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
-          <small>${where}${off}${specs ? " · " + esc(specs) : ""}${m.flavors.length ? ` · вариантов: ${m.flavors.length}` : ""}</small></div>
-        ${own}</div>`;
-    }).join("");
-  }
-  $("mdList").innerHTML = html;
-  $("mdList").querySelectorAll("[data-mdedit]").forEach(b => b.onclick = () => editModel(+b.dataset.mdedit));
-  $("mdList").querySelectorAll("[data-mddel]").forEach(b => b.onclick = () => delModel(+b.dataset.mddel));
-  $("mdList").querySelectorAll("[data-mdhide]").forEach(b =>
-    b.onclick = () => hideModel(+b.dataset.mdhide, b.dataset.on !== "1"));
+  confirmMsg(`Удалить «${m ? m.name : ""}» насовсем? Он нигде не продаётся; описание, фото и варианты пропадут.`, async () => {
+    try {
+      const r = await fetch("/api/admin/model/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData, id }) });
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d || !d.ok) {
+        // Товар на точку могли завезти, пока список был открыт, — сервер назовёт точки.
+        alertMsg((d && d.message) || "Не удалось удалить.");
+        await fetchModels(); renderAdminList();
+        return;
+      }
+      await fetchModels(); renderAdminList();
+      toast("Удалён");
+    } catch (e) { alertMsg(текстСбоя(e)); }
+  });
 }
+
 // ----- Завоз: модель появляется на точке с ценой и остатком -----
 let stockInModel = null;
 $("stockInClose").onclick = () => $("stockInView").classList.remove("show");
@@ -380,7 +408,7 @@ $("stockInSave").onclick = async () => {
   if (!price) { alertMsg("Укажите цену."); return; }
   const city = $("stockInCity").value;
   if (shelf().some(p => p.model_id === stockInModel.id && p.city === city)) {
-    alertMsg("На этой точке модель уже есть — правьте её в «Ценах и остатках».");
+    alertMsg("На этой точке этот товар уже есть — откройте его карточку в списке товаров.");
     return;
   }
   // Закупку спрашиваем здесь, а не «когда-нибудь потом»: незаполненная,
@@ -414,77 +442,12 @@ $("stockInSave").onclick = async () => {
              : "Не удалось завезти — проверьте цену и точку.");
       return;
     }
-    await refreshProducts(); await fetchModels(); renderModelList();
+    await refreshProducts(); await fetchModels();
     $("stockInView").classList.remove("show");
     alertMsg("Добавлено ✅");
   } catch (e) { alertMsg(текстСбоя(e)); }
   finally { $("stockInSave").disabled = false; $("stockInSave").textContent = "Добавить на точку"; }
 };
-
-function editModel(id) {
-  const m = models.find(x => x.id === id); if (!m) return;
-  editingModelId = id; modelFlavors = [...m.flavors]; modelPhotoFile = null;
-  $("mdCat").value = m.category;
-  renderModelForm();
-  $("mdName").value = m.name; $("mdDesc").value = m.description || "";
-  if ($("mdBrand")) $("mdBrand").value = m.brand || "";
-  $("mdSpecs").innerHTML = specFieldsHtml(m.category, m.specs, "mds_");
-  if (m.thumb_url) { $("mdPhotoPrev").src = m.thumb_url; $("mdPhotoPrev").style.display = ""; }
-  editPhotos = (m.gallery || []).map(g => ({ id: g.id, url: g.thumb || g.url }));
-  showModelGallery(true);
-  $("mdCancel").style.display = "block"; $("mdSave").textContent = "Обновить модель";
-  $("mdFormSect").open = true;
-  $("mdName").scrollIntoView({ behavior: "smooth", block: "center" });
-}
-// Снять модель с витрины на всех точках сразу — обычный ответ на «мы это
-// больше не возим». Удаление на этот вопрос отвечает слишком грубо: уносит
-// остаток, историю движений и отзывы.
-async function hideModel(id, hidden) {
-  const m = models.find(x => x.id === id);
-  const ask = hidden
-    ? `Снять «${m ? m.name : ""}» с витрины на всех точках? Покупатели её не увидят, остаток и отзывы останутся.`
-    : `Вернуть «${m ? m.name : ""}» на витрину?`;
-  confirmMsg(ask, async () => {
-    try {
-      const r = await fetch("/api/admin/model/hide", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData, id, hidden }) });
-      const d = await r.json();
-      if (!d.ok) { alertMsg("Не получилось."); return; }
-      await refreshProducts();
-      renderModelList();
-      toast(hidden ? `Снята с витрины · точек: ${d.count}` : `Снова продаётся · точек: ${d.count}`);
-    } catch (e) { alertMsg(текстСбоя(e)); }
-  });
-}
-
-// Модель, которая стоит на точках, не удаляется: товары остались бы без
-// модели, а галерея и отзывы — потеряны. Раньше на это спрашивали «товары
-// перестанут обновляться вместе с моделью — всё равно убрать?», и о потерях
-// не говорили. Теперь сразу объясняем, что делать вместо.
-function delModel(id) {
-  const m = models.find(x => x.id === id);
-  if (m && m.products > 0) {
-    alertMsg(`«${m.name}» стоит на точках (${m.products}). Удалить модель вместе с ними нельзя — пропали бы остаток, ` +
-             "история склада и отзывы.\n\nБольше не продаёте — снимите модель с витрины (🚫).\n" +
-             "Удалить совсем — сначала уберите товар с каждой точки (⋯ → «Удалить с точки»).");
-    return;
-  }
-  confirmMsg(`Убрать «${m ? m.name : ""}» из ассортимента?`, async () => {
-    try {
-      const r = await fetch("/api/admin/model/delete", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData, id }) });
-      const d = await r.json().catch(() => null);
-      if (!r.ok || !d || !d.ok) {
-        // Товар на точку могли завезти, пока список был открыт, — сервер назовёт точки.
-        alertMsg((d && d.message) || "Не удалось убрать модель.");
-        await fetchModels(); renderModelList();
-        return;
-      }
-      await fetchModels(); renderModelList();
-      toast("Убрана из ассортимента");
-    } catch (e) { alertMsg(текстСбоя(e)); }
-  });
-}
 
 // Фильтры админ-списка товаров
 let admSearch = "", admCatFilter = "all", admLocFilter = "all", admStockFilter = "all";
@@ -538,6 +501,8 @@ async function openProducts() {
   // openAdmin(). Тап сразу после открытия хаба мог обогнать этот запрос
   // и показать пустоту или прошлый визит; ждём тот же промис, а не свой.
   if (_adminBoot) await _adminBoot;
+  // Описания нужны списку: товары, которые нигде не продаются, — внизу.
+  if (isOwner()) await fetchModels();
   renderAdmFilters();
   renderAdminList();
   обновитьКнопкуПоставки();                              // напомнить о непроведённом черновике

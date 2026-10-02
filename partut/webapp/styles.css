@@ -1303,3 +1303,18 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 .npwhere li { background: var(--surface-2); border-radius: 10px; padding: 9px 12px; font-size: 14px; font-variant-numeric: tabular-nums; }
 .npdone .dwarn { text-align: left; }
 .npagain { width: 100%; margin-top: 14px; }
+
+/* ============================================================
+   «🛍 Товары»: описание в карточке и товары, которые нигде не продаются.
+   ============================================================ */
+/* Описание — общее для всех точек — в карточке отдельным блоком: видно, что
+   правка здесь затронет все точки, а цена ниже — только эту. */
+.descsum { margin: 10px 0 2px; padding: 12px; border-radius: 12px; background: var(--surface-2); display: grid; gap: 6px; }
+.descsum-h { font-size: 12.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; color: var(--hint); }
+.descsum-t { font-size: 14px; line-height: 1.4; }
+.descsum .npbtn { justify-self: start; background: var(--surface); }
+/* Нигде не продаётся — внизу списка, отделено линией. */
+.nowhere { margin-top: 18px; padding-top: 14px; border-top: 2px dashed var(--line); }
+.nowhere-h { font-weight: 800; font-size: 15px; margin-bottom: 4px; }
+/* Пояснение над формой — по левому краю, как сама форма (.view p центрирует). */
+.view p.dlvscope { text-align: left; }
