@@ -2767,6 +2767,7 @@ from partut.db.catalog import (                                         # noqa: 
     PublishRefused, publish_product, add_draft_photo, purge_draft_photos,   # noqa: F401
     ToModelRefused, product_to_model,                                       # noqa: F401
     ArchiveRefused, archive_product, archived_products, product_history,    # noqa: F401
+    delete_archived_product,                                                # noqa: F401
     DRAFT_PHOTO_KEEP_DAYS,                                                  # noqa: F401
     get_variants, get_all_variants, add_variant, delete_variants,           # noqa: F401
     replace_variants_if, change_variants,                                   # noqa: F401

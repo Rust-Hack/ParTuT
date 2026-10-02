@@ -240,3 +240,61 @@ def run_приход_и_архив_в_одну_секунду():
 
     _чисто()
     return c.fails
+
+
+def run_удаление_насовсем_и_возврат():
+    """AR-01: «удалить насовсем» проверяло историю, а удаляло после — в этот
+    промежуток товар возвращали из архива и принимали на него 7 шт, и
+    удаление стирало живой товар с остатком. Теперь проверка и удаление —
+    одна транзакция под тем же замком, что у архива и возврата."""
+    from partut.db import catalog
+    c = Checker("Архив: удалить насовсем и вернуть в одну секунду")
+    _чисто(); as_admin()
+    mid = db.add_model("liquid", "QA Удаление", "QA", "", {}, ["Mint"])
+
+    # Удаление первым: возврат ждёт и узнаёт, что товара нет; прихода некуда.
+    pid = db.create_point_product(mid, "Минск", 20.0, 9.0, variants=[{"flavor": "Mint", "stock": 0}])
+    db.archive_product(pid, True)
+
+    def вернуть_и_принять():
+        db.archive_product(pid, False)
+        return db.stock_operation(pid, "in", 7, flavor="Mint", admin_id=1)
+    удаление, возврат, ждал = _наперегонки(lambda: db.delete_archived_product(pid), вернуть_и_принять,
+                                           (catalog, "_товар_под_замком"))
+    c(f"возврат ждал удаления: {ждал}", ждал)
+    c(f"удаление прошло, возврат — «товара нет»: {возврат!r}",
+      isinstance(удаление, dict) and isinstance(возврат, db.ArchiveRefused) and возврат.code == "not_found")
+    c("товара и его вариантов нет, прихода без товара нет",
+      db.get_product(pid) is None and not db.get_variants(pid) and not db.get_stock_moves(pid, 10))
+
+    # Возврат первым: удаление ждёт и видит, что товар уже не в архиве.
+    pid2 = db.create_point_product(mid, "Туров", 20.0, 9.0, variants=[{"flavor": "Mint", "stock": 0}])
+    db.archive_product(pid2, True)
+    возврат, удаление, ждал = _наперегонки(lambda: db.archive_product(pid2, False),
+                                           lambda: db.delete_archived_product(pid2), (catalog, "_товар_под_замком"))
+    c(f"удаление ждало возврата: {ждал}", ждал)
+    c(f"возврат прошёл, удаление отказало «не в архиве»: {удаление!r}",
+      isinstance(возврат, dict) and возврат["changed"] and isinstance(удаление, db.ArchiveRefused) and удаление.code == "use_archive")
+    c("товар цел и на точке", db.get_product(pid2) is not None and not db.get_product(pid2)["archived"])
+    c("и принимает приход", db.stock_operation(pid2, "in", 7, flavor="Mint", admin_id=1)["stock"] == 7)
+
+    # Приход держит вариант и товар — удаление (запирающее варианты первыми)
+    # ждёт, а не сцепляется с ним намертво; потом видит, что товар не в архиве.
+    приход, удаление, ждал = _наперегонки(lambda: db.stock_operation(pid2, "in", 1, flavor="Mint", admin_id=1),
+                                          lambda: db.delete_archived_product(pid2), (stockmod, "_record_move"))
+    c(f"удаление ждало прихода, без взаимной блокировки: {удаление!r}",
+      ждал and isinstance(приход, dict) and isinstance(удаление, db.ArchiveRefused) and удаление.code == "use_archive")
+    c("остаток 8", db.get_product(pid2)["stock"] == 8)
+
+    # С историей — не удаляется, даже если в архиве.
+    db.stock_operation(pid2, "lost", 8, flavor="Mint", admin_id=1)
+    db.archive_product(pid2, True)
+    try:
+        db.delete_archived_product(pid2)
+        c("с историей — отказ", False)
+    except db.ArchiveRefused as e:
+        c("с историей — отказ has_history", e.code == "has_history" and e.extra["moves"] >= 3)
+    c("товар на месте", db.get_product(pid2) is not None)
+
+    _чисто()
+    return c.fails

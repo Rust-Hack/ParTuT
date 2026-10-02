@@ -588,6 +588,9 @@ function блокНигде() {
   if (!isOwner() || myScope() || admLocFilter !== "all" || admStockFilter !== "all") return "";
   const q = (admSearch || "").trim().toLowerCase();
   // Товар в архиве — не «нигде не продаётся», а в архиве: он там и показан.
+  // Архив ни разу не загрузился — сказать «нигде» нельзя: товар может лежать
+  // там (приёмка AR-02: при сбое архивный показывался тут, с «Завезти» и 🗑).
+  if (архивСостояние !== "ok" && !архивТоваров.length) return "";
   const стоят = new Set([...shelf(), ...архивТоваров].map(p => p.model_id).filter(Boolean));
   const нигде = models.filter(m => !стоят.has(m.id)
     && (admCatFilter === "all" || m.category === admCatFilter)
@@ -619,9 +622,23 @@ function привязатьНигде() {
 // остатку («нужно завезти», «нет в наличии») его нет — он не про это.
 // Продавцу сервер отдаёт только его точку; «удалить насовсем» — владельцу и
 // только у товара без истории (can_delete приходит с сервера).
+//
+// Состояние загрузки — отдельно от данных: «ещё не загружен», «загружен»,
+// «не загрузился». Пустой массив при сбое читался как «архив пуст», и
+// архивный товар уезжал в «Нигде не продаётся» (приёмка AR-02).
 let архивТоваров = [], архивОткрыт = false;
+let архивСостояние = "none";      // "none" — ещё не грузили, "ok", "error"
 function блокАрхив() {
   if (admStockFilter !== "all") return "";
+  // Не загрузился: если прежнего нет — так и сказать и дать повторить; если
+  // есть — показать его с пометкой, что он мог устареть.
+  const сбой = архивСостояние === "error";
+  const повтор = `<button type="button" class="actbtn" id="admArchiveRetry">↻ Повторить</button>`;
+  if (сбой && !архивТоваров.length) {
+    return `<div class="archive"><div class="archive-h">🗄 Архив — не загрузился</div>
+      <p class="dlvscope">Нет связи с сервером. Пока архив не загрузится, блок «Нигде не продаётся» не показан: товар оттуда может лежать в архиве.</p>
+      ${повтор}</div>`;
+  }
   const q = (admSearch || "").trim().toLowerCase();
   const список = архивТоваров.filter(p => (!myScope() || p.city === myScope())
     && (admLocFilter === "all" || p.city === admLocFilter)
@@ -630,7 +647,8 @@ function блокАрхив() {
   if (!список.length) return "";
   const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
   return `<details class="archive" id="admArchive"${архивОткрыт ? " open" : ""}>
-    <summary class="archive-h">🗄 Архив · ${список.length}</summary>
+    <summary class="archive-h">🗄 Архив · ${список.length}${сбой ? " · не обновился" : ""}</summary>
+    ${сбой ? `<p class="dlvscope">⚠️ Архив не обновился — показан прежний, он мог устареть. ${повтор}</p>` : ""}
     <p class="dlvscope">Здесь то, что больше не возите: покупатели и списки этого не видят. Отзывы и история склада при товаре — вернуть можно в любой момент.</p>
     ${список.map(p => `<div class="admrow prodrow">
       <div class="prodname">${esc(p.name)}</div>
@@ -642,6 +660,12 @@ function блокАрхив() {
   </details>`;
 }
 function привязатьАрхив() {
+  const повтор = $("admArchiveRetry");
+  if (повтор) повтор.onclick = async () => {
+    повтор.disabled = true; повтор.textContent = "Загружаю…";
+    await загрузитьАрхив();
+    renderAdminList();
+  };
   const блок = $("admArchive");
   if (!блок) return;
   блок.ontoggle = () => { архивОткрыт = блок.open; };     // перерисовка списка не сворачивает его
@@ -707,7 +731,7 @@ function строкаТовара(p, сТочкой) {
   const действия = `<div class="prodacts">
       <button type="button" class="actbtn" data-move="${p.id}">📦 Склад</button>
       <button type="button" class="actbtn" data-edit="${p.id}">✏️ Карточка</button>
-      <button type="button" class="actbtn more" data-more="${p.id}" aria-label="Ещё: снять с витрины, удалить">⋯</button>
+      <button type="button" class="actbtn more" data-more="${p.id}" aria-label="Ещё: снять с витрины, в архив">⋯</button>
     </div>`;
   return `<div class="admrow prodrow${p.hidden ? " off" : ""}">
       <div class="prodtop">
@@ -1938,20 +1962,24 @@ async function toggleHidden(id) {
 // Проверки (пустая полка, нет невыданных заказов) — на сервере: он отвечает
 // понятным текстом, его и показываем.
 
-// Свежий архив. Не загрузился — оставляем прежний: пустой блок читался бы
-// как «архив пуст», а это неправда.
+// Свежий архив. true — загрузился. Не загрузился — прежний остаётся, но
+// помечен (архивСостояние = "error"): блок скажет, что он мог устареть, и
+// даст повторить, а «Нигде не продаётся» не станет гадать по пустому.
 async function загрузитьАрхив() {
   try {
     const r = await fetch("/api/admin/archive", { method: "POST", headers: { "Content-Type": "application/json" },
                                                   body: JSON.stringify({ initData }) });
     const d = await r.json();
-    if (d && d.ok) архивТоваров = d.items || [];
+    if (d && d.ok && Array.isArray(d.items)) { архивТоваров = d.items; архивСостояние = "ok"; return true; }
   } catch (e) {}
+  архивСостояние = "error";
+  return false;
 }
 async function послеАрхива() {
-  await Promise.all([refreshProducts(), загрузитьАрхив()]);
+  const [, архивЕсть] = await Promise.all([refreshProducts(), загрузитьАрхив()]);
   if ($("productsView").classList.contains("show")) renderAdminList();
   обновитьБлокТочек();               // карточка товара открыта — её точки тоже
+  return архивЕсть;
 }
 // POST по архиву. null — исход неизвестен (сеть, оборванный ответ): тогда
 // говорим об этом и перечитываем, что на самом деле записано.
@@ -1962,8 +1990,12 @@ async function архивПост(путь, тело) {
     const d = await r.json();
     if (d && typeof d === "object") return d;
   } catch (e) {}
-  alertMsg("Ответ сервера не дошёл — не знаю, получилось ли. Обновил список: посмотрите, где товар сейчас.");
-  await послеАрхива();
+  // Сначала перечитать, потом говорить: «обновил список» — только если
+  // перечитать удалось.
+  const перечитал = await послеАрхива();
+  alertMsg("Ответ сервера не дошёл — не знаю, получилось ли. " + (перечитал
+    ? "Список обновлён: посмотрите, где товар сейчас."
+    : "Обновить список тоже не вышло — проверьте связь и нажмите «↻ Повторить» у архива."));
   return null;
 }
 

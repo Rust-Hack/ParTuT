@@ -731,24 +731,14 @@ def api_admin_delete():
     pid = inputs.целое(data.get("id"))
     if pid is None:
         return jsonify({"ok": False, "error": "bad_id"}), 400
-    товар_ = db.get_product(pid)
-    if not товар_:
-        return jsonify({"ok": False, "error": "not_found", "message": "Этого товара больше нет — обновите список."}), 404
-    if not товар_["archived"]:
-        # Страница, открытая до обновления, ещё пришлёт старое «Удалить с точки».
-        return jsonify({"ok": False, "error": "use_archive",
-                        "message": "Товар больше не удаляется с точки — его убирают в архив (⋯ → «🗄 В архив»): "
-                                   "история склада и отзывы сохранятся. Если видите это — закройте приложение "
-                                   "и откройте заново."}), 409
-    история = db.product_history(pid)
-    if история["moves"] or история["orders"]:
-        части = [x for x in (f"движений склада: {история['moves']}" if история["moves"] else "",
-                             f"заказов: {история['orders']}" if история["orders"] else "") if x]
-        return jsonify({"ok": False, "error": "has_history", **история,
-                        "message": f"У товара есть история ({', '.join(части)}) — удалить его значит потерять её. "
-                                   "Он останется в архиве: там его не видно ни покупателям, ни в списках."}), 409
-    db.delete_variants(pid)
-    db.delete_product(pid)
+    # Проверка и удаление — одной транзакцией в db.delete_archived_product
+    # (AR-01): прочитать здесь «в архиве, истории нет», а удалить потом —
+    # значило стереть товар, который в этот промежуток вернули и пополнили.
+    try:
+        товар_ = db.delete_archived_product(pid)
+    except db.ArchiveRefused as e:
+        статус = {"not_found": 404}.get(e.code, 409)
+        return jsonify({"ok": False, "error": e.code, "message": e.message, **e.extra}), статус
     g.log_note = f"«{товар_['name']}» · {товар_['city']}: удалён из архива насовсем (истории не было)"
     return jsonify({"ok": True})
 

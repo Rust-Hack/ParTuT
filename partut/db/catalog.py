@@ -110,6 +110,14 @@ def toggle_hit(product_id):
 def delete_product(product_id):
     conn = db.connect()
     cur = conn.cursor()
+    _стереть_товар(cur, product_id)
+    conn.commit()
+    conn.close()
+
+
+def _стереть_товар(cur, product_id):
+    """Строка товара и всё, что без неё не живёт, — внутри чужой транзакции."""
+    cur.execute(db._q("DELETE FROM product_variants WHERE product_id = %s"), (product_id,))
     cur.execute(db._q("DELETE FROM products WHERE id = %s"), (product_id,))
     # Галерея без товара никому не видна, но место занимает и мешает считать
     # картинки — убираем вместе с товаром.
@@ -127,8 +135,6 @@ def delete_product(product_id):
     # нет, ждать и показывать в избранном нечего.
     cur.execute(db._q("DELETE FROM stock_alerts WHERE product_id = %s"), (product_id,))
     cur.execute(db._q("DELETE FROM favorites WHERE product_id = %s"), (product_id,))
-    conn.commit()
-    conn.close()
 
 
 class ArchiveRefused(Exception):
@@ -160,15 +166,7 @@ def archive_product(product_id, archived=True):
     conn = db.connect()
     cur = conn.cursor()
     try:
-        if db.USE_PG:
-            cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (product_id,))
-        else:
-            cur.execute("UPDATE products SET id = id WHERE id = ?", (product_id,))
-        cur.execute(db._q("SELECT * FROM products WHERE id = %s"), (product_id,))
-        p = cur.fetchone()
-        if not p:
-            raise ArchiveRefused("not_found", "Этого товара больше нет — обновите список.")
-        p = dict(p)
+        p = _товар_под_замком(cur, product_id)
         if bool(p["archived"]) == bool(archived):
             conn.rollback()
             conn.close()
@@ -200,6 +198,69 @@ def archive_product(product_id, archived=True):
     return {"changed": True, "product": p}
 
 
+def _товар_под_замком(cur, product_id, с_вариантами=False):
+    """Берёт товар до конца транзакции и читает его. Нет — ArchiveRefused.
+
+    Все, кто меняет судьбу товара — архив, возврат, удаление насовсем, —
+    проходят здесь, поэтому идут друг за другом, а не бок о бок. Удаление
+    стирает и строки вариантов, поэтому сначала запирает их (с_вариантами):
+    порядок «варианты → товар» тот же, что у прихода и заказа, иначе приход,
+    держащий вариант и ждущий товар, и удаление, держащее товар и ждущее
+    вариант, ждали бы друг друга вечно. В SQLite замок один на всю базу и
+    берёт его первая запись транзакции."""
+    if db.USE_PG:
+        if с_вариантами:
+            cur.execute("SELECT id FROM product_variants WHERE product_id = %s ORDER BY id FOR UPDATE", (product_id,))
+        cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (product_id,))
+    else:
+        cur.execute("UPDATE products SET id = id WHERE id = ?", (product_id,))
+    cur.execute(db._q("SELECT * FROM products WHERE id = %s"), (product_id,))
+    p = cur.fetchone()
+    if not p:
+        raise ArchiveRefused("not_found", "Этого товара больше нет — обновите список.")
+    return dict(p)
+
+
+def delete_archived_product(product_id):
+    """Удалить насовсем — товар из архива, без истории, ОДНОЙ транзакцией.
+
+    Раньше ручка проверяла «в архиве?» и «есть ли история?», а удаляла
+    отдельными запросами после. В этот промежуток товар успевали вернуть из
+    архива и принять на него 7 шт — и удаление стирало живой товар с
+    остатком, оставляя приход без товара (приёмка AR-01). Теперь проверка и
+    удаление идут под одним замком (_товар_под_замком): возврат и приход
+    либо закончатся раньше — и удаление увидит, что товар уже не в архиве
+    или с историей, — либо дождутся удаления и увидят, что товара нет.
+
+    Возвращает строку товара, какой она была. Отказ — ArchiveRefused:
+    "not_found", "use_archive" (не в архиве), "has_history"."""
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        p = _товар_под_замком(cur, product_id, с_вариантами=True)
+        if not p["archived"]:
+            raise ArchiveRefused(
+                "use_archive",
+                "Товар больше не удаляется с точки — его убирают в архив (⋯ → «🗄 В архив»): история склада и "
+                "отзывы сохранятся. Если товар только что вернули из архива — обновите список.")
+        история = _история(cur, product_id)
+        if история["moves"] or история["orders"] or int(p["stock"] or 0) > 0:
+            части = [x for x in (f"движений склада: {история['moves']}" if история["moves"] else "",
+                                 f"заказов: {история['orders']}" if история["orders"] else "") if x]
+            raise ArchiveRefused(
+                "has_history",
+                f"У товара есть история ({', '.join(части) or 'остаток'}) — удалить его значит потерять её. "
+                "Он останется в архиве: там его не видно ни покупателям, ни в списках.", **история)
+        _стереть_товар(cur, product_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return p
+
+
 def archived_products(city=None):
     """Архив — для блока «🗄 Архив» в «🛍 Товарах». city — точка продавца."""
     conn = db.connect()
@@ -221,6 +282,12 @@ def product_history(product_id):
     выпадали из журнала точки, а в журнале магазина теряли название."""
     conn = db.connect()
     cur = conn.cursor()
+    итог = _история(cur, product_id)
+    conn.close()
+    return итог
+
+
+def _история(cur, product_id):
     cur.execute(db._q("SELECT COUNT(*) AS n FROM stock_moves WHERE product_id = %s"), (product_id,))
     движений = int(cur.fetchone()["n"])
     # Связи «заказ — товар» в базе нет, состав — строка JSON. LIKE отсеивает
@@ -235,7 +302,6 @@ def product_history(product_id):
         if any(isinstance(и, dict) and int(и.get("id") or и.get("product_id") or 0) == int(product_id)
                for и in состав):
             заказов += 1
-    conn.close()
     return {"moves": движений, "orders": заказов}
 
 
