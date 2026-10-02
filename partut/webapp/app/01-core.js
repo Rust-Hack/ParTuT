@@ -666,8 +666,9 @@ async function fetchAdminProducts() {
   try {
     const r = await fetch("/api/admin/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
-    if (d.ok) adminProducts = d.products || [];
+    if (d.ok && Array.isArray(d.products)) { adminProducts = d.products; return true; }
   } catch (e) { /* останемся на витрине — это хуже, но не пусто */ }
+  return false;
 }
 async function fetchLocations() {
   try { locations = await bootFetch("locations", "/api/locations"); return true; }
@@ -708,9 +709,12 @@ async function loadCatalog() {
 //
 // Поэтому обычная правка обновляет только товары, а справочники — те немногие
 // места, которые их и меняют (категории, точки, бренды, модели).
+// true — все нужные списки загрузились: тот, кто хочет сказать «список
+// обновлён», должен знать это, а не догадываться.
 async function refreshProducts() {
-  await Promise.all([fetchProducts(), (me && me.is_admin) ? fetchAdminProducts() : null]);
+  const [витрина, админка] = await Promise.all([fetchProducts(), (me && me.is_admin) ? fetchAdminProducts() : null]);
   перерисоватьПослеПравки();
+  return витрина !== false && админка !== false;
 }
 
 // Полное обновление: когда поменялось то, из чего строятся фильтры и формы.
