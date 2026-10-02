@@ -251,6 +251,150 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
     return order_id, coins_used, total, False
 
 
+class PointSaleRefused(Exception):
+    """Продажа на точке не проведена — ничего не записано. code — для экрана,
+    message — человеку, extra — подробности (какая строка и сколько осталось)."""
+
+    def __init__(self, code, message, **extra):
+        super().__init__(message)
+        self.code, self.message, self.extra = code, message, extra
+
+
+# Название способа получения у продажи на точке — его видно в выгрузке.
+ПРОДАЖА_НА_ТОЧКЕ = "Продажа на точке"
+
+
+def record_point_sale(city, lines, admin_id, seller, payment="", client_token=""):
+    """Продажа на точке мимо приложения — заказ без покупателя, сразу «выдан».
+
+    Продавец не всегда продаёт через приложение: человек подошёл к прилавку,
+    заплатил, ушёл. Раньше такую продажу можно было отразить только
+    списанием с неподходящей причиной — остаток верный, а денег в статистике
+    нет. Решение владельца (2.10.2026): учитывать как продажу. Поэтому это
+    заказ (выручка, прибыль, сводка дня, выплаты продавцу считают его сами),
+    но user_id = 0 и source = 'point': в покупательское — кэшбэк, рефералка,
+    розыгрыш, «давно не заказывали», счётчик выданных заказов — он не попадает.
+
+    Всё — ОДНОЙ транзакцией, как place_order: остаток списывается условно
+    («...WHERE stock >= сколько»), не хватило хоть одной строки — не
+    записано ничего, и человеку названо, чего и сколько осталось. Закупка
+    запоминается в составе на момент продажи — прибыль не поедет, когда
+    поставщик поднимет цену. Повтор с тем же ключом (ответ не дошёл, нажали
+    ещё раз) возвращает ту же продажу, а не вторую.
+
+    lines — [{"id", "flavor", "qty", "price"}], уже проверенные ручкой.
+    Возвращает (order_id, total, повтор?)."""
+    token = (client_token or "").strip()
+    if token:
+        prev = find_order_by_token(0, token, hours=None)
+        if prev:
+            return int(prev["id"]), float(prev["total"]), True
+    created_at = db.shop_now().strftime("%Y-%m-%d %H:%M")
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        items, total, с_вариантами = [], 0.0, set()
+        for line in lines:
+            pid, flavor, qty, price = int(line["id"]), (line.get("flavor") or None), int(line["qty"]), float(line["price"])
+            cur.execute(db._q("SELECT * FROM products WHERE id = %s"), (pid,))
+            p = cur.fetchone()
+            if not p or p["city"] != city:
+                raise PointSaleRefused("not_here", "Этого товара на точке больше нет — обновите список.", id=pid)
+            if p["archived"]:
+                raise PointSaleRefused("archived", f"«{p['name']}» в архиве — продать его нельзя, пока не вернули.", id=pid)
+            cur.execute(db._q("SELECT flavor, stock FROM product_variants WHERE product_id = %s"), (pid,))
+            варианты = {r["flavor"]: int(r["stock"] or 0) for r in cur.fetchall()}
+            if варианты and not flavor:
+                raise PointSaleRefused("need_variant", f"«{p['name']}»: выберите, какой вариант продан.", id=pid)
+            if flavor and flavor not in варианты:
+                raise PointSaleRefused("variant_missing", f"«{p['name']}»: варианта «{flavor}» больше нет — обновите список.",
+                                       id=pid, flavor=flavor)
+            имя = f"{p['name']} — {flavor}" if flavor else p["name"]
+            if flavor:
+                cur.execute(db._q("UPDATE product_variants SET stock = stock - %s "
+                                  "WHERE product_id = %s AND flavor = %s AND stock >= %s"), (qty, pid, flavor, qty))
+                с_вариантами.add(pid)
+                есть = варианты[flavor]
+            else:
+                cur.execute(db._q("UPDATE products SET stock = stock - %s WHERE id = %s AND stock >= %s"), (qty, pid, qty))
+                есть = int(p["stock"] or 0)
+            if cur.rowcount < 1:
+                raise PointSaleRefused("short", f"«{имя}»: на полке {есть} шт, а продано {qty}. Сначала проверьте "
+                                                "остаток — может, не проведён приход.", id=pid, flavor=flavor, left=есть)
+            items.append({"id": pid, "flavor": flavor, "name": имя, "price": round(price, 2),
+                          "cost": round(float(p["cost"] or 0), 2), "qty": qty})
+            total += price * qty
+        for pid in с_вариантами:
+            cur.execute(db._q("""UPDATE products SET stock =
+                              (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
+                              WHERE id = %s"""), (pid, pid))
+        total = round(total, 2)
+        order_id = db._insert_id(
+            cur,
+            """INSERT INTO orders (user_id, username, city, items, total, pickup_time, status, created_at,
+                                   coins_used, delivery_method, delivery_address, delivery_fee, payment_method,
+                                   comment, phone, promo_code, promo_discount, client_token, source)
+               VALUES (0, %s, %s, %s, %s, '', 'issued', %s, 0, %s, '', 0, %s, '', '', NULL, 0, %s, 'point')""",
+            ((seller or "")[:64], city, json.dumps(items, ensure_ascii=False), total, created_at,
+             ПРОДАЖА_НА_ТОЧКЕ, payment or "", token or None),
+        )
+        conn.commit()
+    except PointSaleRefused:
+        conn.rollback()
+        conn.close()
+        raise
+    except Exception:
+        conn.rollback()
+        conn.close()
+        # Две одинаковые отправки одновременно: уникальный ключ пропустил одну.
+        if token:
+            prev = find_order_by_token(0, token, hours=None)
+            if prev:
+                return int(prev["id"]), float(prev["total"]), True
+        raise
+    conn.close()
+    return order_id, total, False
+
+
+def point_sales(city=None, day=None):
+    """Продажи на точке за день (по умолчанию — сегодня), новые сверху."""
+    day = day or db.shop_now().strftime("%Y-%m-%d")
+    conn = db.connect()
+    cur = conn.cursor()
+    if city:
+        cur.execute(db._q("SELECT * FROM orders WHERE source = 'point' AND created_at LIKE %s AND city = %s "
+                          "ORDER BY id DESC"), (day + "%", city))
+    else:
+        cur.execute(db._q("SELECT * FROM orders WHERE source = 'point' AND created_at LIKE %s ORDER BY id DESC"),
+                    (day + "%",))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def cancel_point_sale(order_id):
+    """Отменить продажу на точке (ошиблись) — штуки вернутся на полку.
+
+    Только продажу на точке и только не отменённую. Товар уже в архиве —
+    нет: штуки вернулись бы на полку, которой никто не видит. Отмена — та
+    же cancel_order: статус и возврат склада одной транзакцией."""
+    order = get_order(order_id)
+    if not order or (order["source"] if "source" in order.keys() else None) != "point":
+        raise PointSaleRefused("not_found", "Такой продажи нет — обновите список.")
+    try:
+        состав = json.loads(order["items"] or "[]")
+    except (TypeError, ValueError):
+        состав = []
+    for it in состав:
+        p = db.get_product(int(it.get("id") or 0))
+        if p and p["archived"]:
+            raise PointSaleRefused("archived", f"«{p['name']}» уже в архиве — сначала верните его, потом отменяйте продажу.")
+    отменён = cancel_order(order_id, allowed=("issued",))
+    if not отменён:
+        raise PointSaleRefused("already", "Эта продажа уже отменена.")
+    return отменён
+
+
 # Статусы «заказ ещё живой»: до выдачи или отмены.
 ОТКРЫТЫЕ = ("new", "paid", "confirmed")
 
@@ -302,13 +446,17 @@ def get_orders(limit=200, city=None):
     — заказы есть, а он их не видит и не обработает. Лимит обязан считаться
     внутри того города, для которого он и нужен.
     """
+    # Продажи на точке — не работа с заказами: им не нужен ни статус, ни
+    # покупатель, и в очереди продавца они только мешали бы. Их список — в
+    # «🧾 Продаже на точке» (point_sales).
     conn = db.connect()
     cur = conn.cursor()
     if city:
-        cur.execute(db._q("SELECT * FROM orders WHERE city = %s "
+        cur.execute(db._q("SELECT * FROM orders WHERE city = %s AND COALESCE(source, '') <> 'point' "
                           "ORDER BY id DESC LIMIT %s"), (city, limit))
     else:
-        cur.execute(db._q("SELECT * FROM orders ORDER BY id DESC LIMIT %s"), (limit,))
+        cur.execute(db._q("SELECT * FROM orders WHERE COALESCE(source, '') <> 'point' ORDER BY id DESC LIMIT %s"),
+                    (limit,))
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -335,17 +483,23 @@ def seller_today(city=None):
                 args_city)
     open_by = {r["status"]: int(r["c"]) for r in cur.fetchall()}
 
-    cur.execute(db._q(f"SELECT COUNT(*) AS c, COALESCE(SUM(total), 0) AS s FROM orders "
-                   f"WHERE status = 'issued' AND created_at LIKE %s{where_city}"),
+    cur.execute(db._q(f"SELECT COALESCE(source, '') = 'point' AS на_точке, COUNT(*) AS c, "
+                      f"COALESCE(SUM(total), 0) AS s FROM orders "
+                      f"WHERE status = 'issued' AND created_at LIKE %s{where_city} "
+                      f"GROUP BY COALESCE(source, '') = 'point'"),
                 (today + "%", *args_city))
-    row = cur.fetchone()
+    по = {bool(r["на_точке"]): (int(r["c"]), float(r["s"] or 0)) for r in cur.fetchall()}
     conn.close()
+    заказы, точка = по.get(False, (0, 0.0)), по.get(True, (0, 0.0))
+    row = {"c": заказы[0], "s": заказы[1] + точка[1]}     # выручка дня — вместе с продажами на точке
     return {
         "waiting": open_by.get("paid", 0),        # ждут подтверждения — работа на продавце
         "to_issue": open_by.get("confirmed", 0),  # подтверждены, ждут покупателя
         "unpaid": open_by.get("new", 0),          # картой без чека — ход клиента
-        "issued_today": int(row["c"]),
+        "issued_today": int(row["c"]),                 # заказы из приложения
         "revenue_today": round(float(row["s"] or 0), 2),
+        "point_today": точка[0],                        # продажи на точке
+        "point_revenue_today": round(точка[1], 2),
     }
 
 

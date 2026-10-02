@@ -1106,6 +1106,11 @@ def _ensure_order_columns():
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_client_token_uniq "
                 "ON orders (user_id, client_token) "
                 "WHERE client_token IS NOT NULL AND client_token <> ''")
+    # Откуда продажа: пусто — заказ из приложения, 'point' — продажа на точке
+    # мимо приложения (db.orders.record_point_sale). Покупателя у неё нет
+    # (user_id = 0): в выручку она идёт, а в покупательское — нет.
+    if "source" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN source TEXT")
     conn.commit()
     conn.close()
     _ensure_delivery_columns()
@@ -1928,7 +1933,9 @@ def issued_orders_count():
     которое видит новый покупатель, прежде чем перевести деньги незнакомцу."""
     conn = connect()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) AS c FROM orders WHERE status = 'issued'")
+    # Только заказы из приложения: продажа на точке — не «магазин довёл заказ
+    # незнакомца до выдачи», а покупатель, который стоял у прилавка.
+    cur.execute("SELECT COUNT(*) AS c FROM orders WHERE status = 'issued' AND COALESCE(source, '') <> 'point'")
     n = int(cur.fetchone()["c"])
     conn.close()
     return n
@@ -1954,7 +1961,7 @@ def customers_to_remind(days, limit, cooldown_days=None):
     cur.execute(_q("""
         SELECT o.user_id AS user_id, MAX(o.created_at) AS last_order
         FROM orders o
-        WHERE o.status = 'issued'
+        WHERE o.status = 'issued' AND COALESCE(o.source, '') <> 'point'
         GROUP BY o.user_id
         HAVING MAX(o.created_at) < %s
         ORDER BY MAX(o.created_at) DESC
@@ -2786,6 +2793,7 @@ from partut.db.orders import (                                          # noqa: 
     stale_new_orders, touch_order_reminded, orders_needing_reminder,        # noqa: F401
     set_order_status, set_order_status_if, set_order_receipt,               # noqa: F401
     set_order_paid_amount, open_orders_with_product,                        # noqa: F401
+    PointSaleRefused, record_point_sale, point_sales, cancel_point_sale,    # noqa: F401
 )
 
 

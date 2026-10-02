@@ -771,3 +771,108 @@ def api_admin_order_items():
     tgsend.bg(tgsend.notify_client, int(updated["user_id"]),
         f"Продавец изменил заказ #{oid}:\n{lines}\n\n💰 Итого: {updated['total']:.2f} Br")
     return jsonify({"ok": True, "order": _order_json(updated, data.get("initData", "")), "changes": res})
+
+
+# ----- Продажа на точке -----
+# Человек купил у прилавка, мимо приложения. Решение владельца (2.10.2026):
+# учитывать как продажу — db.orders.record_point_sale. Маршруты — /sale…, а
+# не /point-sale: префикс /api/admin/point у auth — адреса самовывоза, только
+# владельцу, а продажа на своей точке — работа продавца.
+_ОПЛАТА_НА_ТОЧКЕ = ("cash", "card", "")
+_СТРОК_В_ПРОДАЖЕ = 100
+
+
+def _строки_продажи(сырые):
+    """[{id, flavor, qty, price}] или (None, отказ)."""
+    if not isinstance(сырые, list) or not сырые:
+        return None, "Добавьте хотя бы один товар."
+    if len(сырые) > _СТРОК_В_ПРОДАЖЕ:
+        return None, f"Больше {_СТРОК_В_ПРОДАЖЕ} строк за одну продажу — разделите её."
+    строки = []
+    for с in сырые:
+        if not isinstance(с, dict):
+            return None, "Экран прислал непонятную строку — обновите приложение."
+        pid, qty = inputs.целое(с.get("id")), inputs.целое(с.get("qty"))
+        try:
+            price = float(str(с.get("price")).replace(",", "."))
+        except (TypeError, ValueError):
+            price = None
+        if pid is None or qty is None or not 1 <= qty <= 1000:
+            return None, "Проверьте количество: от 1 до 1000 шт в строке."
+        if price is None or not 0 <= price <= 100_000:
+            return None, "Проверьте цену: число от 0, без букв."
+        строки.append({"id": pid, "flavor": inputs._text(с.get("flavor"), 120) or None, "qty": qty, "price": price})
+    return строки, None
+
+
+@bp.route("/api/admin/sale", methods=["POST"])
+def api_admin_sale():
+    """Провести продажу на точке. Продавцу — своя точка."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    city = inputs._text(data.get("city"))
+    if city not in db.location_names():
+        return jsonify({"ok": False, "error": "bad_city", "message": "Выберите точку."}), 400
+    deny = auth.deny_city(admin, city)
+    if deny:
+        return deny
+    строки, беда = _строки_продажи(data.get("lines"))
+    if беда:
+        return jsonify({"ok": False, "error": "bad_lines", "message": беда}), 400
+    оплата = inputs._text(data.get("payment"))
+    if оплата not in _ОПЛАТА_НА_ТОЧКЕ:
+        return jsonify({"ok": False, "error": "bad_payment"}), 400
+    ключ = inputs._text(data.get("client_token"), 64)     # как у заказа: ключ попытки, против двойного «Провести»
+    try:
+        oid, total, повтор = db.record_point_sale(city, строки, int(admin["id"]), auth._admin_display(admin),
+                                                 оплата, ключ)
+    except db.PointSaleRefused as e:
+        return jsonify({"ok": False, "error": e.code, "message": e.message, **e.extra}), 409
+    if not повтор:
+        g.log_note = (f"продажа на точке {city} №{oid}: {total:.2f} Br — "
+                      + ", ".join(f"{с['qty']} шт" for с in строки))
+    return jsonify({"ok": True, "id": oid, "total": total, "replay": повтор})
+
+
+@bp.route("/api/admin/sales", methods=["POST"])
+def api_admin_sales():
+    """Продажи на точке за сегодня. Продавцу — своя точка, владельцу — выбранная или все."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    city = admin.get("city") or inputs._text(data.get("city")) or None
+    out = []
+    for o in db.point_sales(city):
+        try:
+            состав = json.loads(o["items"] or "[]")
+        except (TypeError, ValueError):
+            состав = []
+        out.append({"id": o["id"], "city": o["city"], "created_at": o["created_at"], "total": float(o["total"] or 0),
+                    "status": o["status"], "payment": o["payment_method"] or "", "seller": o["username"] or "",
+                    "items": [{"name": и.get("name"), "qty": и.get("qty"), "price": и.get("price")} for и in состав]})
+    return jsonify({"ok": True, "sales": out})
+
+
+@bp.route("/api/admin/sale/cancel", methods=["POST"])
+def api_admin_sale_cancel():
+    """Отменить продажу на точке — ошиблись. Штуки вернутся на полку."""
+    data = request.get_json(force=True, silent=True) or {}
+    admin = auth.get_admin(data.get("initData", ""))
+    if not admin:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    oid = inputs.целое(data.get("id"))
+    заказ = db.get_order(oid) if oid is not None else None
+    if not заказ:
+        return jsonify({"ok": False, "error": "not_found", "message": "Такой продажи нет — обновите список."}), 404
+    deny = auth.deny_city(admin, заказ["city"])
+    if deny:
+        return deny
+    try:
+        db.cancel_point_sale(oid)
+    except db.PointSaleRefused as e:
+        return jsonify({"ok": False, "error": e.code, "message": e.message, **e.extra}), 409
+    g.log_note = f"продажа на точке {заказ['city']} №{oid} отменена: {float(заказ['total'] or 0):.2f} Br, штуки вернулись"
+    return jsonify({"ok": True})

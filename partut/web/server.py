@@ -208,6 +208,8 @@ _WRITE_PATHS = {
     "/api/admin/category/spec/delete": ("categories",),
     "/api/admin/product/variants": _ТОВАРЫ, "/api/admin/product/delete": _ТОВАРЫ,
     "/api/admin/product/archive": _ТОВАРЫ, "/api/admin/model/archive": _ТОВАРЫ,
+    # Продажа на точке меняет остаток (витрина) и выручку (статистика).
+    "/api/admin/sale": _ТОВАРЫ, "/api/admin/sale/cancel": _ТОВАРЫ,
     "/api/admin/photo": _ТОВАРЫ, "/api/admin/photo/add": _ТОВАРЫ, "/api/admin/photo/delete": _ТОВАРЫ,
     # Оценка живёт в карточке товара, поэтому её публикация обновляет витрину.
     "/api/admin/review/decide": _ТОВАРЫ, "/api/admin/review/delete": _ТОВАРЫ,
