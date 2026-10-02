@@ -1316,5 +1316,9 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 /* Нигде не продаётся — внизу списка, отделено линией. */
 .nowhere { margin-top: 18px; padding-top: 14px; border-top: 2px dashed var(--line); }
 .nowhere-h { font-weight: 800; font-size: 15px; margin-bottom: 4px; }
+/* Архив — свёрнут по умолчанию: «больше не возим» не мешает работе со списком. */
+.archive { margin-top: 18px; padding-top: 14px; border-top: 2px dashed var(--line); }
+.archive-h { font-weight: 800; font-size: 15px; cursor: pointer; padding: 6px 0; min-height: 32px; }
+.archive[open] .archive-h { margin-bottom: 4px; }
 /* Пояснение над формой — по левому краю, как сама форма (.view p центрирует). */
 .view p.dlvscope { text-align: left; }

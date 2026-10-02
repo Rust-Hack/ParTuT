@@ -526,7 +526,7 @@ async function openProducts() {
   // и показать пустоту или прошлый визит; ждём тот же промис, а не свой.
   if (_adminBoot) await _adminBoot;
   // Описания нужны списку: товары, которые нигде не продаются, — внизу.
-  if (isOwner()) await fetchModels();
+  await Promise.all([isOwner() ? fetchModels() : null, загрузитьАрхив()]);   // архив — внизу, свёрнутым
   renderAdmFilters();
   renderAdminList();
   обновитьКнопкуПоставки();                              // напомнить о непроведённом черновике
@@ -2211,7 +2211,8 @@ $("logClose").onclick = () => $("logView").classList.remove("show");
 // Путь запроса — не то, что читает человек. Переводим в дело: «цена»,
 // «удалил товар», «настройки магазина».
 const LOG_NAMES = {
-  "product/update": "изменил товар", "product/delete": "удалил товар с точки",
+  "product/update": "изменил товар", "product/delete": "удалил товар насовсем",
+  "product/archive": "архив товара", "model/archive": "в архив на всех точках",
   "product/variants": "изменил варианты", "product/specs": "изменил характеристики",
   "product/from-model": "завёз на точку", "product": "добавил товар",
   "stock/move": "движение склада", "order/status": "статус заказа",

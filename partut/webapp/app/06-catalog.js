@@ -539,8 +539,8 @@ function нарисоватьСписокТоваров() {
   const счёт = $("admCount");
   if (!shelf().length) {
     счёт.textContent = "";
-    $("adminList").innerHTML = `<p class="listempty">Товаров пока нет. Первый — кнопкой «✨ Новый товар» выше.</p>` + блокНигде();
-    привязатьНигде();
+    $("adminList").innerHTML = `<p class="listempty">Товаров пока нет. Первый — кнопкой «✨ Новый товар» выше.</p>` + блокНигде() + блокАрхив();
+    привязатьНигде(); привязатьАрхив();
     return;
   }
   const q = (admSearch || "").trim().toLowerCase();
@@ -564,16 +564,16 @@ function нарисоватьСписокТоваров() {
     const msg = admStockFilter === "out" ? "Ничего не кончилось — на всех точках есть остаток."
               : admStockFilter === "need" ? "Завозить нечего: везде больше " + LOW_STOCK + " шт."
               : "Ничего не найдено.";
-    $("adminList").innerHTML = `<p class="listempty">${msg}</p>` + блокНигде();
-    привязатьНигде();
+    $("adminList").innerHTML = `<p class="listempty">${msg}</p>` + блокНигде() + блокАрхив();
+    привязатьНигде(); привязатьАрхив();
     return;
   }
   // Точку пишем в строке, только когда в списке все точки сразу. Выбран один
   // город или продавец ведёт свою точку — «Минск» в каждой строке ничего не
   // сообщает, а место под сведения на узком телефоне дорого.
   const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
-  $("adminList").innerHTML = list.map(p => строкаТовара(p, сТочкой)).join("") + блокНигде();
-  привязатьНигде();
+  $("adminList").innerHTML = list.map(p => строкаТовара(p, сТочкой)).join("") + блокНигде() + блокАрхив();
+  привязатьНигде(); привязатьАрхив();
   $("adminList").querySelectorAll("[data-price]").forEach(b => b.onclick = () => открытьЦену(+b.dataset.price));
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
@@ -587,7 +587,8 @@ function нарисоватьСписокТоваров() {
 function блокНигде() {
   if (!isOwner() || myScope() || admLocFilter !== "all" || admStockFilter !== "all") return "";
   const q = (admSearch || "").trim().toLowerCase();
-  const стоят = new Set(shelf().map(p => p.model_id).filter(Boolean));
+  // Товар в архиве — не «нигде не продаётся», а в архиве: он там и показан.
+  const стоят = new Set([...shelf(), ...архивТоваров].map(p => p.model_id).filter(Boolean));
   const нигде = models.filter(m => !стоят.has(m.id)
     && (admCatFilter === "all" || m.category === admCatFilter)
     && (!q || `${m.name} ${m.brand || ""}`.toLowerCase().includes(q)));
@@ -611,6 +612,41 @@ function привязатьНигде() {
   список.querySelectorAll("[data-nwin]").forEach(b => b.onclick = () => openStockIn(+b.dataset.nwin));
   список.querySelectorAll("[data-nwdesc]").forEach(b => b.onclick = () => открытьОписание(+b.dataset.nwdesc));
   список.querySelectorAll("[data-nwdel]").forEach(b => b.onclick = () => delModel(+b.dataset.nwdel));
+}
+
+// Архив — внизу списка, свёрнутым: «больше не возим» не должно мешать работе
+// с тем, что продаётся. Подчиняется поиску, категории и точке; при отборе по
+// остатку («нужно завезти», «нет в наличии») его нет — он не про это.
+// Продавцу сервер отдаёт только его точку; «удалить насовсем» — владельцу и
+// только у товара без истории (can_delete приходит с сервера).
+let архивТоваров = [], архивОткрыт = false;
+function блокАрхив() {
+  if (admStockFilter !== "all") return "";
+  const q = (admSearch || "").trim().toLowerCase();
+  const список = архивТоваров.filter(p => (!myScope() || p.city === myScope())
+    && (admLocFilter === "all" || p.city === admLocFilter)
+    && (admCatFilter === "all" || p.category === admCatFilter)
+    && (!q || `${p.name} ${p.brand || ""}`.toLowerCase().includes(q)));
+  if (!список.length) return "";
+  const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
+  return `<details class="archive" id="admArchive"${архивОткрыт ? " open" : ""}>
+    <summary class="archive-h">🗄 Архив · ${список.length}</summary>
+    <p class="dlvscope">Здесь то, что больше не возите: покупатели и списки этого не видят. Отзывы и история склада при товаре — вернуть можно в любой момент.</p>
+    ${список.map(p => `<div class="admrow prodrow">
+      <div class="prodname">${esc(p.name)}</div>
+      <div class="prodstock">${сТочкой ? `${esc(p.city)} · ` : ""}${(+p.price).toFixed(2)} Br${p.hidden ? " · снят с витрины" : ""}</div>
+      <div class="prodacts">
+        <button type="button" class="actbtn" data-arback="${p.id}">↩ Вернуть</button>
+        ${p.can_delete ? `<button type="button" class="actbtn more" data-ardel="${p.id}" aria-label="Удалить «${esc(p.name)}» насовсем">🗑</button>` : ""}
+      </div></div>`).join("")}
+  </details>`;
+}
+function привязатьАрхив() {
+  const блок = $("admArchive");
+  if (!блок) return;
+  блок.ontoggle = () => { архивОткрыт = блок.open; };     // перерисовка списка не сворачивает его
+  блок.querySelectorAll("[data-arback]").forEach(b => b.onclick = () => вернутьИзАрхива(+b.dataset.arback));
+  блок.querySelectorAll("[data-ardel]").forEach(b => b.onclick = () => удалитьНасовсем(+b.dataset.ardel));
 }
 
 // «3 вкуса», «4 цвета», «2 сопротивления» — словом категории, а не безликим
@@ -685,9 +721,9 @@ function строкаТовара(p, сТочкой) {
 
 // ----- /Список товаров -----
 
-// Меню «⋯» у строки товара: снять с витрины (или вернуть) и удалить.
-// Сами действия — прежние (toggleHidden, delAdminRow с их вопросами), меню
-// только убирает их с глаз из ежедневной строки.
+// Меню «⋯» у строки товара: снять с витрины (или вернуть) и убрать в архив.
+// Редкие действия — здесь, а не в ежедневной строке. Удаления в меню нет:
+// «больше не возим» — это архив, а удалить насовсем можно только из архива.
 let ещёТовар = null;
 function открытьЕщё(id) {
   const p = shelf().find(x => x.id === id);
@@ -704,6 +740,8 @@ function открытьЕщё(id) {
   $("rowMoreHideAll").textContent = всеСняты ? `👁 Вернуть на витрину на всех точках (${везде.length})`
                                              : `🚫 Снять с витрины на всех точках (${везде.length})`;
   $("rowMoreHideAll").dataset.on = всеСняты ? "1" : "0";
+  $("rowMoreArchAll").hidden = !(isOwner() && везде.length > 1);
+  $("rowMoreArchAll").textContent = `🗄 В архив на всех точках (${везде.length})`;
   $("rowMoreOverlay").classList.add("show");
 }
 $("rowMoreHideAll").onclick = () => {
@@ -714,9 +752,13 @@ $("rowMoreHide").onclick = () => {
   const p = ещёТовар; closeOverlay($("rowMoreOverlay"));
   if (p) toggleHidden(p.id);
 };
-$("rowMoreDel").onclick = () => {
+$("rowMoreArch").onclick = () => {
   const p = ещёТовар; closeOverlay($("rowMoreOverlay"));
-  if (p) delAdminRow(p.id);
+  if (p) вАрхив(p.id);
+};
+$("rowMoreArchAll").onclick = () => {
+  const p = ещёТовар; closeOverlay($("rowMoreOverlay"));
+  if (p && p.model_id) вАрхивВезде(p.model_id);
 };
 $("rowMoreCancel").onclick = () => closeOverlay($("rowMoreOverlay"));
 
@@ -1289,9 +1331,11 @@ function renderEdit(p) {
 // него можно было только через «Ассортимент» — и казалось, что для второго
 // города надо заводить товар заново.
 //
-// Галочка отвечает на вопрос «есть ли этот товар на точке». Снять её — значит
-// убрать товар с точки, и это делается по-настоящему, с подтверждением: иначе
-// галочка врала бы, а вранью в интерфейсе цена — доверие ко всему остальному.
+// Галочка — только у точек, где товара ещё нет: «завести сюда». Там, где он
+// уже есть, галочки нет: раньше снять её значило удалить товар с точки вместе
+// с историей склада — слишком разрушительный смысл для обычной галочки.
+// «Больше не возим» — это ⋯ → «🗄 В архив» в строке той точки; точка в
+// архиве показана здесь же, с «вернуть».
 let editPointFlavors = {};     // город -> [вкусы], выбранные для этой точки
 
 function editPointList() {
@@ -1391,16 +1435,6 @@ function снятьЧерновикТочек() {
       flavors: флаги,
     };
   });
-  // Точки, где товар УЖЕ есть: там правится только «оставить/убрать» —
-  // снятая галочка помечает точку на удаление (см. собратьТочки). Раньше
-  // черновик хранил только .pointadd (новые точки), и добавление вкуса
-  // (которое зовёт обновитьБлокТочек → renderEditPoints → свежая разметка
-  // с checked по умолчанию) молча возвращало снятую галочку обратно.
-  узел.querySelectorAll(".pointrow[data-have]").forEach(блок => {
-    const чек = блок.querySelector(".pchk");
-    if (чек.disabled) return;   // своя точка — переключать нечего, всегда отмечена
-    черновик["have:" + блок.dataset.city] = { checked: чек.checked };
-  });
   return черновик;
 }
 
@@ -1428,12 +1462,6 @@ function применитьЧерновикТочек(черновик) {
       строка.querySelector(".pfst").value = ф.stock;
     });
   });
-  узел.querySelectorAll(".pointrow[data-have]").forEach(блок => {
-    const чек = блок.querySelector(".pchk");
-    if (чек.disabled) return;
-    const сохранено = черновик["have:" + блок.dataset.city];
-    if (сохранено) чек.checked = сохранено.checked;
-  });
 }
 
 function renderEditPoints(p, md) {
@@ -1445,8 +1473,9 @@ function renderEditPoints(p, md) {
   const вкусы = editPointList();
   editPointFlavors = {};
 
-  const где = {};
+  const где = {}, вАрхиве = {};
   shelf().filter(x => x.model_id === p.model_id).forEach(x => { где[x.city] = x; });
+  архивТоваров.filter(x => x.model_id === p.model_id).forEach(x => { вАрхиве[x.city] = x; });
   const города = locations.map(l => l.name).filter(имя => !мой || имя === мой);
 
   узел.innerHTML = города.map(имя => {
@@ -1454,14 +1483,20 @@ function renderEditPoints(p, md) {
     const свой = уже && уже.id === p.id;
     if (уже) {
       return `<div class="pointrow" data-city="${esc(имя)}" data-have="${уже.id}">
-        <label class="an" style="display:flex;gap:8px;align-items:center;font-weight:600">
-          <input type="checkbox" class="pchk" style="width:auto" checked ${свой ? "disabled" : ""}>
-          Есть на точке «${esc(имя)}»</label>
+        <div class="an" style="font-weight:600">✓ Есть на точке «${esc(имя)}»</div>
         <div class="dnote" style="margin:6px 0 0">${свой
           ? "эта карточка" + (p.hidden ? " · 🚫 снят с витрины" : "")
           : `${(+уже.price).toFixed(2)} Br · ${уже.stock} шт`
             + (уже.hidden ? " · 🚫 снят с витрины" : "")
             + ` · <a data-gopoint="${уже.id}">открыть</a>`}</div>
+      </div>`;
+    }
+    const архивный = вАрхиве[имя];
+    if (архивный) {
+      return `<div class="pointrow" data-city="${esc(имя)}" data-arch="${архивный.id}">
+        <div class="an" style="font-weight:600">🗄 В архиве на точке «${esc(имя)}»</div>
+        <div class="dnote" style="margin:6px 0 8px">Вернётся та же запись — с ценой, отзывами и историей склада.</div>
+        <button type="button" class="actbtn" data-arback="${архивный.id}">↩ Вернуть из архива</button>
       </div>`;
     }
     return `<div class="pointrow pointadd" data-city="${esc(имя)}">
@@ -1491,6 +1526,7 @@ function renderEditPoints(p, md) {
   применитьЧерновикТочек(черновик);
 
   узел.querySelectorAll("[data-gopoint]").forEach(b => b.onclick = () => закрытьРедактор(() => openEdit(+b.dataset.gopoint)));
+  узел.querySelectorAll("[data-arback]").forEach(b => b.onclick = () => вернутьИзАрхива(+b.dataset.arback));
 }
 
 // Вкусы одной точки: галочка «этот вкус тут есть» + количество.
@@ -1507,10 +1543,10 @@ function renderPointFlavors(блок, город) {
   bindQty(где);
 }
 
-// Собирает с экрана: что завести и что убрать.
+// Собирает с экрана: на какие точки завести товар.
 function собратьТочки() {
   const узел = $("edPoints");
-  if (!узел) return { завести: [], убрать: [] };
+  if (!узел) return { завести: [] };
 
   const завести = [...узел.querySelectorAll(".pointadd")]
     .filter(б => б.querySelector(".pchk").checked)
@@ -1529,11 +1565,7 @@ function собратьТочки() {
       };
     });
 
-  const убрать = [...узел.querySelectorAll(".pointrow[data-have]")]
-    .filter(б => !б.querySelector(".pchk").checked && !б.querySelector(".pchk").disabled)
-    .map(б => ({ city: б.dataset.city, id: +б.dataset.have }));
-
-  return { завести, убрать };
+  return { завести };
 }
 
 // Строка добавления нового значения варианта. У категории с двумя измерениями
@@ -1641,7 +1673,7 @@ function renderEditVariants() {
   if (typeof обновитьБлокТочек === "function") обновитьБлокТочек();
 }
 
-// Приводит точки к тому, что отмечено на экране: заводит новые, убирает снятые.
+// Заводит товар на отмеченные точки.
 // Возвращает строку для человека или "".
 //
 // Ходим по точкам по одной той же ручкой, что и «Добавить на точку»: она уже
@@ -1650,9 +1682,9 @@ function renderEditVariants() {
 //
 // Про каждую точку отвечаем отдельно: «завели в Турове, в Лунинце не вышло» —
 // правда, а молчаливое «сохранено» после половины сделанного — нет.
-async function применитьТочки(p, убрать) {
+async function применитьТочки(p) {
   const { завести } = собратьТочки();
-  const удачно = [], убраны = [], беды = [], заминки = [];
+  const удачно = [], беды = [];
 
   for (const т of завести) {
     if (!т.price) { беды.push(`${т.city}: не указана цена`); continue; }
@@ -1671,48 +1703,19 @@ async function применитьТочки(p, убрать) {
       if (d.ok) удачно.push(т.city);
       else беды.push(`${т.city}: ` + (d.error === "already_here" ? "товар уже там"
                    : d.error === "bad_price" ? "цена должна быть больше нуля"
-                   : d.message || "не удалось добавить"));
-    } catch (e) { беды.push(`${т.city}: сеть недоступна`); }
-  }
-
-  for (const т of (убрать || [])) {
-    try {
-      const r = await fetch("/api/admin/product/delete", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData, id: т.id, force: !!т.force }) });
-      const d = await r.json();
-      if (d.ok) убраны.push(т.city);
-      // Сервер придержал: по товару есть незакрытые заказы. Это не отказ, а
-      // вопрос — и задать его должен человек, а не мы за него решить.
-      else if (d.error === "open_orders") заминки.push({ город: т.city, id: т.id, что: d.message });
-      else беды.push(`${т.city}: ` + (d.message || "не удалось убрать"));
+                   : d.message || "не удалось добавить"));       // in_archive — сервер скажет «верните»
     } catch (e) { беды.push(`${т.city}: сеть недоступна`); }
   }
 
   const строки = [];
   if (удачно.length) строки.push("Добавлено: " + удачно.join(", "));
-  if (убраны.length) строки.push("Убрано: " + убраны.join(", "));
   if (беды.length) строки.push("Не получилось — " + беды.join("; "));
-  return { текст: строки.join("\n"), заминки };
+  return { текст: строки.join("\n") };
 }
 
-// Общий хвост сохранения: применить точки, обновить список, закрыть экран.
-// Вынесен, потому что зовётся из двух мест — сразу и после подтверждения.
-async function завершитьПравку(p, убрать, отказы) {
-  const { текст, заминки } = await применитьТочки(p, убрать);
-
-  // Сервер придержал удаление: по товару есть незакрытые заказы. Спрашиваем и,
-  // если человек настаивает, повторяем с force. Решает он, а не мы.
-  if (заминки.length) {
-    const вопрос = заминки.map(з => з.что).join("\n\n") + "\n\nВсё равно убрать?";
-    confirmMsg(вопрос, async () => {
-      const ещё = await применитьТочки(p, заминки.map(з => ({ city: з.город, id: з.id, force: true })));
-      await refreshProducts();
-      $("editView").classList.remove("show");
-      alertMsg([текст, ещё.текст].filter(Boolean).join("\n") || "Сохранено ✅");
-    });
-    return;
-  }
+// Общий хвост сохранения: завести на точки, обновить список, закрыть экран.
+async function завершитьПравку(p, отказы) {
+  const { текст } = await применитьТочки(p);
 
   await refreshProducts();
   const беды = (отказы || []).length ? "Не сохранилось — " + (отказы || []).join("; ") : "";
@@ -1865,18 +1868,7 @@ async function saveEdit(p, подтверждено) {
       if (isVar) await сменитьСостав();
       // Точки — уже после того, как своя карточка сохранена: если что-то из
       // них упадёт, правки цены и состава всё равно на месте.
-      //
-      // Снятая галочка убирает товар с точки НАСОВСЕМ, вместе с её остатком и
-      // историей склада. Спрашиваем до, а не после: отменить это нечем.
-      const { убрать } = собратьТочки();
-      if (убрать.length) {
-        const где = убрать.map(т => `«${т.city}»`).join(", ");
-        confirmMsg(`Убрать товар с точки ${где}? Остаток и движения склада этой точки удалятся. Отменить будет нечем.`,
-                   async () => { await завершитьПравку(p, убрать, отказы); });
-        $("edSave").disabled = false; $("edSave").textContent = "Сохранить";
-        return;
-      }
-      await завершитьПравку(p, [], отказы);
+      await завершитьПравку(p, отказы);
       return;
     }
     const specs = collectSpecs("edSpecs");
@@ -1930,16 +1922,6 @@ async function saveEdit(p, подтверждено) {
   finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
 }
 
-function delAdminRow(id) {
-  const p = shelf().find(x => x.id === id);
-  // Удаление уносит остаток и историю. Если товар просто кончился —
-  // правильный ход другой, и сказать об этом надо до, а не после.
-  const warn = p && p.stock > 0
-    ? `Удалить «${p.name}» с точки ${p.city}? На полке ещё ${p.stock} шт — если товар просто закончился, лучше снять с витрины (🚫).`
-    : "Удалить товар с точки?";
-  confirmMsg(warn, () => doDelAdminRow(id));
-}
-
 // Снять с витрины / вернуть. Для покупателя товар исчезает, для магазина
 // остаётся: остаток, движения склада и отзывы на месте.
 async function toggleHidden(id) {
@@ -1951,20 +1933,87 @@ async function toggleHidden(id) {
   await refreshProducts();
   toast(p.hidden ? "Снова на витрине" : "Снят с витрины — остаток сохранён");
 }
-async function doDelAdminRow(id, force) {
+// ----- Архив: действия -----
+// Архив — «больше не возим» без удаления (db.catalog.archive_product).
+// Проверки (пустая полка, нет невыданных заказов) — на сервере: он отвечает
+// понятным текстом, его и показываем.
+
+// Свежий архив. Не загрузился — оставляем прежний: пустой блок читался бы
+// как «архив пуст», а это неправда.
+async function загрузитьАрхив() {
   try {
-    const r = await fetch("/api/admin/product/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData, id, force: !!force }) });
-    const d = await r.json().catch(() => ({}));
-    // Сервер придерживает удаление, если по товару есть незакрытые заказы.
-    // Раньше ответ не читался вовсе: товар оставался, а экран молчал — и это
-    // выглядело бы как «кнопка не работает».
-    if (!d.ok && d.error === "open_orders") {
-      confirmMsg(d.message + "\n\nВсё равно удалить?", () => doDelAdminRow(id, true));
-      return;
-    }
-    if (!d.ok) { alertMsg(d.message || "Не удалось удалить товар."); return; }
-    await refreshProducts();
-  } catch (e) { alertMsg(текстСбоя(e)); }
+    const r = await fetch("/api/admin/archive", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                  body: JSON.stringify({ initData }) });
+    const d = await r.json();
+    if (d && d.ok) архивТоваров = d.items || [];
+  } catch (e) {}
+}
+async function послеАрхива() {
+  await Promise.all([refreshProducts(), загрузитьАрхив()]);
+  if ($("productsView").classList.contains("show")) renderAdminList();
+  обновитьБлокТочек();               // карточка товара открыта — её точки тоже
+}
+// POST по архиву. null — исход неизвестен (сеть, оборванный ответ): тогда
+// говорим об этом и перечитываем, что на самом деле записано.
+async function архивПост(путь, тело) {
+  try {
+    const r = await fetch(путь, { method: "POST", headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ initData, ...тело }) });
+    const d = await r.json();
+    if (d && typeof d === "object") return d;
+  } catch (e) {}
+  alertMsg("Ответ сервера не дошёл — не знаю, получилось ли. Обновил список: посмотрите, где товар сейчас.");
+  await послеАрхива();
+  return null;
+}
+
+function вАрхив(id) {
+  const p = shelf().find(x => x.id === id); if (!p) return;
+  confirmMsg(`Убрать «${p.name}» с точки «${p.city}» в архив?\n\nС витрины и из списков он уйдёт. Отзывы, фото и `
+             + "история склада останутся; вернуть можно внизу списка — «🗄 Архив».", async () => {
+    const d = await архивПост("/api/admin/product/archive", { id, archived: true });
+    if (!d) return;
+    if (!d.ok) { alertMsg(d.message || "Не удалось убрать в архив."); return; }
+    await послеАрхива();
+    toast("В архиве");
+  });
+}
+
+function вАрхивВезде(mid) {
+  const везде = shelf().filter(x => x.model_id === mid);
+  const имя = (везде[0] || {}).name || "товар";
+  confirmMsg(`Убрать «${имя}» в архив на всех точках (${везде.length})?\n\nТочки, где ещё есть остаток или `
+             + "невыданные заказы, останутся — приложение назовёт их.", async () => {
+    const d = await архивПост("/api/admin/model/archive", { model_id: mid });
+    if (!d) return;
+    if (!d.ok) { alertMsg(d.message || "Не удалось убрать в архив."); return; }
+    await послеАрхива();
+    const строки = [];
+    if (d.archived.length) строки.push(`🗄 В архиве: ${d.archived.join(", ")}.`);
+    if (d.left.length) строки.push("Остались на точках:\n" + d.left.map(x => `• ${x.city} — ${x.message}`).join("\n"));
+    alertMsg(строки.join("\n\n") || "Ничего не изменилось — на точках его уже нет.");
+  });
+}
+
+async function вернутьИзАрхива(id) {
+  const p = архивТоваров.find(x => x.id === id);
+  const d = await архивПост("/api/admin/product/archive", { id, archived: false });
+  if (!d) return;
+  if (!d.ok) { alertMsg(d.message || "Не удалось вернуть из архива."); return; }
+  await послеАрхива();
+  toast(p && p.hidden ? "Вернули — снят с витрины, как и был" : `Вернули${p ? ` на точку «${p.city}»` : ""}`);
+}
+
+function удалитьНасовсем(id) {
+  const p = архивТоваров.find(x => x.id === id); if (!p) return;
+  confirmMsg(`Удалить «${p.name}» (${p.city}) насовсем?\n\nИстории у него нет — ни движений склада, ни заказов, `
+             + "поэтому это разрешено. Отменить будет нечем.", async () => {
+    const d = await архивПост("/api/admin/product/delete", { id });
+    if (!d) return;
+    if (!d.ok) { alertMsg(d.message || "Не удалось удалить."); await послеАрхива(); return; }
+    await послеАрхива();
+    toast("Удалён");
+  });
 }
 
 // Убираем заставку по факту готовности данных (зовёт start() в 01-core.js),
