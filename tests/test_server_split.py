@@ -144,11 +144,18 @@ def run_standalone():
     порт = с_сокетом.getsockname()[1]
     с_сокетом.close()
 
+    # Запуск — во ВРЕМЕННОЙ папке: без DATABASE_URL сервер берёт SQLite-файл
+    # shop.db из текущей папки. Из корня проекта он открывал настоящую местную
+    # базу разработчика и прогонял на ней разовые правки данных (так 3.10.2026
+    # на неё попали обе наводки каталога). Код находит по PYTHONPATH.
+    import tempfile
+    папка = tempfile.mkdtemp(prefix="partut-standalone-")
     окружение = dict(os.environ)
     окружение.update({"BOT_TOKEN": "000000:TEST-NO-SEND", "PORT": str(порт),
-                      "DATABASE_URL": "", "KEEP_WARM": "0"})
+                      "DATABASE_URL": "", "KEEP_WARM": "0",
+                      "PYTHONPATH": КОРЕНЬ + os.pathsep + окружение.get("PYTHONPATH", "")})
     процесс = subprocess.Popen(["python3", "-m", "partut.web.server"],
-                               cwd=КОРЕНЬ, env=окружение,
+                               cwd=папка, env=окружение,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         адрес = f"http://127.0.0.1:{порт}"
@@ -173,12 +180,16 @@ def run_standalone():
             except Exception as e:
                 код = f"не ответил ({type(e).__name__})"
             c(f"{путь} отвечает (было 404 после разрезов): {код}", код == 200)
+        c("база сервера — во временной папке, а не местная shop.db проекта",
+          os.path.exists(os.path.join(папка, "shop.db")))
     finally:
         процесс.terminate()
         try:
             процесс.wait(timeout=10)
         except subprocess.TimeoutExpired:
             процесс.kill()
+        import shutil
+        shutil.rmtree(папка, ignore_errors=True)
     return c.fails
 
 

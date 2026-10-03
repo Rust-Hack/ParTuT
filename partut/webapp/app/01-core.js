@@ -177,6 +177,15 @@ function сохранитьКорзину() {
   try { localStorage.setItem(CART_KEY, JSON.stringify({ city, items: cart })); }
   catch (e) { /* приватный режим и т.п. — корзина просто не переживёт перезапуск */ }
 }
+// Вкус в сохранённой корзине — под нынешним названием. Вкус могли
+// переименовать регистром («клубника манго» → «Клубника манго», 3.10.2026):
+// два варианта, отличных только регистром, приложение завести не даёт, так
+// что это тот же вкус. Без этого покупатель видел «разобрали» при полной полке.
+function нынешнийВкус(p, вкус) {
+  const н = String(вкус).toLowerCase();
+  const v = (p.variants || []).find(x => x.flavor === вкус) || (p.variants || []).find(x => String(x.flavor).toLowerCase() === н);
+  return v ? v.flavor : вкус;
+}
 function восстановитьКорзину() {
   let сохранено;
   try { сохранено = JSON.parse(localStorage.getItem(CART_KEY) || "null"); }
@@ -188,9 +197,11 @@ function восстановитьКорзину() {
     const p = allProducts.find(x => x.id === it.product_id);
     if (!p || p.hidden) continue;                          // товара больше нет вовсе — тихо не вернём
     if (it.flavor && !hasVariants(p)) continue;             // у модели больше нет вариантов
-    const max = it.flavor ? variantStock(p, it.flavor) : p.stock;
+    const вкус = it.flavor ? нынешнийВкус(p, it.flavor) : null;
+    const max = вкус ? variantStock(p, вкус) : p.stock;
     if (max <= 0) { gone.push(p.name); continue; }
-    cart[key] = { product_id: it.product_id, flavor: it.flavor || null, qty: Math.min(it.qty, max) };
+    cart[вкус && вкус !== it.flavor ? cartKey(p.id, вкус) : key] =
+      { product_id: it.product_id, flavor: вкус, qty: Math.min(it.qty, max) };
     if (it.qty > max) short.push(p.name);
   }
   if (gone.length || short.length) {
@@ -776,12 +787,25 @@ function flavorsOf(p) {
   if (!list.length && p.flavor) list.push(p.flavor);
   return list;
 }
+// Вкусы для фильтра «Вкус» — только настоящие вкусы. Варианты есть и у
+// картриджа (сопротивление «0.6Ω»), и у пода (цвет): в списке вкусов им не
+// место. У снюса вариант — «200 мг · Мята»: крепость выбирается на карточке,
+// а в фильтре нужен сам вкус, «Мята», общий для всех крепостей и товаров.
+function вкусыДляФильтра(p) {
+  if (String(catVariant(p.category)).trim().toLowerCase() !== "вкус") return [];
+  const список = flavorsOf(p);
+  if (!catTwoAxis(p.category)) return список;
+  return [...new Set(список.map(f => {
+    const части = String(f).split(AXIS_SEP);
+    return части.length > 1 ? части.slice(1).join(AXIS_SEP) : f;
+  }))];
+}
 function flavorsInScope() {
   const set = new Set();
   allProducts.forEach(p => {
     if (p.city !== city) return;
     if (cat && p.category !== cat) return;
-    flavorsOf(p).forEach(f => set.add(f));
+    вкусыДляФильтра(p).forEach(f => set.add(f));
   });
   return [...set].sort((a, b) => a.localeCompare(b, "ru"));
 }
@@ -927,7 +951,7 @@ function visibleProducts() {
   return allProducts.filter(p => p.city === city
     && (!cat || p.category === cat)
     && (!brandFilters.length || brandFilters.includes(p.brand))
-    && (!flavorFilters.length || flavorsOf(p).some(f => flavorFilters.includes(f)))
+    && (!flavorFilters.length || вкусыДляФильтра(p).some(f => flavorFilters.includes(f)))
     && (!s || ищетсяВ(searchText(p), s)));
 }
 // ----- /Поиск на витрине -----

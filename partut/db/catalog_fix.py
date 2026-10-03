@@ -26,16 +26,16 @@ _сделано = []
 
 
 def _журнал(сделано):
-    print(f"[база] {КТО}: {сделано}", flush=True)
+    print(f"[база] наводка 3.10: {сделано}", flush=True)
     _сделано.append(сделано)
 
 
-def _в_журнал():
+def _в_журнал(кто=КТО):
     for x in _сделано:
         try:
-            db.log_admin_action(0, КТО, "catalog/fix", x)
+            db.log_admin_action(0, кто, "catalog/fix", x)
         except Exception as e:                   # журнал — не повод не чинить
-            print(f"[база] {КТО}: не записал в журнал: {e}", flush=True)
+            print(f"[база] {кто}: не записал в журнал: {e}", flush=True)
     _сделано.clear()
 
 
@@ -194,4 +194,163 @@ def apply_catalog_fix():
     if шагов:
         _журнал(f"готово, шагов: {шагов}")
     _в_журнал()
+    return шагов
+
+
+# ---- Вторая наводка 3.10.2026 — витрина глазами покупателя ----
+#
+# После первой владелец открыл витрину и увидел то же, что и раньше: правка
+# меняла бренды и описания, а покупатель видит название товара, подписи
+# категорий и вкусы. Здесь — то, что видно на витрине.
+
+ОТМЕТКА_ВИТРИНЫ = "catalog_fix_20261003b"
+КТО_ВИТРИНА = "наводка витрины 3.10"
+
+# Вкусы PILOW TALK, записанные с маленькой буквы (на всех точках, в описании
+# и в бренде одинаково). «черная вишня» с маленькой — только в бренде.
+PILOW_ВКУСЫ = {"клубника манго": "Клубника манго",
+               "клубника банан": "Клубника банан",
+               "экзотические фрукты клубника": "Экзотические фрукты клубника"}
+
+# Подписи категорий: (таблица, условие, было, стало). Только если сейчас
+# в точности «было» — поправленное владельцем руками не трогаем.
+ПОДПИСИ = [
+    ("категория «снюс» → «Снюс»", "UPDATE categories SET name = %s WHERE code = %s AND name = %s",
+     ("Снюс", "snyus", "снюс")),
+    ("у снюса выбор «крепость» → «Крепость»",
+     "UPDATE categories SET variant_label2 = %s WHERE code = %s AND variant_label2 = %s",
+     ("Крепость", "snyus", "крепость")),
+    ("характеристика снюса «крепость» → «Крепость»",
+     "UPDATE category_specs SET label = %s WHERE category = %s AND key = %s AND label = %s",
+     ("Крепость", "snyus", "krepost", "крепость")),
+    ("характеристика одноразок «крепость» → «Крепость»",
+     "UPDATE category_specs SET label = %s WHERE category = %s AND key = %s AND label = %s",
+     ("Крепость", "disposable", "krepost", "крепость")),
+    ("характеристика одноразок «батарея» → «Батарея»",
+     "UPDATE category_specs SET label = %s WHERE category = %s AND key = %s AND label = %s",
+     ("Батарея", "disposable", "batareya", "батарея")),
+    ("единица батареи одноразок «mah» → «мАч»",
+     "UPDATE category_specs SET unit = %s WHERE category = %s AND key = %s AND unit = %s",
+     ("мАч", "disposable", "batareya", "mah")),
+]
+
+
+def _имя_картриджа(cur):
+    """Картридж: название «XROS» → «VAPORESSO XROS». Название товара в магазине
+    — полное, с брендом («PILOW TALK IC40000»): так его и пишет «Новый товар»,
+    и только оно стоит крупно на карточке. Голое «XROS» вышло из первой правки."""
+    m = _модель(cur, "coils", "XROS", "VAPORESSO")
+    if not m:
+        return False
+    cur.execute(db._q("UPDATE models SET name = %s WHERE id = %s"), ("VAPORESSO XROS", m["id"]))
+    cur.execute(db._q("UPDATE products SET name = %s WHERE model_id = %s AND name = %s"), ("VAPORESSO XROS", m["id"], "XROS"))
+    _журнал("картридж: название «XROS» → «VAPORESSO XROS» (описание и точки) — на витрине видно бренд")
+    return True
+
+
+def _вкусы_pilow(cur):
+    """Вкусы PILOW TALK IC40000 с большой буквы — везде, где лежит название
+    вкуса: варианты на точках, описание, бренд, состав заказов, история склада.
+
+    Заказы — обязательно: отмена и выдача находят вариант по ТОЧНОМУ названию,
+    и заказ со старым «клубника манго» после переименования не вернул бы штуки
+    на полку. Если у какой-то точки уже есть вкус с большой буквы (кто-то завёл
+    руками), шаг не делается целиком: сливать два варианта — не наша задача."""
+    m = _модель(cur, "disposable", "PILOW TALK IC40000", "PILOW TALK")
+    if not m:
+        return False
+    cur.execute(db._q("SELECT id FROM products WHERE model_id = %s"), (m["id"],))
+    pids = [int(r["id"]) for r in cur.fetchall()]
+    if not pids:
+        return False
+    # Замки — как у заказа и прихода: сначала варианты, потом товар. Правка
+    # идёт при старте, а прежняя копия сайта во время выкатки ещё принимает
+    # заказы. Заказ, уже взявший вариант, мы дождёмся — и ниже увидим его в
+    # списке заказов; новый будет ждать нас и потом не найдёт старый вкус —
+    # честный отказ «нет в наличии», а не заказ со старым названием.
+    if db.USE_PG:
+        for pid in sorted(pids):
+            cur.execute("SELECT id FROM product_variants WHERE product_id = %s ORDER BY id FOR UPDATE", (pid,))
+            cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (pid,))
+    места = ", ".join(["%s"] * len(pids))
+    cur.execute(db._q(f"SELECT product_id, flavor FROM product_variants WHERE product_id IN ({места})"), pids)
+    есть = {(int(r["product_id"]), r["flavor"]) for r in cur.fetchall()}
+    if not any(f in PILOW_ВКУСЫ for _, f in есть):
+        return False                      # старых названий нет — уже сделано или нечего делать
+    if any((pid, старый) in есть and (pid, новый) in есть for pid in pids for старый, новый in PILOW_ВКУСЫ.items()):
+        _журнал("PILOW TALK IC40000: вкусы НЕ переименованы — на точке есть и старое, и новое название одного вкуса")
+        return False
+    for старый, новый in PILOW_ВКУСЫ.items():
+        cur.execute(db._q(f"UPDATE product_variants SET flavor = %s WHERE flavor = %s AND product_id IN ({места})"),
+                    (новый, старый, *pids))
+        cur.execute(db._q(f"UPDATE stock_moves SET flavor = %s WHERE flavor = %s AND product_id IN ({места})"),
+                    (новый, старый, *pids))
+        cur.execute(db._q(f"UPDATE products SET flavor = %s WHERE flavor = %s AND id IN ({места})"),
+                    (новый, старый, *pids))
+    вкусы = [PILOW_ВКУСЫ.get(f, f) for f in _вкусы(m)]
+    cur.execute(db._q("UPDATE models SET flavors = %s WHERE id = %s"), (json.dumps(вкусы, ensure_ascii=False), m["id"]))
+    # Состав заказов: строка JSON. LIKE отсекает заведомо не те заказы, а
+    # решает разбор — по номеру товара и точному названию вкуса. Под замком:
+    # иначе правка состава продавцом в ту же секунду (прежняя копия сайта)
+    # затёрлась бы составом, прочитанным до неё.
+    cur.execute(db._q("SELECT id, items FROM orders WHERE items LIKE %s" + (" FOR UPDATE" if db.USE_PG else "")),
+                ("%PILOW TALK%",))
+    заказов = 0
+    for r in cur.fetchall():
+        try:
+            items = json.loads(r["items"] or "[]")
+        except (TypeError, ValueError):
+            continue
+        тронут = False
+        for it in items if isinstance(items, list) else []:
+            if not isinstance(it, dict) or int(it.get("id") or 0) not in pids or it.get("flavor") not in PILOW_ВКУСЫ:
+                continue
+            старый = it["flavor"]
+            it["flavor"] = PILOW_ВКУСЫ[старый]
+            if isinstance(it.get("name"), str) and it["name"].endswith(старый):
+                it["name"] = it["name"][: -len(старый)] + PILOW_ВКУСЫ[старый]
+            тронут = True
+        if тронут:
+            cur.execute(db._q("UPDATE orders SET items = %s WHERE id = %s"), (json.dumps(items, ensure_ascii=False), r["id"]))
+            заказов += 1
+    _журнал(f"PILOW TALK IC40000: вкусы с большой буквы — {', '.join(PILOW_ВКУСЫ.values())} "
+            f"(точек: {len(pids)}, заказов: {заказов})")
+    return True
+
+
+def apply_storefront_fix():
+    """Один раз за жизнь базы. Возвращает число шагов (или None, если уже было)."""
+    if db.get_setting(ОТМЕТКА_ВИТРИНЫ):
+        return None
+    _сделано.clear()
+    conn = db.connect()
+    cur = conn.cursor()
+    шагов = 0
+    try:
+        шагов += _имя_картриджа(cur)
+        шагов += _вкусы_pilow(cur)
+        b = _бренд(cur, "PILOW TALK")
+        if b:
+            было = _вкусы(b)
+            стало = [PILOW_ВКУСЫ.get(f, "Черная вишня" if f == "черная вишня" else f) for f in было]
+            if стало != было:
+                cur.execute(db._q("UPDATE brands SET flavors = %s WHERE id = %s"), (json.dumps(стало, ensure_ascii=False), b["id"]))
+                _журнал("бренд «PILOW TALK»: вкусы с большой буквы, как на точках")
+                шагов += 1
+        for что, sql, параметры in ПОДПИСИ:
+            cur.execute(db._q(sql), параметры)
+            if cur.rowcount:
+                _журнал(что)
+                шагов += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        _сделано.clear()
+        raise
+    conn.close()
+    db.set_setting(ОТМЕТКА_ВИТРИНЫ, db._now_str())
+    if шагов:
+        _журнал(f"готово, шагов: {шагов}")
+    _в_журнал(КТО_ВИТРИНА)
     return шагов

@@ -96,7 +96,8 @@ def run():
       and "сочный персик" not in _бренд("ANNIMA LOVE")["flavors"])
     c("GLITCH (бренд): «Двойная мята-вишня», как в товаре", _бренд("GLITCH")["flavors"] == ["Двойная мята-вишня", "Холодная груша"])
     c("ПОШЛАЯ РАБЫНЯ: 7 вкусов из описания", len(_бренд("ПОШЛАЯ РАБЫНЯ")["flavors"]) == 7)
-    журнал = [r["details"] for r in db.list_admin_log(limit=50) if r["action"] == "catalog/fix"]
+    журнал = [r["details"] for r in db.list_admin_log(limit=50)
+              if r["action"] == "catalog/fix" and r["admin_name"] == catalog_fix.КТО]
     c(f"всё записано в журнал действий: {len(журнал)}", len(журнал) == 12 and any("готово" in x for x in журнал))
     c("второй запуск — не запускается", catalog_fix.apply_catalog_fix() is None)
 
