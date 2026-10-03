@@ -706,6 +706,8 @@ def init_db():
     _ensure_publish_tables()      # новый товар одним маршрутом: фото черновика и ключи публикаций
     _ensure_location_pause_columns()  # точку закрывают на время — продавца нет на месте
     _repair_city_case()             # «туров» → «Туров» у покупателей и выплат после старого переименования
+    from partut.db.catalog_fix import apply_catalog_fix
+    apply_catalog_fix()             # разовая наводка порядка в каталоге 3.10.2026 (по выгрузке владельца)
     _ensure_channel_tables()      # черновики постов для канала: публикует владелец
     _ensure_category_columns()  # has_flavors у категорий
     _ensure_photo_columns()     # галерея у модели, а не у товара
