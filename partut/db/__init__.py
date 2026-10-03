@@ -705,6 +705,7 @@ def init_db():
     _ensure_price_rev_column()    # номер версии цены — против перестановки запросов
     _ensure_publish_tables()      # новый товар одним маршрутом: фото черновика и ключи публикаций
     _ensure_location_pause_columns()  # точку закрывают на время — продавца нет на месте
+    _repair_city_case()             # «туров» → «Туров» у покупателей и выплат после старого переименования
     _ensure_channel_tables()      # черновики постов для канала: публикует владелец
     _ensure_category_columns()  # has_flavors у категорий
     _ensure_photo_columns()     # галерея у модели, а не у товара
@@ -999,6 +1000,39 @@ def _ensure_location_pause_columns():
         cur.execute("ALTER TABLE locations ADD COLUMN closed_note TEXT")
     if "closed_by" not in cols:
         cur.execute("ALTER TABLE locations ADD COLUMN closed_by BIGINT")
+    conn.commit()
+    conn.close()
+
+
+# Где город хранится строкой — те же таблицы, что перекатывает rename_location.
+_ГОРОД_В_ТАБЛИЦАХ = ("users", "seller_payouts", "products", "orders", "delivery_methods", "pickup_points", "staff")
+
+
+def _repair_city_case():
+    """Город, отличающийся от точки только регистром («туров» при точке
+    «Туров»), — привести к названию точки.
+
+    До 2.10.2026 переименование точки не переносило новое имя на покупателей
+    (users.city) и выплаты продавцам (seller_payouts). Точку «туров»
+    переименовали в «Туров» раньше, чем вышла починка, — и у покупателей
+    осталась точка, которой нет: приложение молча переводило их на другую.
+    Чиним только совпадение без учёта регистра — его однозначно можно отнести
+    к одной точке; любое другое расхождение не трогаем. Сравниваем в Python:
+    LOWER() в SQLite не знает кириллицы. Повторный запуск ничего не меняет."""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM locations")
+    точки = {}
+    for r in cur.fetchall():
+        точки.setdefault((r["name"] or "").casefold(), []).append(r["name"])
+    for table in _ГОРОД_В_ТАБЛИЦАХ:
+        cur.execute(f"SELECT DISTINCT city FROM {table} WHERE city IS NOT NULL")
+        for r in cur.fetchall():
+            было = r["city"]
+            варианты = точки.get((было or "").casefold(), [])
+            if len(варианты) == 1 and варианты[0] != было:
+                cur.execute(_q(f"UPDATE {table} SET city = %s WHERE city = %s"), (варианты[0], было))
+                print(f"[база] {table}: город «{было}» → «{варианты[0]}» ({cur.rowcount} строк)", flush=True)
     conn.commit()
     conn.close()
 

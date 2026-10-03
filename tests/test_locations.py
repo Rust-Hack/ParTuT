@@ -13,7 +13,8 @@ def _clean():
     conn = db.connect(); cur = conn.cursor()
     for t in ("products", "orders", "delivery_methods", "pickup_points", "staff", "seller_payouts"):
         cur.execute(f"DELETE FROM {t} WHERE city LIKE 'Ренейм%'")
-    cur.execute("UPDATE users SET city = NULL WHERE city LIKE 'Ренейм%' OR city LIKE 'ренейм%'")
+    cur.execute("UPDATE users SET city = NULL WHERE city LIKE 'Ренейм%' OR city LIKE 'ренейм%' OR city LIKE 'РЕНЕЙМ%'")
+    cur.execute("DELETE FROM seller_payouts WHERE city LIKE 'РЕНЕЙМ%'")
     cur.execute("DELETE FROM locations WHERE name LIKE 'Ренейм%'")
     conn.commit(); conn.close()
 
@@ -89,3 +90,31 @@ def run():
 if __name__ == "__main__":
     import sys
     sys.exit(1 if run() else 0)
+
+
+def run_починка_регистра():
+    """Точку переименовали старым кодом («туров» → «Туров»): у покупателей и
+    выплат осталось «туров». Запуск базы приводит их к названию точки."""
+    c = Checker("Починка города после старого переименования")
+    _clean()
+    lid = db.add_location("Ренейм-Регистр")
+    db.ensure_user(9011)
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("UPDATE users SET city = %s WHERE user_id = %s"), ("ренейм-регистр", 9011))
+    cur.execute(db._q("INSERT INTO seller_payouts (user_id, city, period, revenue, percent, amount, paid_by, created_at) "
+                      "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"), (9012, "РЕНЕЙМ-регистр", "2026-09", 10, 10, 1, 1, "2026-10-01 10:00"))
+    conn.commit(); conn.close()
+    db._repair_city_case()
+    c("покупатель снова на своей точке", db.get_user_row(9011)["city"] == "Ренейм-Регистр")
+    c("выплата — тоже", (db.seller_payouts_for_period("2026-09").get(9012) or {}).get("city") == "Ренейм-Регистр")
+    db._repair_city_case()
+    c("повторный запуск ничего не меняет", db.get_user_row(9011)["city"] == "Ренейм-Регистр")
+    # Чужое расхождение (не только регистр) не трогаем.
+    conn = db.connect(); cur = conn.cursor()
+    cur.execute(db._q("UPDATE users SET city = %s WHERE user_id = %s"), ("Ренейм-Старое-Имя", 9011))
+    conn.commit(); conn.close()
+    db._repair_city_case()
+    c("другое имя — не трогаем", db.get_user_row(9011)["city"] == "Ренейм-Старое-Имя")
+    assert lid
+    _clean()
+    return c.fails
