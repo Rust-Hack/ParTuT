@@ -289,9 +289,24 @@ def вкус_на_полке(имена, вкус):
     return похожие[0] if len(похожие) == 1 else None
 
 
-def _вкусы_товара(cur, pid):
-    cur.execute(db._q("SELECT flavor FROM product_variants WHERE product_id = %s"), (pid,))
-    return [r["flavor"] for r in cur.fetchall()]
+def _полка_заказа(cur, items):
+    """Варианты товаров заказа {pid: [названия]} — ПОД ЗАМКОМ до конца транзакции.
+
+    Отмена и правка заказа ищут вариант по нынешнему названию, а потом
+    возвращают в него штуки. Без замка между поиском и возвратом вариант
+    успевали удалить в другом соединении, и возврат уходил в никуда (приёмка
+    SF-01-R1). Запираем строки вариантов, как приход и заказ (варианты → товар),
+    по товарам в порядке номеров: две отмены с одними и теми же товарами
+    не ждут друг друга вечно. В SQLite замок один на базу — его уже взяла
+    запись строки заказа."""
+    pids = sorted({int(it.get("id") or 0) for it in items
+                   if isinstance(it, dict) and it.get("flavor") and int(it.get("id") or 0)})
+    полка = {}
+    for pid in pids:
+        cur.execute(db._q("SELECT flavor FROM product_variants WHERE product_id = %s ORDER BY id"
+                          + (" FOR UPDATE" if db.USE_PG else "")), (pid,))
+        полка[pid] = [r["flavor"] for r in cur.fetchall()]
+    return полка
 
 
 # Название способа получения у продажи на точке — его видно в выгрузке.
@@ -713,6 +728,7 @@ def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
         except (TypeError, ValueError):
             items = []
         touched_variants = set()
+        полка = _полка_заказа(cur, items)
         for it in items:
             try:
                 qty = int(it.get("qty", 0))
@@ -724,7 +740,7 @@ def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
                 # Возврат — в вариант под нынешним названием. Нет такого вовсе —
                 # отказ целиком (SF-01): раньше UPDATE молча менял ноль строк,
                 # заказ становился «отменён», а штуки не возвращались никуда.
-                имя = вкус_на_полке(_вкусы_товара(cur, it["id"]), it["flavor"])
+                имя = вкус_на_полке(полка.get(int(it["id"]), []), it["flavor"])
                 if имя is None:
                     raise CancelRefused("variant_missing",
                                         f"«{it.get('name') or 'товар'}»: варианта «{it['flavor']}» у товара больше нет — "
@@ -732,6 +748,10 @@ def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
                                         "товара (с 0 шт) и отмените заказ ещё раз.")
                 cur.execute(db._q(f"UPDATE product_variants SET stock = {db.GREATEST}(0, stock + %s) "
                                "WHERE product_id = %s AND flavor = %s"), (qty, it["id"], имя))
+                if cur.rowcount < 1:      # под замком так быть не может — но молча терять штуки нельзя
+                    raise CancelRefused("variant_missing",
+                                        f"«{it.get('name') or 'товар'}»: возврат на полку не записался — "
+                                        "заказ не отменён. Обновите экран и попробуйте ещё раз.")
                 touched_variants.add(it["id"])
             else:
                 cur.execute(db._q(f"UPDATE products SET stock = {db.GREATEST}(0, stock + %s) WHERE id = %s"),
@@ -921,6 +941,7 @@ def update_order_items(order_id, quantities, coin_value):
             return None, "bad_items"
 
         changes = []
+        полка = _полка_заказа(cur, items)
         for idx, want in quantities.items():
             if not (0 <= idx < len(items)):
                 return None, "bad_index"
@@ -933,7 +954,7 @@ def update_order_items(order_id, quantities, coin_value):
             if flavor:
                 # Вариант — под нынешним названием (SF-01); пропал вовсе — не правим:
                 # и списать, и вернуть было бы некуда.
-                flavor = вкус_на_полке(_вкусы_товара(cur, pid), flavor)
+                flavor = вкус_на_полке(полка.get(int(pid or 0), []), flavor)
                 if flavor is None:
                     return None, f"no_variant:{it.get('name', '')}"
             if delta > 0:
@@ -969,6 +990,8 @@ def update_order_items(order_id, quantities, coin_value):
                 if flavor:
                     cur.execute(db._q(f"UPDATE product_variants SET stock = {db.GREATEST}(0, stock - %s) "
                                    "WHERE product_id = %s AND flavor = %s"), (delta, pid, flavor))
+                    if cur.rowcount < 1:      # вернуть некуда — правку целиком не проводим
+                        return None, f"no_variant:{it.get('name', '')}"
                     cur.execute(db._q("""UPDATE products SET stock =
                                       (SELECT COALESCE(SUM(stock), 0) FROM product_variants WHERE product_id = %s)
                                       WHERE id = %s"""), (pid, pid))

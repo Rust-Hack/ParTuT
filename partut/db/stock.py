@@ -74,6 +74,23 @@ def _открытые(cur):
                 continue
             if pid and штук > 0:
                 out.append((строка, {"id": pid, "flavor": str(позиция.get("flavor") or ""), "qty": штук}))
+    # Вкус в заказе — текст на момент заказа; на полке его могли поправить
+    # регистром («black» → «Black»). Резерв обязан узнать в нём тот же
+    # вариант — так же, как отмена (db.вкус_на_полке). Иначе вариант под
+    # заказом считался свободным: его давали удалить, и отмена потом
+    # возвращала штуки в никуда (приёмка SF-01-R1).
+    pids = sorted({п["id"] for _, п in out if п["flavor"]})
+    if pids:
+        места = ", ".join(["%s"] * len(pids))
+        cur.execute(db._q(f"SELECT product_id, flavor FROM product_variants WHERE product_id IN ({места})"), pids)
+        полка = {}
+        for r in cur.fetchall():
+            полка.setdefault(int(r["product_id"]), []).append(r["flavor"])
+        for _, п in out:
+            if п["flavor"]:
+                имя = db.вкус_на_полке(полка.get(п["id"], []), п["flavor"])
+                if имя is not None:
+                    п["flavor"] = имя
     return out
 
 
