@@ -514,7 +514,7 @@ function renderStockPick() {
       ? (стоит.some(p => p.city === мояТочка) ? `<span class="tagbadge">уже на вашей точке</span>` : "")
       : (стоит.length ? `<small>уже: ${стоит.map(p => esc(p.city)).join(", ")}</small>` : "");
     return `<div class="admrow" data-pick="${m.id}">
-      <div class="an">${m.brand ? esc(m.brand) + " " : ""}${esc(m.name)}
+      <div class="an">${esc(полноеИмя(m.brand, m.name))}
         <small>${esc(catName(m.category))}${m.flavors.length ? ` · вариантов: ${m.flavors.length}` : ""}</small>${уже}</div>
       <span style="color:var(--hint)">›</span></div>`;
   }).join("");
@@ -602,7 +602,7 @@ function блокНигде() {
     ${нигде.map(m => {
       const n = (m.flavors || []).length, [один, два, пять] = формыВарианта(m);
       return `<div class="admrow prodrow">
-        <div class="prodname">${esc((m.brand ? m.brand + " " : "") + m.name)}</div>
+        <div class="prodname">${esc(полноеИмя(m.brand, m.name))}</div>
         <div class="prodstock">${esc(catName(m.category))}${n ? ` · ${n} ${plural(n, один, два, пять)}` : ""}${m.photo_url ? "" : " · без фото"}</div>
         <div class="prodacts">
           <button type="button" class="actbtn" data-nwin="${m.id}">📥 Завезти</button>
@@ -622,9 +622,12 @@ function привязатьНигде() {
 // разом (приёмка AR-03: кнопка повтора была только у архива и перечитывала
 // только его, а при загрузившемся архиве её не было вовсе).
 function блокНесвежий() {
-  if (админСписокСвеж && архивСостояние !== "error") return "";
-  const что = !админСписокСвеж && архивСостояние === "error" ? "Список товаров и архив не обновились"
-    : !админСписокСвеж ? "Список товаров не обновился" : "Архив не обновился";
+  // То же условие, что у «не вышло» после действия (послеАрхива): не
+  // подтвердилась любая из трёх загрузок — товары точек, витрина, архив.
+  const не = [!админСписокСвеж && "список товаров", !витринаСвежа && "витрина", архивСостояние === "error" && "архив"].filter(Boolean);
+  if (!не.length) return "";
+  const что = не.length > 1 ? `Не обновились: ${не.join(", ")}`
+    : не[0] === "список товаров" ? "Список товаров не обновился" : не[0] === "витрина" ? "Витрина не обновилась" : "Архив не обновился";
   return `<div class="dwarn staleall">⚠️ ${что} — показан прежний, он мог устареть.
     <button type="button" class="barbtn" id="admRetryAll">↻ Повторить</button></div>`;
 }

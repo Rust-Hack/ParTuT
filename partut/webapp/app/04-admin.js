@@ -475,7 +475,7 @@ function openStockIn(modelId) {
   if (!stockInModel) return;
   const m = stockInModel;
   $("stockInView").classList.add("show");
-  $("stockInName").textContent = `${m.brand ? m.brand + " " : ""}${m.name}`;
+  $("stockInName").textContent = полноеИмя(m.brand, m.name);
   $("stockInMeta").textContent = catName(m.category);
   // Продавцу точки — только его точка: чужую сервер всё равно не примет.
   const points = myScope() ? locations.filter(l => l.name === myScope()) : locations;

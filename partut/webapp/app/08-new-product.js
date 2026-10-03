@@ -241,7 +241,7 @@ function нтДвойникHtml() {
     return n.length >= 3 && (n.includes(имя) || имя.includes(n));
   }).slice(0, 3);
   return похожие.length ? `<div class="npnote npsimilar">Похоже на то, что уже есть: ${похожие.map(m =>
-    `<button type="button" class="nplink" data-npstockin="${m.id}">${esc((m.brand ? m.brand + " " : "") + m.name)}</button>`).join(", ")}.
+    `<button type="button" class="nplink" data-npstockin="${m.id}">${esc(полноеИмя(m.brand, m.name))}</button>`).join(", ")}.
     Если это оно — завезите его на точку, а не заводите новый.</div>` : "";
 }
 
