@@ -324,14 +324,35 @@ const NAV = [
   { id: "fav", label: "Избранное", icon: '<path d="M20.8 5.6a5 5 0 00-7.1 0L12 7.3l-1.7-1.7a5 5 0 10-7.1 7.1L12 21l8.8-8.3a5 5 0 000-7.1z"/>' },
   { id: "profile", label: "Профиль", icon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>' },
 ];
+// «🧾 Продажа» — вкладка продавцам и владельцу (решение владельца
+// 3.10.2026): продажа у прилавка — ежедневное дело продавца, а кнопка жила в
+// «Управление → Товары», и владелец её не нашёл. У продавца она стоит на месте
+// «Корзины», а «Корзины» и «Избранного» у него нет: покупать он не приходит.
+// У владельца — на месте «Избранного», «Корзина» остаётся: проверять магазин
+// глазами покупателя. Вкладка не переключает экран, а открывает чек поверх —
+// как плитка в «Товарах».
+const NAV_ПРОДАЖА = { id: "sale", label: "Продажа",
+  icon: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2V2z"/><path d="M9 7h6M9 11h6M9 15h4"/>' };
+function пунктыМеню() {
+  if (!(me && me.is_admin)) return NAV;
+  const вместо = me.role === "seller" ? "cart" : "fav";
+  return NAV.flatMap(n => n.id === вместо ? [NAV_ПРОДАЖА] : (n.id === "fav" ? [] : [n]));
+}
+async function продажаИзМеню() {
+  // Чек строится по списку управления (там и снятое с витрины); не загружен —
+  // догружаем, не вышло — откроется по витрине, как и раньше.
+  if (!adminProducts.length) await fetchAdminProducts();
+  openSale();
+}
 function renderNav() {
-  $("nav").innerHTML = NAV.map(n => {
+  $("nav").innerHTML = пунктыМеню().map(n => {
     const cnt = n.id === "cart" ? cartCount() : 0;
     return `<div class="navwrap"><button class="navbtn ${n.id===activeTab?'active':''}" data-tab="${n.id}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${n.icon}</svg>
       ${n.label}</button>${cnt?`<span class="badge-count">${cnt}</span>`:''}</div>`;
   }).join("");
-  $("nav").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+  $("nav").querySelectorAll("[data-tab]").forEach(b => b.onclick = () =>
+    b.dataset.tab === "sale" ? продажаИзМеню() : showTab(b.dataset.tab));
 }
 function showTab(id) {
   const order = NAV.map(n => n.id);
@@ -447,7 +468,6 @@ document.querySelectorAll(".view").forEach(view => {
 
 // Свайп влево/вправо по каталогу = переключение вкладок нижнего меню
 (function () {
-  const order = NAV.map(n => n.id);
   const content = document.querySelector(".content");
   let sx = 0, sy = 0, track = false;
   content.addEventListener("touchstart", (e) => {
@@ -463,6 +483,10 @@ document.querySelectorAll(".view").forEach(view => {
     if (!track) return; track = false;
     const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 2) return;   // слишком слабо/вертикально
+    // По тем вкладкам, что человек видит: у продавца нет «Корзины» и
+    // «Избранного» — свайп не должен приводить туда. «Продажа» — не вкладка,
+    // а чек поверх, свайпом её не открываем.
+    const order = пунктыМеню().map(n => n.id).filter(id => id !== "sale");
     const i = order.indexOf(activeTab);
     if (dx < 0 && i < order.length - 1) showTab(order[i + 1]);          // влево → следующая
     else if (dx > 0 && i > 0) showTab(order[i - 1]);                     // вправо → предыдущая

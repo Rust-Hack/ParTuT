@@ -141,7 +141,9 @@ CITY_ADMINS = {                                # продавцы по горо�
 # Права спрашивают на КАЖДЫЙ админ-запрос, поэтому список ненадолго кэшируем:
 # без этого каждая проверка прав — отдельный поход в базу.
 _STAFF_TTL = 30
-_staff_cache = {"at": 0.0, "by_city": {}}
+# gen — поколение: refresh_staff() его поднимает. Чтение, начатое до сброса,
+# свой (уже устаревший) результат в кэш не кладёт — см. _staff_by_city().
+_staff_cache = {"at": 0.0, "by_city": {}, "gen": 0}
 _staff_lock = threading.Lock()
 
 
@@ -168,14 +170,19 @@ def _staff_by_city():
     with _staff_lock:
         if now - _staff_cache["at"] < _STAFF_TTL:
             return _staff_cache["by_city"]
+        поколение = _staff_cache["gen"]
     try:
         by_city = _читатель_продавцов() if _читатель_продавцов else {}
     except Exception as e:
         print(f"Не удалось прочитать админов из базы: {e}")
         by_city = {}
     with _staff_lock:
-        _staff_cache["at"] = now
-        _staff_cache["by_city"] = by_city
+        # Пока читали, продавца добавили или сняли (refresh_staff) — прочитанное
+        # могло быть ДО этого. Положить его в кэш значило бы на полминуты
+        # вернуть старый список: новый продавец без доступа, снятый — с доступом.
+        if _staff_cache["gen"] == поколение:
+            _staff_cache["at"] = now
+            _staff_cache["by_city"] = by_city
     return by_city
 
 
@@ -184,6 +191,7 @@ def refresh_staff():
     чтобы права начали действовать немедленно, а не через полминуты."""
     with _staff_lock:
         _staff_cache["at"] = 0.0
+        _staff_cache["gen"] += 1
 
 
 def all_admin_ids():
