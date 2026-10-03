@@ -73,12 +73,16 @@ def offer_channel_post(kind, city, payload, merge=None):
             if было:
                 старый = _строка(было)
                 итог = merge(старый["payload"], payload)
+                # Новая версия — новое согласование: кнопка под прежним текстом
+                # больше не публикует (приёмка CH-01).
+                итог["v"] = int(старый["payload"].get("v") or 1) + 1
                 cur.execute(db._q("UPDATE channel_posts SET payload = %s WHERE id = %s AND status = 'offered'"),
                             (json.dumps(итог, ensure_ascii=False), старый["id"]))
                 if cur.rowcount > 0:
                     conn.commit()
                     conn.close()
                     return dict(старый, payload=итог), True
+        payload = dict(payload, v=1)
         pid = db._insert_id(cur, "INSERT INTO channel_posts (kind, city, payload, status, created_at) "
                                  "VALUES (%s, %s, %s, 'offered', %s)",
                             (kind, city, json.dumps(payload, ensure_ascii=False), db._now_str()))
@@ -104,13 +108,14 @@ def decide_channel_post(post_id, status, admin_id, message_id=None):
     return ок
 
 
-def claim_channel_post(post_id, admin_id):
-    """Занять черновик под публикацию: 'offered' → 'posting'. Только один
-    нажавший публикует — два владельца или двойное нажатие не дадут двух постов."""
+def claim_channel_post(post_id, admin_id, from_status="offered"):
+    """Занять черновик под публикацию: from_status → 'posting'. Только один
+    нажавший публикует — два владельца или двойное нажатие не дадут двух постов.
+    from_status='unknown' — осознанный повтор после неизвестного исхода."""
     conn = db.connect()
     cur = conn.cursor()
     cur.execute(db._q("UPDATE channel_posts SET status = 'posting', decided_by = %s "
-                      "WHERE id = %s AND status = 'offered'"), (admin_id, post_id))
+                      "WHERE id = %s AND status = %s"), (admin_id, post_id, from_status))
     ок = cur.rowcount > 0
     conn.commit()
     conn.close()
@@ -119,7 +124,8 @@ def claim_channel_post(post_id, admin_id):
 
 def finish_channel_post(post_id, status, message_id=None):
     """Итог публикации занятого черновика: 'posted' (с номером сообщения в
-    канале) или обратно 'offered' (не вышло — можно нажать ещё раз)."""
+    канале), 'offered' (Telegram отказал — можно нажать ещё раз) или
+    'unknown' (ответ не дошёл — опубликован ли, неизвестно, CH-02)."""
     conn = db.connect()
     cur = conn.cursor()
     cur.execute(db._q("UPDATE channel_posts SET status = %s, message_id = %s WHERE id = %s AND status = 'posting'"),
@@ -128,25 +134,29 @@ def finish_channel_post(post_id, status, message_id=None):
     conn.close()
 
 
-def posted_pause_post(city):
-    """Последний опубликованный пост «точка закрыта» этой точки, ещё без отметки
-    об открытии, — его дополняет «снова открыта»."""
+def posted_pause_posts():
+    """Опубликованные посты «точка закрыта», ещё без «снова открыта», — все."""
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("SELECT * FROM channel_posts WHERE kind = 'pause' AND city = %s AND status = 'posted' "
-                      "ORDER BY id DESC LIMIT 1"), (city,))
-    r = cur.fetchone()
+    cur.execute("SELECT * FROM channel_posts WHERE kind = 'pause' AND status = 'posted' ORDER BY id")
+    rows = [_строка(r) for r in cur.fetchall()]
     conn.close()
-    return _строка(r) if r else None
+    return rows
 
 
-def close_pause_posts(city):
-    """Точка открылась: опубликованный пост о паузе — 'reopened', неопубликованные
-    черновики — 'expired' (публиковать «закрыта» про открытую точку нельзя)."""
+def mark_pause_reopened(post_id):
+    """Правка «снова открыта» в канале удалась — только тогда отмечаем (CH-03)."""
     conn = db.connect()
     cur = conn.cursor()
-    cur.execute(db._q("UPDATE channel_posts SET status = 'reopened' WHERE kind = 'pause' AND city = %s AND status = 'posted'"),
-                (city,))
+    cur.execute(db._q("UPDATE channel_posts SET status = 'reopened' WHERE id = %s AND status = 'posted'"), (post_id,))
+    conn.commit()
+    conn.close()
+
+
+def expire_pause_drafts(city):
+    """Точка открылась: неопубликованные черновики «закрыта» больше не публикуются."""
+    conn = db.connect()
+    cur = conn.cursor()
     cur.execute(db._q("UPDATE channel_posts SET status = 'expired' WHERE kind = 'pause' AND city = %s AND status = 'offered'"),
                 (city,))
     conn.commit()

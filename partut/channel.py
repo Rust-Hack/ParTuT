@@ -16,7 +16,7 @@ partut/channel.py — посты для телеграм-канала магаз
 канала с правом публиковать — иначе владелец узнает об этом при нажатии.
 """
 
-from telebot import types
+from telebot import apihelper, types
 
 from partut import config, db
 from partut.integrations import tgsend
@@ -114,7 +114,9 @@ def текст(post):
             блоки.append((имена.get(к) or к) + "\n" + "\n".join(строки))
         return (f"📦 Поступление · {данные.get('date') or _дата()} · {city}\n\n" + "\n\n".join(блоки)
                 + f"\n\nЧто есть на точке — в приложении: {бот}\n"
-                  "Нужного вкуса нет — нажмите «Жду поступления» в карточке: бот напишет, когда он появится.")
+                  # «Жду поступления» ждёт товар целиком, а не отдельный вкус
+                  # (приёмка D-01) — обещать вкус нельзя.
+                  "Товара нет на вашей точке — нажмите «Жду поступления» в его карточке: бот напишет, когда он снова появится.")
     if post["kind"] == "pause":
         заметка = (данные.get("note") or "").strip()
         слова = данные.get("words") or ""
@@ -135,9 +137,7 @@ def предложить(kind, city, payload, merge=None, tg=None):
         return None
     tg = tg or tgsend.tg
     post, дополнен = db.offer_channel_post(kind, city, payload, merge)
-    kb = types.InlineKeyboardMarkup()
-    kb.row(types.InlineKeyboardButton("📣 В канал", callback_data=f"chpost:{post['id']}"),
-           types.InlineKeyboardButton("Не надо", callback_data=f"chskip:{post['id']}"))
+    kb = кнопки(post)
     шапка = (f"📣 Пост для канала {канал()}" + (" — дополнен второй частью поставки" if дополнен else "") + ":\n\n")
     for uid in config.SUPER_ADMIN_IDS:
         try:
@@ -146,6 +146,24 @@ def предложить(kind, city, payload, merge=None, tg=None):
         except Exception as e:
             print(f"Не предложил пост владельцу {uid}: {e}")
     return post
+
+
+def кнопки(post):
+    """«📣 В канал» привязана к версии текста: дополненный пост — новая версия
+    и новое согласование (CH-01)."""
+    kb = types.InlineKeyboardMarkup()
+    v = int((post["payload"] or {}).get("v") or 1)
+    kb.row(types.InlineKeyboardButton("📣 В канал", callback_data=f"chpost:{post['id']}:{v}"),
+           types.InlineKeyboardButton("Не надо", callback_data=f"chskip:{post['id']}"))
+    return kb
+
+
+def кнопка_повтора(post):
+    """После неизвестного исхода — только осознанный повтор (CH-02)."""
+    kb = types.InlineKeyboardMarkup()
+    v = int((post["payload"] or {}).get("v") or 1)
+    kb.row(types.InlineKeyboardButton("📣 Поста в канале нет — опубликовать ещё раз", callback_data=f"chforce:{post['id']}:{v}"))
+    return kb
 
 
 def предложить_поступление(движения, tg=None):
@@ -169,51 +187,89 @@ def предложить_паузу(city, words, note, tg=None):
 
 # ---------- Решение владельца ----------
 
-def опубликовать(post_id, admin_id, tg=None):
-    """(получилось?, что сказать владельцу)."""
+# Итоги публикации — для кнопки в боте: что сказать и что делать с кнопками.
+POSTED, FAILED, UNKNOWN, STALE, DECIDED = "posted", "failed", "unknown", "stale", "decided"
+
+
+def _однозначный_отказ(e):
+    """Telegram ответил отказом (нет прав, неверный канал, слишком часто) —
+    сообщение точно не ушло. Сеть, тайм-аут, 5xx — исход неизвестен: могло
+    и уйти, а ответ потеряться (CH-02)."""
+    return isinstance(e, apihelper.ApiTelegramException) and int(getattr(e, "error_code", 0) or 0) < 500
+
+
+def опубликовать(post_id, admin_id, tg=None, version=None, повтор=False):
+    """Опубликовать черновик. version — версия текста под нажатой кнопкой;
+    повтор — осознанная повторная попытка после неизвестного исхода.
+    Возвращает (итог, что сказать владельцу), итог — одна из констант выше."""
     tg = tg or tgsend.tg
     post = db.get_channel_post(post_id)
     if not post:
-        return False, "Этого черновика больше нет."
-    if post["status"] != "offered":
-        return False, {"posted": "Этот пост уже опубликован.", "posting": "Пост уже публикуется.",
-                       "skipped": "Этот пост решили не публиковать.", "expired": "Пост устарел — точка уже открыта.",
-                       "reopened": "Этот пост уже опубликован."}.get(post["status"], "Уже решено.")
+        return DECIDED, "Этого черновика больше нет."
+    ждём = "unknown" if повтор else "offered"
+    if post["status"] != ждём:
+        return DECIDED, {"posted": "Этот пост уже опубликован.", "posting": "Пост уже публикуется.",
+                         "skipped": "Этот пост решили не публиковать.", "expired": "Пост устарел — точка уже открыта.",
+                         "reopened": "Этот пост уже опубликован.",
+                         "unknown": "Опубликован ли этот пост, неизвестно — посмотрите канал и нажмите кнопку под сообщением об этом.",
+                         "offered": "Этот пост ещё не публиковали — нажмите «📣 В канал»."}.get(post["status"], "Уже решено.")
+    текущая = int((post["payload"] or {}).get("v") or 1)
+    if version is not None and int(version) != текущая:
+        return STALE, ("Пост с тех пор дополнен — под этой кнопкой старый текст. Опубликуйте из последнего "
+                       "сообщения с этим постом: там то, что уйдёт в канал.")
     if not канал():
-        return False, "Канал не задан (SUBSCRIBE_CHANNEL в настройках Render) — публиковать некуда."
+        return FAILED, "Канал не задан (SUBSCRIBE_CHANNEL в настройках Render) — публиковать некуда."
     # «Закрыта до 15:00» про точку, которая уже открылась, — неправда.
     if post["kind"] == "pause" and not db.location_pause(post["city"]):
         db.decide_channel_post(post_id, "expired", admin_id)
-        return False, "Точка уже открыта — пост о закрытии не публикую."
-    if not db.claim_channel_post(post_id, admin_id):
-        return False, "Пост уже публикуется или решён другим владельцем."
+        return DECIDED, "Точка уже открыта — пост о закрытии не публикую."
+    if not db.claim_channel_post(post_id, admin_id, from_status=ждём):
+        return DECIDED, "Пост уже публикуется или решён другим владельцем."
     try:
         msg = tg.send_message(канал(), текст(post))
     except Exception as e:
-        db.finish_channel_post(post_id, "offered")
-        return False, (f"Не получилось опубликовать: {e}\n\nБот должен быть администратором канала {канал()} "
-                       "с правом публиковать сообщения. Добавьте его и нажмите «📣 В канал» ещё раз.")
+        if _однозначный_отказ(e):
+            db.finish_channel_post(post_id, "offered")
+            return FAILED, (f"Telegram не принял пост: {e}\n\nБот должен быть администратором канала {канал()} "
+                            "с правом публиковать сообщения. Добавьте его и нажмите «📣 В канал» ещё раз.")
+        db.finish_channel_post(post_id, "unknown")
+        return UNKNOWN, ("Ответ Telegram не дошёл — не знаю, опубликован ли пост. Посмотрите канал "
+                         f"{канал()}: если поста нет, нажмите «Опубликовать ещё раз»; если есть — ничего не делайте.")
     db.finish_channel_post(post_id, "posted", getattr(msg, "message_id", None))
-    return True, f"Опубликовано в {канал()} ✅"
+    return POSTED, f"Опубликовано в {канал()} ✅"
 
 
 def отказаться(post_id, admin_id):
     return db.decide_channel_post(post_id, "skipped", admin_id)
 
 
-def точка_открыта(city, tg=None):
-    """Точка открылась (вручную или по времени). Опубликованный пост о закрытии
-    дополняем строкой «снова открыта» — правкой, без нового поста; черновики
-    о закрытии больше не публикуются."""
+def дописать_открытые(tg=None):
+    """Опубликованные посты «точка закрыта» тех точек, что уже открыты, —
+    дополнить «▶️ снова открыта». Отмечаем только удавшуюся правку (CH-03):
+    не удалась — пост остаётся в работе, и следующий обход (фон бота раз в
+    15 минут, следующее открытие) попробует снова. Возвращает, сколько дописано."""
     tg = tg or tgsend.tg
-    post = db.posted_pause_post(city)
-    db.close_pause_posts(city)
-    if not post or not post.get("message_id") or not канал():
-        return False
-    try:
-        tg.edit_message_text(текст(post) + f"\n\n▶️ Обновление: точка снова открыта с {db.shop_now().strftime('%H:%M')}.",
-                             chat_id=канал(), message_id=post["message_id"])
-        return True
-    except Exception as e:
-        print(f"Не дополнил пост о закрытии «{city}»: {e}")
-        return False
+    if not канал():
+        return 0
+    дописано = 0
+    for post in db.posted_pause_posts():
+        if db.location_pause(post["city"]) or not post.get("message_id"):
+            continue
+        try:
+            tg.edit_message_text(текст(post) + f"\n\n▶️ Обновление: точка снова открыта с {db.shop_now().strftime('%H:%M')}.",
+                                 chat_id=канал(), message_id=post["message_id"])
+        except Exception as e:
+            # Уже дописано прошлым обходом, а отметка не легла, — это успех.
+            if "message is not modified" not in str(e):
+                print(f"Не дополнил пост о закрытии «{post['city']}»: {e}")
+                continue
+        db.mark_pause_reopened(post["id"])
+        дописано += 1
+    return дописано
+
+
+def точка_открыта(city, tg=None):
+    """Точка открылась (вручную или по времени): черновики «закрыта» больше
+    не публикуются, опубликованный пост — «снова открыта»."""
+    db.expire_pause_drafts(city)
+    return дописать_открытые(tg)

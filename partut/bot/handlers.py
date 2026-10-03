@@ -271,7 +271,7 @@ def on_button(call):
     user_id = call.from_user.id
 
     # Пост для канала: «📣 В канал» / «Не надо» — решает владелец (partut/channel.py).
-    if data.startswith(("chpost:", "chskip:")):
+    if data.startswith(("chpost:", "chskip:", "chforce:")):
         handle_channel_post(call, chat_id, user_id, data)
         return
 
@@ -498,28 +498,39 @@ def handle_admin_callback(call, chat_id, user_id, data):
 
 def handle_channel_post(call, chat_id, user_id, data):
     """Владелец решил судьбу поста для канала. Только владелец: публикация —
-    от имени магазина. Кнопки под предложением снимаем, итог — словами."""
+    от имени магазина. Кнопки — по исходу (приёмка CH-04): опубликовано или
+    «не надо» — снимаем; Telegram отказал — оставляем, чтобы нажать ещё раз
+    после выдачи прав; исход неизвестен — меняем на осознанный повтор."""
     from partut import channel
     if not is_super_admin(user_id):
         bot.answer_callback_query(call.id, "Публикует в канал только владелец.", show_alert=True)
         return
+    части = data.split(":")
     try:
-        post_id = int(data.split(":", 1)[1])
+        post_id = int(части[1])
+        версия = int(части[2]) if len(части) > 2 else None
     except (ValueError, IndexError):
         bot.answer_callback_query(call.id)
         return
-    if data.startswith("chskip:"):
+    if части[0] == "chskip":
         channel.отказаться(post_id, user_id)
-        ок, текст_ = True, "Не публикуем."
+        итог, текст_ = channel.DECIDED, "Не публикуем."
     else:
-        ок, текст_ = channel.опубликовать(post_id, user_id, bot)
-    bot.answer_callback_query(call.id, текст_[:190], show_alert=not ок)
+        итог, текст_ = channel.опубликовать(post_id, user_id, bot, version=версия, повтор=части[0] == "chforce")
+    bot.answer_callback_query(call.id, текст_[:190], show_alert=итог not in (channel.POSTED, channel.DECIDED))
     try:
         if call.message:
-            bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+            if итог in (channel.POSTED, channel.DECIDED, channel.STALE):
+                bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+            elif итог == channel.UNKNOWN:
+                post = db.get_channel_post(post_id)
+                if post:
+                    bot.edit_message_reply_markup(chat_id, call.message.message_id,
+                                                  reply_markup=channel.кнопка_повтора(post))
+            # FAILED — кнопки остаются: выдали боту права — нажимают снова.
     except Exception:
         pass
-    if not ок:
+    if итог in (channel.FAILED, channel.UNKNOWN, channel.STALE):
         bot.send_message(chat_id, текст_)
 
 
@@ -964,8 +975,16 @@ def _reopen_paused_points():
     return открыты
 
 
+def _finish_channel_reopens():
+    """Правка «снова открыта» в канале не удалась при открытии (Telegram не
+    ответил) — пробуем каждый обход, пока не получится (приёмка CH-03)."""
+    from partut import channel
+    return channel.дописать_открытые(bot)
+
+
 _BACKGROUND_STEPS = [
     ("открытие точек по времени", _reopen_paused_points),
+    ("посты канала: «снова открыта»", _finish_channel_reopens),
     ("напоминания продавцам", _remind_sellers),
     ("авто-отмена неоплаченных", _expire_unpaid_orders),
     ("сводка дня", _maybe_send_daily_summary),

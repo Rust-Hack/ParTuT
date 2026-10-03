@@ -2727,7 +2727,8 @@ from partut.db.games import (                                          # noqa: E
 from partut.db.channel import (                                         # noqa: E402
     _ensure_channel_tables, get_channel_post, offer_channel_post,           # noqa: F401
     decide_channel_post, claim_channel_post, finish_channel_post,           # noqa: F401
-    posted_pause_post, close_pause_posts, ПОСТУПЛЕНИЕ_ОКНО_ЧАСОВ,            # noqa: F401
+    posted_pause_posts, mark_pause_reopened, expire_pause_drafts,           # noqa: F401
+    ПОСТУПЛЕНИЕ_ОКНО_ЧАСОВ,                                                 # noqa: F401
 )
 from partut.db.raffles import (                                        # noqa: E402
     _RAFFLE_EDITABLE, _ensure_raffle_columns, _ensure_raffle_uniques,       # noqa: F401
