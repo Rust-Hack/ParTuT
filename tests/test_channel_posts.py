@@ -88,6 +88,15 @@ def run():
                                                                            {"flavor": "Клубника киви", "stock": 0}])
         картридж = db.create_point_product(db.add_model("coils", "XROS", "VAPORESSO"), "Минск", 8.0, 6.5, stock=0)
 
+        # --- Пост «Поступление» выключен по умолчанию (ст. 17 Закона «О рекламе») ---
+        c("«Поступление» выключено по умолчанию", channel.ПОСТУПЛЕНИЕ_ВКЛЮЧЕНО is False)
+        reset_sent()
+        _поставка([{"id": картридж, "qty": 1}], "supply-key-0000")
+        c("выключено — поставка не даёт ни предложения, ни черновика",
+          not any("Пост для канала" in s[1] for s in SENT) and not _посты())
+        # Дальше — как работает, если его включат после правовой оценки.
+        channel.ПОСТУПЛЕНИЕ_ВКЛЮЧЕНО = True
+
         # --- Поставка → предложение владельцу ---
         reset_sent()
         _поставка([{"id": жижа, "flavor": "Кислая вишня", "qty": 5}, {"id": картридж, "qty": 10}], "supply-key-0001")
@@ -244,6 +253,7 @@ def run():
           not any("Пост для канала" in s[1] for s in SENT) and _посты()[-1]["kind"] == "pause")
     finally:
         config.SUBSCRIBE_CHANNEL, tgsend.BOT_USERNAME = было_канал, было_бот
+        channel.ПОСТУПЛЕНИЕ_ВКЛЮЧЕНО = False
         tgsend.tg.edit_message_text, botmod.bot.edit_message_text = было_правка
         _чисто()
     return c.fails
