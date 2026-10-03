@@ -289,13 +289,31 @@ def _вкусы_pilow(cur):
                     (новый, старый, *pids))
     вкусы = [PILOW_ВКУСЫ.get(f, f) for f in _вкусы(m)]
     cur.execute(db._q("UPDATE models SET flavors = %s WHERE id = %s"), (json.dumps(вкусы, ensure_ascii=False), m["id"]))
-    # Состав заказов: строка JSON. LIKE отсекает заведомо не те заказы, а
-    # решает разбор — по номеру товара и точному названию вкуса. Под замком:
-    # иначе правка состава продавцом в ту же секунду (прежняя копия сайта)
-    # затёрлась бы составом, прочитанным до неё.
-    cur.execute(db._q("SELECT id, items FROM orders WHERE items LIKE %s" + (" FOR UPDATE" if db.USE_PG else "")),
-                ("%PILOW TALK%",))
-    заказов = 0
+    заказы = _вкусы_в_заказах(cur, pids)
+    _журнал(f"PILOW TALK IC40000: вкусы с большой буквы — {', '.join(PILOW_ВКУСЫ.values())} "
+            f"(точек: {len(pids)}, заказов: {len(заказы)})")
+    return True
+
+
+def _вкусы_в_заказах(cur, pids):
+    """Старые названия вкусов PILOW TALK в составе заказов — на новые.
+    Возвращает [(номер, статус)] переписанных заказов.
+
+    Заказы ищем по НОМЕРУ товара в составе, а не по названию: название в
+    заказе — то, что было на момент заказа, и у переименованного с тех пор
+    товара оно другое (приёмка SF-01: первая версия отбирала LIKE '%PILOW
+    TALK%' и такие заказы пропускала). Читаем все заказы — их немного. Под
+    замком на Postgres: правка состава продавцом в ту же секунду (прежняя
+    копия сайта при выкатке) иначе затёрлась бы составом, прочитанным до неё."""
+    # Переписываем, только если на полке этого товара вкус УЖЕ под новым
+    # названием, а старого нет: иначе заказ и полка разошлись бы снова.
+    места = ", ".join(["%s"] * len(pids))
+    cur.execute(db._q(f"SELECT product_id, flavor FROM product_variants WHERE product_id IN ({места})"), list(pids))
+    полка = {}
+    for r in cur.fetchall():
+        полка.setdefault(int(r["product_id"]), set()).add(r["flavor"])
+    cur.execute("SELECT id, status, items FROM orders" + (" ORDER BY id FOR UPDATE" if db.USE_PG else " ORDER BY id"))
+    итог = []
     for r in cur.fetchall():
         try:
             items = json.loads(r["items"] or "[]")
@@ -303,19 +321,23 @@ def _вкусы_pilow(cur):
             continue
         тронут = False
         for it in items if isinstance(items, list) else []:
-            if not isinstance(it, dict) or int(it.get("id") or 0) not in pids or it.get("flavor") not in PILOW_ВКУСЫ:
+            try:
+                pid = int((it or {}).get("id") or 0)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if pid not in pids or it.get("flavor") not in PILOW_ВКУСЫ:
                 continue
             старый = it["flavor"]
+            if PILOW_ВКУСЫ[старый] not in полка.get(pid, set()) or старый in полка.get(pid, set()):
+                continue
             it["flavor"] = PILOW_ВКУСЫ[старый]
             if isinstance(it.get("name"), str) and it["name"].endswith(старый):
                 it["name"] = it["name"][: -len(старый)] + PILOW_ВКУСЫ[старый]
             тронут = True
         if тронут:
             cur.execute(db._q("UPDATE orders SET items = %s WHERE id = %s"), (json.dumps(items, ensure_ascii=False), r["id"]))
-            заказов += 1
-    _журнал(f"PILOW TALK IC40000: вкусы с большой буквы — {', '.join(PILOW_ВКУСЫ.values())} "
-            f"(точек: {len(pids)}, заказов: {заказов})")
-    return True
+            итог.append((int(r["id"]), r["status"]))
+    return итог
 
 
 def apply_storefront_fix():
@@ -354,3 +376,56 @@ def apply_storefront_fix():
         _журнал(f"готово, шагов: {шагов}")
     _в_журнал(КТО_ВИТРИНА)
     return шагов
+
+
+# ---- Третья наводка 3.10.2026 — заказы, пропущенные второй (приёмка SF-01) ----
+#
+# Вторая наводка выбирала заказы по названию «PILOW TALK» в составе и
+# пропускала те, что оформлены, пока товар назывался иначе. Здесь — по номеру
+# товара. Отмена такие заказы и сама уже понимает (вкус_на_полке), а здесь
+# приводим состав к названиям на полке и честно докладываем, что нашли.
+# Отменённые заказы со старым названием НЕ оприходуем заново: был ли возврат,
+# по базе не понять (отмена до второй наводки вернула штуки как положено) —
+# только список для сверки пересчётом.
+
+ОТМЕТКА_ЗАКАЗОВ = "catalog_fix_20261003c"
+КТО_ЗАКАЗЫ = "наводка заказов 3.10"
+
+
+def apply_order_flavor_fix():
+    """Один раз за жизнь базы. Возвращает число переписанных заказов (или None, если уже было)."""
+    if db.get_setting(ОТМЕТКА_ЗАКАЗОВ):
+        return None
+    _сделано.clear()
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        m = _модель(cur, "disposable", "PILOW TALK IC40000", "PILOW TALK")
+        заказы = []
+        if m:
+            cur.execute(db._q("SELECT id FROM products WHERE model_id = %s"), (m["id"],))
+            pids = [int(r["id"]) for r in cur.fetchall()]
+            if pids:
+                заказы = _вкусы_в_заказах(cur, pids)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        _сделано.clear()
+        raise
+    conn.close()
+    db.set_setting(ОТМЕТКА_ЗАКАЗОВ, db._now_str())
+    if заказы:
+        открытые = [n for n, st in заказы if st in ("new", "paid", "confirmed")]
+        отменённые = [n for n, st in заказы if st == "canceled"]
+        _журнал(f"PILOW TALK IC40000: в заказах вкусы приведены к названиям на полке — заказов {len(заказы)} "
+                f"(ждут выдачи: {len(открытые)}, отменены: {len(отменённые)}, выданы: "
+                f"{len(заказы) - len(открытые) - len(отменённые)})")
+        if отменённые:
+            _журнал("Отменённые заказы со старым названием вкуса: " + ", ".join(f"№{n}" for n in отменённые)
+                    + ". Если какой-то из них отменили после 3.10 утром, штуки могли не вернуться на полку — "
+                      "сверьте остаток PILOW TALK пересчётом на точке.")
+    else:
+        _журнал("PILOW TALK IC40000: заказов со старым названием вкуса нет — всё уже сходится")
+    _в_журнал(КТО_ЗАКАЗЫ)
+    return len(заказы)

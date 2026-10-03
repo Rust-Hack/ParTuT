@@ -179,8 +179,10 @@ def run():
             botmod.bot.send_message = шлёт
             клавиатуры.clear()
             нажать(владелец, f"chpost:{третий}:1")
-            c("CH-04: Telegram отказал — кнопки под предложением остаются, чтобы нажать ещё раз",
-              клавиатуры == [] and db.get_channel_post(третий)["status"] == "offered"
+            c("CH-04: Telegram отказал — под предложением снова «📣 В канал», чтобы нажать ещё раз",
+              len(клавиатуры) == 1 and клавиатуры[0] is not None
+              and клавиатуры[0].keyboard[0][0].callback_data == f"chpost:{третий}:1"
+              and db.get_channel_post(третий)["status"] == "offered"
               and any("администратором канала" in str(s[1]) for s in SENT))
             botmod.bot.send_message = старые[2]
             клавиатуры.clear()

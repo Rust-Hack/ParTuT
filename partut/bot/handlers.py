@@ -520,16 +520,25 @@ def handle_channel_post(call, chat_id, user_id, data):
     bot.answer_callback_query(call.id, текст_[:190], show_alert=итог not in (channel.POSTED, channel.DECIDED))
     try:
         if call.message:
-            if итог in (channel.POSTED, channel.DECIDED, channel.STALE):
+            if итог in (channel.POSTED, channel.DECIDED, channel.STALE, channel.RESEND):
                 bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-            elif итог == channel.UNKNOWN:
-                post = db.get_channel_post(post_id)
-                if post:
-                    bot.edit_message_reply_markup(chat_id, call.message.message_id,
-                                                  reply_markup=channel.кнопка_повтора(post))
-            # FAILED — кнопки остаются: выдали боту права — нажимают снова.
+            elif итог in (channel.FAILED, channel.UNKNOWN):
+                # Кнопки — по НОВОМУ состоянию черновика (приёмка CH-02-R1):
+                # отказ Telegram на осознанный повтор возвращает его в «ждёт
+                # решения», и под ним должна быть «📣 В канал», а не повтор.
+                bot.edit_message_reply_markup(chat_id, call.message.message_id,
+                                              reply_markup=channel.кнопки_по_состоянию(db.get_channel_post(post_id)))
     except Exception:
         pass
+    if итог == channel.RESEND:
+        post = db.get_channel_post(post_id)
+        if post and post["status"] in ("offered", "unknown"):
+            try:
+                channel.показать(post, chat_id, bot)
+            except Exception as e:
+                print(f"Не прислал пост заново: {e}")
+        else:
+            bot.send_message(chat_id, "Этот пост уже решён — присылать нечего.")
     if итог in (channel.FAILED, channel.UNKNOWN, channel.STALE):
         bot.send_message(chat_id, текст_)
 
@@ -903,7 +912,11 @@ def _expire_unpaid_orders():
     Возвращает номера отменённых заказов."""
     done = []
     for order in db.stale_new_orders(CANCEL_UNPAID_HOURS):
-        o = db.cancel_order(order["id"], ["new"])   # вернёт склад/монеты
+        try:
+            o = db.cancel_order(order["id"], ["new"])   # вернёт склад/монеты
+        except db.CancelRefused as e:
+            print(f"Авто-отмена заказа #{order['id']} не проведена: {e.message}")
+            continue                                # вернуть штуки некуда — не отменяем молча
         if not o:
             continue                                # успели оплатить или отменить
         done.append(o["id"])
@@ -967,7 +980,7 @@ def _reopen_paused_points():
         cache.bust("locations")
     from partut import channel
     for r in открыты:
-        channel.точка_открыта(r["name"], bot)        # пост о закрытии в канале — «снова открыта»
+        channel.точка_открыта(r["name"], bot, когда=r["closed_until"])   # пост о закрытии — «снова открыта» с назначенного времени
         адресаты = set(db.staff_ids_by_city().get(r["name"], set())) | set(config.SUPER_ADMIN_IDS)
         for uid in адресаты:
             _safe_send(uid, f"▶️ Точка «{r['name']}» снова открыта — время закрытия вышло. "

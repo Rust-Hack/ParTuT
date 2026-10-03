@@ -95,13 +95,14 @@ def offer_channel_post(kind, city, payload, merge=None):
     return get_channel_post(pid), False
 
 
-def decide_channel_post(post_id, status, admin_id, message_id=None):
+def decide_channel_post(post_id, status, admin_id, message_id=None, from_status="offered"):
     """Отметить решение по черновику — только если он ещё не решён. True — отмечено
-    (второе нажатие той же кнопки или второй владелец ничего не повторят)."""
+    (второе нажатие той же кнопки или второй владелец ничего не повторят).
+    from_status='unknown' — решение после неизвестного исхода публикации."""
     conn = db.connect()
     cur = conn.cursor()
     cur.execute(db._q("UPDATE channel_posts SET status = %s, decided_by = %s, message_id = %s "
-                      "WHERE id = %s AND status = 'offered'"), (status, admin_id, message_id, post_id))
+                      "WHERE id = %s AND status = %s"), (status, admin_id, message_id, post_id, from_status))
     ок = cur.rowcount > 0
     conn.commit()
     conn.close()
@@ -142,6 +143,33 @@ def posted_pause_posts():
     rows = [_строка(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+def remember_reopen_time(post_id, когда):
+    """Время, когда точка снова открылась, — в данные поста, ОДИН раз (приёмка
+    CH-03-R1). Правка «снова открыта» в канале может не удаться и повториться
+    через 15 минут; без этого повтор писал «открыта с» время самого повтора.
+    Возвращает сохранённое время (прежнее, если уже было)."""
+    conn = db.connect()
+    cur = conn.cursor()
+    try:
+        cur.execute(db._q("SELECT payload FROM channel_posts WHERE id = %s"), (post_id,))
+        r = cur.fetchone()
+        if not r:
+            return когда
+        try:
+            данные = json.loads(r["payload"] or "{}")
+        except (TypeError, ValueError):
+            данные = {}
+        if данные.get("opened_at"):
+            return данные["opened_at"]
+        данные["opened_at"] = когда
+        cur.execute(db._q("UPDATE channel_posts SET payload = %s WHERE id = %s"),
+                    (json.dumps(данные, ensure_ascii=False), post_id))
+        conn.commit()
+        return когда
+    finally:
+        conn.close()
 
 
 def mark_pause_reopened(post_id):

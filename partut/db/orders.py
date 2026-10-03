@@ -266,6 +266,34 @@ class PointSaleRefused(Exception):
         self.code, self.message, self.extra = code, message, extra
 
 
+class CancelRefused(Exception):
+    """Заказ не отменён — ничего не записано. code — для экрана, message — человеку."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code, self.message = code, message
+
+
+def вкус_на_полке(имена, вкус):
+    """Нынешнее название варианта, под которым на полке лежит вкус из заказа.
+
+    В заказе вкус записан текстом на момент заказа, а на полке его могли с тех
+    пор поправить регистром («клубника манго» → «Клубника манго», 3.10.2026,
+    приёмка SF-01). Два варианта, отличных только регистром, приложение
+    завести не даёт (change_variants), поэтому это тот же вкус. Сравниваем в
+    Python: LOWER() в SQLite кириллицу не понижает. Нет такого — None."""
+    if вкус in имена:
+        return вкус
+    ключ = str(вкус or "").strip().casefold()
+    похожие = [f for f in имена if str(f or "").strip().casefold() == ключ]
+    return похожие[0] if len(похожие) == 1 else None
+
+
+def _вкусы_товара(cur, pid):
+    cur.execute(db._q("SELECT flavor FROM product_variants WHERE product_id = %s"), (pid,))
+    return [r["flavor"] for r in cur.fetchall()]
+
+
 # Название способа получения у продажи на точке — его видно в выгрузке.
 ПРОДАЖА_НА_ТОЧКЕ = "Продажа на точке"
 
@@ -465,7 +493,7 @@ def cancel_point_sale(order_id):
             if p["archived"]:
                 raise PointSaleRefused("archived", f"«{p['name']}» в архиве — сначала верните его, "
                                                    "потом отменяйте продажу.")
-            if вкус and вкус not in вкусы.get(pid, set()):
+            if вкус and вкус_на_полке(вкусы.get(pid, set()), вкус) is None:
                 raise PointSaleRefused("variant_missing",
                                        f"У «{p['name']}» больше нет варианта «{вкус}» — штуки вернуть некуда. "
                                        f"Добавьте «{вкус}» в карточке товара (с 0 шт) и отмените продажу ещё раз.")
@@ -482,7 +510,7 @@ def cancel_point_sale(order_id):
                 continue
             if вкус:
                 cur.execute(db._q("UPDATE product_variants SET stock = stock + %s WHERE product_id = %s AND flavor = %s"),
-                            (штук, pid, вкус))
+                            (штук, pid, вкус_на_полке(вкусы.get(pid, set()), вкус)))
                 с_вариантами.add(pid)
             else:
                 cur.execute(db._q("UPDATE products SET stock = stock + %s WHERE id = %s"), (штук, pid))
@@ -693,8 +721,17 @@ def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
             if qty <= 0:
                 continue
             if it.get("flavor"):
+                # Возврат — в вариант под нынешним названием. Нет такого вовсе —
+                # отказ целиком (SF-01): раньше UPDATE молча менял ноль строк,
+                # заказ становился «отменён», а штуки не возвращались никуда.
+                имя = вкус_на_полке(_вкусы_товара(cur, it["id"]), it["flavor"])
+                if имя is None:
+                    raise CancelRefused("variant_missing",
+                                        f"«{it.get('name') or 'товар'}»: варианта «{it['flavor']}» у товара больше нет — "
+                                        "штуки вернуть некуда, заказ не отменён. Верните вариант в карточке "
+                                        "товара (с 0 шт) и отмените заказ ещё раз.")
                 cur.execute(db._q(f"UPDATE product_variants SET stock = {db.GREATEST}(0, stock + %s) "
-                               "WHERE product_id = %s AND flavor = %s"), (qty, it["id"], it["flavor"]))
+                               "WHERE product_id = %s AND flavor = %s"), (qty, it["id"], имя))
                 touched_variants.add(it["id"])
             else:
                 cur.execute(db._q(f"UPDATE products SET stock = {db.GREATEST}(0, stock + %s) WHERE id = %s"),
@@ -893,6 +930,12 @@ def update_order_items(order_id, quantities, coin_value):
                 continue
             delta = now - was
             pid, flavor = it.get("id"), it.get("flavor")
+            if flavor:
+                # Вариант — под нынешним названием (SF-01); пропал вовсе — не правим:
+                # и списать, и вернуть было бы некуда.
+                flavor = вкус_на_полке(_вкусы_товара(cur, pid), flavor)
+                if flavor is None:
+                    return None, f"no_variant:{it.get('name', '')}"
             if delta > 0:
                 # Добавить можно только то, что есть на полке — списываем УСЛОВНО,
                 # одним запросом с «...WHERE stock >= сколько нужно» (как в

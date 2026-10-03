@@ -741,7 +741,7 @@ def init_db():
     # Разовые правки данных — после ВСЕХ правок схемы: им нужны колонки,
     # которые выше ещё только доклеиваются (variant_label2 у категорий —
     # на новой базе её до _ensure_category_columns просто нет).
-    from partut.db.catalog_fix import apply_catalog_fix, apply_storefront_fix
+    from partut.db.catalog_fix import apply_catalog_fix, apply_storefront_fix, apply_order_flavor_fix
     apply_catalog_fix()             # разовая наводка порядка в каталоге 3.10.2026 (по выгрузке владельца)
     # Витрина — удобство, а не условие работы: сбой (например, взаимная
     # блокировка с заказом прежней копии сайта во время выкатки) не должен
@@ -752,6 +752,12 @@ def init_db():
             break
         except Exception as e:
             print(f"[база] наводка витрины не удалась (попытка {попытка}): {e}", flush=True)
+    for попытка in (1, 2):
+        try:
+            apply_order_flavor_fix()    # заказы, пропущенные наводкой витрины (по номеру товара, SF-01)
+            break
+        except Exception as e:
+            print(f"[база] наводка заказов не удалась (попытка {попытка}): {e}", flush=True)
 
     состояние = schema_version()
     ждут = состояние["ждут"]
@@ -2777,6 +2783,7 @@ from partut.db.channel import (                                         # noqa: 
     _ensure_channel_tables, get_channel_post, offer_channel_post,           # noqa: F401
     decide_channel_post, claim_channel_post, finish_channel_post,           # noqa: F401
     posted_pause_posts, mark_pause_reopened, expire_pause_drafts,           # noqa: F401
+    remember_reopen_time,                                                   # noqa: F401
     ПОСТУПЛЕНИЕ_ОКНО_ЧАСОВ,                                                 # noqa: F401
 )
 from partut.db.raffles import (                                        # noqa: E402
@@ -2873,6 +2880,7 @@ from partut.db.orders import (                                          # noqa: 
     set_order_status, set_order_status_if, set_order_receipt,               # noqa: F401
     set_order_paid_amount, open_orders_with_product,                        # noqa: F401
     PointSaleRefused, record_point_sale, point_sales, cancel_point_sale,    # noqa: F401
+    CancelRefused, вкус_на_полке,                                           # noqa: F401
 )
 
 

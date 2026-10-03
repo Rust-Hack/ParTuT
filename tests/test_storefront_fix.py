@@ -95,6 +95,7 @@ def run():
     c("до правки: в Минске манго 1 (2 в заказе), в Турове банан 2",
       _вкусы_точки(т["Минск"])["клубника манго"] == 1 and _вкусы_точки(т["Туров"])["клубника банан"] == 2)
 
+    до = max([r["id"] for r in db.list_admin_log(limit=1)] or [0])   # журнал общий: считаем только свои записи
     шагов = catalog_fix.apply_storefront_fix()
     c(f"шагов сделано: {шагов}", шагов == 9)
 
@@ -133,7 +134,7 @@ def run():
       _подпись("snyus", "krepost")["label"] == "Крепость" and _подпись("disposable", "krepost")["label"] == "Крепость"
       and _подпись("disposable", "batareya")["label"] == "Батарея" and _подпись("disposable", "batareya")["unit"] == "мАч")
     журнал = [r["details"] for r in db.list_admin_log(limit=50)
-              if r["action"] == "catalog/fix" and r["admin_name"] == catalog_fix.КТО_ВИТРИНА]
+              if r["action"] == "catalog/fix" and r["admin_name"] == catalog_fix.КТО_ВИТРИНА and r["id"] > до]
     c(f"всё в журнале действий: {len(журнал)}", len(журнал) == 10 and any("готово, шагов: 9" in x for x in журнал))
     c("второй запуск — не запускается", catalog_fix.apply_storefront_fix() is None)
 

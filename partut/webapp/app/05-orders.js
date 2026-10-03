@@ -129,7 +129,7 @@ function cancelMyOrder(o) {
           : "Заказ отменён. Товар вернулся в продажу.");
         openMyOrders(); fetchBonus();
       }
-      else alertMsg(d.error === "too_late" ? "Заказ уже подтверждён — отмена через поддержку." : "Не удалось отменить.");
+      else alertMsg(d.message || (d.error === "too_late" ? "Заказ уже подтверждён — отмена через поддержку." : "Не удалось отменить."));
     } catch (e) { alertMsg(текстСбоя(e)); }
   };
   const msg = `Отменить заказ #${o.id}?`;
@@ -416,7 +416,8 @@ $("oeditSave").onclick = async () => {
       body: JSON.stringify({ initData, id: oeditOrder.id, qty: oeditQty }) });
     const d = await r.json();
     if (!d.ok) {
-      alertMsg(d.error === "no_stock" ? `На полке только ${d.have} шт: ${d.name}`
+      alertMsg(d.message ? d.message
+             : d.error === "no_stock" ? `На полке только ${d.have} шт: ${d.name}`
              : d.error === "closed" ? "Заказ уже закрыт — правка невозможна."
              : "Не получилось изменить заказ.");
       return;

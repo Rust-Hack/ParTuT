@@ -485,7 +485,15 @@ def api_order_cancel():
     order = db.get_order(oid)
     if not order or order["user_id"] != int(user["id"]):
         return jsonify({"ok": False, "error": "not_found"}), 404
-    if not db.cancel_order(oid, ["new", "paid"]):   # после подтверждения — только через продавца
+    try:
+        отменён = db.cancel_order(oid, ["new", "paid"])   # после подтверждения — только через продавца
+    except db.CancelRefused as e:
+        # Вернуть штуки некуда (SF-01) — заказ не отменён; чинить карточку покупателю нечем.
+        print(f"Отмена заказа #{oid} покупателем не проведена: {e.message}")
+        return jsonify({"ok": False, "error": e.code,
+                        "message": "Отменить заказ сейчас не получилось — напишите, пожалуйста, в поддержку, "
+                                   "продавец отменит его вручную."}), 409
+    if not отменён:
         return jsonify({"ok": False, "error": "too_late"}), 400
     # сообщим продавцам города, чтобы не обрабатывали — каждому отдельно: если
     # один заблокировал бота, это не должно оставить без уведомления остальных
@@ -711,7 +719,10 @@ def api_admin_order_status():
                       f"🎉 Ваш реферал сделал заказ! +{referral_info['earned']} 🪙{extra}")
         tgsend.bg(tgsend.notify_client, client_id, f"Заказ #{oid} выдан. Спасибо, что выбрали нас! 🙌")
     elif action == "reject":
-        canceled = db.cancel_order(oid, OPEN)        # атомарно: canceled + возврат склада/монет
+        try:
+            canceled = db.cancel_order(oid, OPEN)    # атомарно: canceled + возврат склада/монет
+        except db.CancelRefused as e:
+            return jsonify({"ok": False, "error": e.code, "message": e.message}), 409
         if not canceled:
             return jsonify({"ok": False, "error": "closed"}), 409
         tgsend.bg(tgsend.notify_client, client_id,
@@ -773,6 +784,11 @@ def api_admin_order_items():
         if err.startswith("no_stock:"):
             _, name, have = err.split(":", 2)
             return jsonify({"ok": False, "error": "no_stock", "name": name, "have": int(have)}), 400
+        if err.startswith("no_variant:"):
+            name = err.split(":", 1)[1]
+            return jsonify({"ok": False, "error": "no_variant",
+                            "message": f"«{name}»: этого варианта у товара больше нет — количество не изменить. "
+                                       "Верните вариант в карточке товара (с 0 шт) и попробуйте ещё раз."}), 409
         code = 409 if err in ("closed",) else 400
         return jsonify({"ok": False, "error": err}), code
 
