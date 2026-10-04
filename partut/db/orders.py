@@ -175,6 +175,10 @@ def place_order(user_id, username, city, items, subtotal, fee, coin_value, coins
     conn = db.connect()
     cur = conn.cursor()
     try:
+        # 0. Склад — первым и в общем порядке (_запереть_склад): иначе отмена
+        #    другого заказа, взявшая те же строки в другом порядке, и это
+        #    оформление ждали бы друг друга вечно.
+        _запереть_склад(cur, _номера(items))
         # 1. Монеты — списываем условно (только если хватает баланса), это же и защита от гонки.
         coins_used = 0
         spend = int(coins_to_spend or 0)
@@ -289,23 +293,45 @@ def вкус_на_полке(имена, вкус):
     return похожие[0] if len(похожие) == 1 else None
 
 
-def _полка_заказа(cur, items):
-    """Варианты товаров заказа {pid: [названия]} — ПОД ЗАМКОМ до конца транзакции.
+def _номера(items):
+    """Номера товаров в составе/чеке — для _запереть_склад."""
+    out = set()
+    for it in items or []:
+        try:
+            pid = int((it or {}).get("id") or 0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if pid:
+            out.add(pid)
+    return out
 
-    Отмена и правка заказа ищут вариант по нынешнему названию, а потом
-    возвращают в него штуки. Без замка между поиском и возвратом вариант
-    успевали удалить в другом соединении, и возврат уходил в никуда (приёмка
-    SF-01-R1). Запираем строки вариантов, как приход и заказ (варианты → товар),
-    по товарам в порядке номеров: две отмены с одними и теми же товарами
-    не ждут друг друга вечно. В SQLite замок один на базу — его уже взяла
-    запись строки заказа."""
-    pids = sorted({int(it.get("id") or 0) for it in items
-                   if isinstance(it, dict) and it.get("flavor") and int(it.get("id") or 0)})
+
+def _запереть_склад(cur, pids):
+    """Замки склада в ЕДИНОМ порядке для всех операций с заказами.
+    Возвращает {pid: [названия вариантов]} — прочитанные уже под замком.
+
+    Порядок (приёмка SF-01-R2): [строка заказа] → варианты всех товаров (по
+    номеру товара, внутри — по номеру варианта) → сами товары (по номеру) →
+    монеты покупателя → промокод. Его держат оформление, продажа на точке,
+    отмена, отмена продажи и правка состава — все берут склад В НАЧАЛЕ
+    транзакции этим помощником. Раньше оформление запирало варианты в порядке
+    строк корзины (White, потом Black), а отмена — по номерам (Black, потом
+    White): каждая ждала другую, и Postgres обрывал одну из них (40P01).
+    По той же причине оформление теперь запирает склад ДО монет и промокода:
+    отмена берёт их после склада.
+
+    Замок от поиска варианта до возврата в него закрывает и SF-01-R1: удалить
+    вариант между ними в другом соединении нельзя. В SQLite замок один на
+    базу — его берёт первая запись транзакции; здесь только чтение названий."""
+    pids = sorted(set(pids))
     полка = {}
     for pid in pids:
         cur.execute(db._q("SELECT flavor FROM product_variants WHERE product_id = %s ORDER BY id"
                           + (" FOR UPDATE" if db.USE_PG else "")), (pid,))
         полка[pid] = [r["flavor"] for r in cur.fetchall()]
+    if db.USE_PG:
+        for pid in pids:
+            cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (pid,))
     return полка
 
 
@@ -342,6 +368,7 @@ def record_point_sale(city, lines, admin_id, seller, payment="", client_token=""
     conn = db.connect()
     cur = conn.cursor()
     try:
+        _запереть_склад(cur, _номера(lines))          # общий порядок замков — как у оформления
         items, total, с_вариантами = [], 0.0, set()
         for line in lines:
             pid, flavor, qty, price = int(line["id"]), (line.get("flavor") or None), int(line["qty"]), float(line["price"])
@@ -449,13 +476,9 @@ def _запереть_чек(cur, order_id, pids):
     замок один на базу, его берёт первая запись транзакции."""
     if db.USE_PG:
         cur.execute("SELECT id FROM orders WHERE id = %s FOR UPDATE", (order_id,))
-        if pids:
-            метки = ",".join(["%s"] * len(pids))
-            cur.execute(f"SELECT id FROM product_variants WHERE product_id IN ({метки}) "
-                        "ORDER BY product_id, id FOR UPDATE", tuple(pids))
-            cur.execute(f"SELECT id FROM products WHERE id IN ({метки}) ORDER BY id FOR UPDATE", tuple(pids))
     else:
         cur.execute("UPDATE orders SET id = id WHERE id = ?", (order_id,))
+    _запереть_склад(cur, pids)
 
 
 def cancel_point_sale(order_id):
@@ -728,7 +751,7 @@ def cancel_order(order_id, allowed=("new", "paid", "confirmed")):
         except (TypeError, ValueError):
             items = []
         touched_variants = set()
-        полка = _полка_заказа(cur, items)
+        полка = _запереть_склад(cur, _номера(items))
         for it in items:
             try:
                 qty = int(it.get("qty", 0))
@@ -941,7 +964,7 @@ def update_order_items(order_id, quantities, coin_value):
             return None, "bad_items"
 
         changes = []
-        полка = _полка_заказа(cur, items)
+        полка = _запереть_склад(cur, _номера(items))
         for idx, want in quantities.items():
             if not (0 <= idx < len(items)):
                 return None, "bad_index"
