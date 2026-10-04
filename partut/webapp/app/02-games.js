@@ -543,7 +543,7 @@ function referralHtml() {
   const list = (bonus.referrals_list || []).length
     ? bonus.referrals_list.map((r, i) => `<div class="statrow"><span>Реферал ${i + 1}</span><b style="color:${r.active ? '#2e9e4f' : 'var(--hint)'}">${r.active ? "активен" : "ждём заказ"}</b></div>`).join("")
     : `<div class="statrow"><span style="color:var(--hint)">Пока нет рефералов — поделись ссылкой выше</span></div>`;
-  return `<div class="bonushero"><div class="bonuscoin">🪙 ${bonus.coins || 0}</div><div class="bonuslab">ваши VAPECOINS</div></div>
+  return `<div class="bonushero"><div class="bonuscoin">🪙 ${bonusReady ? (bonus.coins || 0) : "…"}</div><div class="bonuslab">${bonusReady ? "ваши VAPECOINS" : "баланс не загрузился — откройте раздел ещё раз"}</div></div>
     <div class="card-block" style="text-align:left">
       <div style="font-weight:800;margin-bottom:8px">👥 Пригласи друга — получи монеты</div>
       ${bonus.ref_link ? `<div class="reflink">${esc(bonus.ref_link)}</div>` : ""}

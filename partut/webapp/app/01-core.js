@@ -171,10 +171,23 @@ let allProducts = [], cityList = [], city = null, cat = "", search = "", brandFi
 // восстанавливается — но не вслепую: восстановитьКорзину() сверяет её с
 // живым каталогом, потому что пока приложение было закрыто, товар могли
 // раскупить или снять с продажи.
-const CART_KEY = "partut_cart_v1";
+//
+// Корзина — у каждого аккаунта своя (приёмка F-02, 5.10.2026): ключ с номером
+// пользователя Telegram. Раньше запись была одна на всё хранилище, и второй
+// аккаунт в том же Telegram (или браузере) открывал приложение уже с чужой
+// корзиной. Прежнюю общую запись (partut_cart_v1) не отдаём никому — чья она,
+// неизвестно; при первом запуске после обновления она просто стирается.
+const CART_KEY = "partut_cart_v2";
+const CART_KEY_ОБЩИЙ = "partut_cart_v1";
+// Номер пользователя для ключей хранилища: корзина, ожидающий выбор точки.
+// Нет номера (открыто не из Telegram) — в хранилище не пишем вовсе.
+function номерДляХранилища() { return (tgUser && tgUser.id) ? String(tgUser.id) : ""; }
+function ключКорзины() { const н = номерДляХранилища(); return н ? `${CART_KEY}.${н}` : ""; }
 const cart = {};
 function сохранитьКорзину() {
-  try { localStorage.setItem(CART_KEY, JSON.stringify({ city, items: cart })); }
+  const ключ = ключКорзины();
+  if (!ключ) return;
+  try { localStorage.setItem(ключ, JSON.stringify({ city, items: cart })); }
   catch (e) { /* приватный режим и т.п. — корзина просто не переживёт перезапуск */ }
 }
 // Вкус в сохранённой корзине — под нынешним названием. Вкус могли
@@ -187,8 +200,11 @@ function нынешнийВкус(p, вкус) {
   return v ? v.flavor : вкус;
 }
 function восстановитьКорзину() {
+  try { localStorage.removeItem(CART_KEY_ОБЩИЙ); } catch (e) { /* без хранилища — и стирать нечего */ }
+  const ключ = ключКорзины();
+  if (!ключ) return;
   let сохранено;
-  try { сохранено = JSON.parse(localStorage.getItem(CART_KEY) || "null"); }
+  try { сохранено = JSON.parse(localStorage.getItem(ключ) || "null"); }
   catch (e) { сохранено = null; }
   // Корзина — по одной точке (см. switchCity): чужого города не восстанавливаем.
   if (!сохранено || сохранено.city !== city || !сохранено.items) return;
@@ -369,6 +385,9 @@ function showTab(id) {
   if (id === "fav") renderFav();
   if (id === "bonus") renderBonus();
   if (id === "profile") renderProfile();
+  // Деньги на этих экранах могли поменяться без нас (заказ выдали) — F-01.
+  // «Бонусы» с ещё не загруженным балансом грузят его сами (renderBonus).
+  if (id === "profile" || id === "cart" || (id === "bonus" && bonusReady)) освежитьДеньги();
   window.scrollTo(0, 0);
 }
 
@@ -1128,7 +1147,11 @@ async function перечитатьТочки(сразу) {
   return ок;
 }
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && city && паузаТочки(city)) перечитатьТочки(true);
+  if (document.visibilityState !== "visible") return;
+  if (city && паузаТочки(city)) перечитатьТочки(true);
+  // Вернулись в приложение — пока его не было, заказ могли выдать (F-01).
+  if (activeTab === "profile" || activeTab === "bonus" || activeTab === "cart") освежитьДеньги(true);
+  else бонусВзят = колесоВзято = 0;                // на следующем входе в деньги — перечитать
 });
 let таймерПаузы = null;
 function обновитьБаннерПаузы() {
@@ -1211,7 +1234,11 @@ $("searchInput").oninput = (e) => {
 // Сервер может не принять выбор — пропала связь, сбой. Тогда выбор ждёт в
 // телефоне и досылается при следующем запуске: иначе приложение открылось бы
 // на старой точке, а корзина новой молча пропала бы.
-const ТОЧКА_ЖДЁТ = "partut_city_pending_v1";
+// Ожидающий выбор — у каждого аккаунта свой (приёмка F-02): ключ с номером
+// пользователя. Прежняя общая запись (…_v1) не применяется никому — чей это
+// выбор, неизвестно, и он сменил бы точку чужому аккаунту.
+const ТОЧКА_ЖДЁТ_ОБЩАЯ = "partut_city_pending_v1";
+function ключТочки() { const н = номерДляХранилища(); return н ? `partut_city_pending_v2.${н}` : ""; }
 // Каждый выбор — со временем, когда он сделан, и меткой этого телефона:
 // запросы приходят не по порядку, и поздний старый ответ перебивал новый
 // выбор (приёмка BR-01-R1). Сервер не применит выбор с того же телефона,
@@ -1230,7 +1257,9 @@ function этотТелефон() {
 // Ожидающий выбор: {city, at}. Прежний формат — просто название точки.
 function ждущаяТочка() {
   try {
-    const v = localStorage.getItem(ТОЧКА_ЖДЁТ);
+    localStorage.removeItem(ТОЧКА_ЖДЁТ_ОБЩАЯ);
+    const ключ = ключТочки();
+    const v = ключ ? localStorage.getItem(ключ) : null;
     if (!v) return null;
     if (v[0] !== "{") return { city: v, at: null };
     const d = JSON.parse(v);
@@ -1240,10 +1269,11 @@ function ждущаяТочка() {
 function запомнитьТочку(next, at) {
   const выбор = { city: next, at: at || Date.now() };
   последнийВыбор = выбор;
-  try { localStorage.setItem(ТОЧКА_ЖДЁТ, JSON.stringify(выбор)); } catch (e) { /* без хранилища — просто без досылки */ }
+  const ключ = ключТочки();
+  try { if (ключ) localStorage.setItem(ключ, JSON.stringify(выбор)); } catch (e) { /* без хранилища — просто без досылки */ }
   const снять = () => {
     const ж = ждущаяТочка();
-    if (ж && ж.city === выбор.city && ж.at === выбор.at) { try { localStorage.removeItem(ТОЧКА_ЖДЁТ); } catch (e) {} }
+    if (ж && ж.city === выбор.city && ж.at === выбор.at) { try { localStorage.removeItem(ключ); } catch (e) {} }
   };
   return fetch("/api/set-city", { method: "POST", headers: { "Content-Type": "application/json" },
                                   body: JSON.stringify({ initData, city: next, chosen_at: выбор.at, device: этотТелефон() }) })
@@ -1269,7 +1299,7 @@ function запомнитьТочку(next, at) {
 function применитьЖдущуюТочку() {
   const ждёт = ждущаяТочка();
   if (!ждёт || !me || !me.city) return;
-  if (ждёт.city === me.city) { try { localStorage.removeItem(ТОЧКА_ЖДЁТ); } catch (e) {} return; }
+  if (ждёт.city === me.city) { try { localStorage.removeItem(ключТочки()); } catch (e) {} return; }
   city = ждёт.city;
   запомнитьТочку(ждёт.city, ждёт.at || undefined);
 }
@@ -1457,7 +1487,7 @@ function renderProfile() {
     <div class="profcard"><div class="avatar">${esc(letter)}</div>
       <div><div class="pn">${esc(name)}</div>
         <button class="pid" id="profIdCopy" style="border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer">ID: ${(tgUser && tgUser.id) || "—"} ⧉</button></div>
-      <div class="coins"><b>${bonus.coins || 0}</b><small>VAPECOINS</small></div></div>
+      <div class="coins"><b>${bonusReady ? (bonus.coins || 0) : "…"}</b><small>VAPECOINS</small></div></div>
     <div class="plist">
       ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>` : ""}
       <!-- Строка называет ТЕКУЩУЮ тему, а не одну и ту же всегда: раньше при
@@ -1948,12 +1978,48 @@ $("supportSend").onclick = async () => {
 let bonus = { coins: 0, referrals: 0, ref_link: "", referral_bonus: 50 };
 let raffleOn = false;            // идёт ли розыгрыш — приходит из /api/me
 let bonusReady = false, wheelReady = false, slotReady = false;   // кэш: не перезапрашивать зря
+// Когда баланс и колесо в последний раз пришли с сервера (Date.now()).
+let бонусВзят = 0, колесоВзято = 0;
 async function fetchBonus() {
   try {
     const r = await fetch("/api/bonus", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
-    if (d.ok) { bonus = d; bonusReady = true; }
+    if (d.ok) { bonus = d; bonusReady = true; бонусВзят = Date.now(); }
   } catch (e) {}
+}
+
+// ---- Свежесть денег на экране (приёмка F-01, 5.10.2026) ----
+// Монеты и прокруты колеса начисляются не только здесь: продавец выдал заказ —
+// и кэшбэк уже на счёте. А экран держал баланс с первой загрузки: покупатель
+// видел «Выдан» и «+30» в истории, а в профиле, бонусах и корзине — 0, пока не
+// перезапустит приложение. Теперь баланс и колесо перечитываются при входе в
+// «Профиль», «Бонусы» и «Корзину» и при возвращении в приложение — если
+// показанному больше ДЕНЬГИ_СВЕЖИ_МС. Не удалось — остаётся последнее известное
+// (а ни разу не известное показывается «…», а не нулём).
+const ДЕНЬГИ_СВЕЖИ_МС = 20000;
+let деньгиИдут = null;
+function освежитьДеньги(сразу = false) {
+  if (деньгиИдут) return деньгиИдут;
+  const сейчас = Date.now();
+  const баланс = сразу || сейчас - бонусВзят > ДЕНЬГИ_СВЕЖИ_МС;
+  const колесо = wheelReady && (сразу || сейчас - колесоВзято > ДЕНЬГИ_СВЕЖИ_МС);
+  if (!баланс && !колесо) return Promise.resolve(false);
+  const снимок = () => JSON.stringify([bonusReady, bonus.coins, wheel.spins, wheel.progress]);
+  const было = снимок();
+  деньгиИдут = Promise.all([баланс ? fetchBonus() : null, колесо ? fetchWheel() : null]).then(() => {
+    деньгиИдут = null;
+    const изменилось = снимок() !== было;
+    if (изменилось) перерисоватьДеньги();
+    return изменилось;
+  });
+  return деньгиИдут;
+}
+// Перерисовать открытый экран, где видны деньги. Игру посреди прокрута не
+// трогаем — оборвали бы анимацию; итог прокрута и так принесёт свежий баланс.
+function перерисоватьДеньги() {
+  if (activeTab === "profile") renderProfile();
+  else if (activeTab === "bonus" && !slotSpinning && !spinning) renderBonus();
+  else if (activeTab === "cart") renderCart();
 }
 let bonusTab = "wheel", gameMode = "wheel";
 let wheel = { sectors: [], spins: 0, progress: 0, step: 100 };   // шаг в Br, приходит с сервера
@@ -1969,7 +2035,7 @@ async function fetchWheel() {
   try {
     const r = await fetch("/api/wheel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
-    if (d.ok) { wheel = d; wheelReady = true; }
+    if (d.ok) { wheel = d; wheelReady = true; колесоВзято = Date.now(); }
   } catch (e) {}
 }
 async function fetchSlot() {

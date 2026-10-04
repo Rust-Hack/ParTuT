@@ -112,16 +112,17 @@ function витрина({ кат = "", вкусы_ = [], катег = катег
 const корзина = кусок("const CART_KEY", "let useCoins");
 const полка = кусок("function variantStock(p, flavor)", "// В списках");
 function открытьКорзину(сохранено, товары_) {
-  const хранилище = new Map([["partut_cart_v1", JSON.stringify(сохранено)]]);
+  const хранилище = new Map([["partut_cart_v2.7", JSON.stringify(сохранено)]]);   // корзина аккаунта 7 (F-02)
   const сказано = [];
   const ctx = vm.createContext({
-    city: "Минск", allProducts: товары_, alertMsg: (m) => сказано.push(m),
+    city: "Минск", allProducts: товары_, alertMsg: (m) => сказано.push(m), tgUser: { id: 7 },
     hasVariants: (p) => !!(p.variants && p.variants.length),
-    localStorage: { getItem: (k) => (хранилище.has(k) ? хранилище.get(k) : null), setItem: (k, v) => хранилище.set(k, String(v)) },
+    localStorage: { getItem: (k) => (хранилище.has(k) ? хранилище.get(k) : null), setItem: (k, v) => хранилище.set(k, String(v)),
+                    removeItem: (k) => хранилище.delete(k) },
   });
   vm.runInContext(полка + "\n" + корзина + "\nthis.__cart = cart;", ctx);
   vm.runInContext("восстановитьКорзину()", ctx);
-  return { корзина: ctx.__cart, сказано, записано: JSON.parse(хранилище.get("partut_cart_v1")) };
+  return { корзина: ctx.__cart, сказано, записано: JSON.parse(хранилище.get("partut_cart_v2.7")) };
 }
 const pilow = { id: 31, city: "Минск", category: "disposable", name: "PILOW TALK IC40000", stock: 4,
                 variants: В(["Клубника манго", 2], ["Виноград", 2]) };
