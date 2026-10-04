@@ -209,7 +209,7 @@ const OFILTERS = [
 
 // Возвращаясь в «Управление», продавец должен видеть сегодняшние цифры, а не
 // те, с которыми входил: заказы он только что и разгребал.
-$("ordersClose").onclick = () => { $("ordersView").classList.remove("show"); loadToday(); };
+$("ordersClose").onclick = () => { $("ordersView").classList.remove("show"); loadToday(); if (activeTab === "work") loadOrdersBadge(); };
 $("ordersSearch").oninput = (e) => { ordersSearch = e.target.value; renderOrders(); };
 
 // Раньше сбой запроса (503, обрыв связи) и честное «заказов правда нет»

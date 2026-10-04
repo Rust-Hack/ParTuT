@@ -87,8 +87,8 @@ function выбратьТочкуПродажи(точка) {
   нарисоватьПродажу();
   загрузитьСегодня();
 }
-$("saleOpen").onclick = openSale;
-$("saleClose").onclick = () => { сохранитьЧек(); $("saleView").classList.remove("show"); renderAdminList(); };
+// Плитки «Продажа на точке» в «Товарах» больше нет — вкладка «🧾 Продажа» внизу.
+$("saleClose").onclick = () => { сохранитьЧек(); $("saleView").classList.remove("show"); renderAdminList(); if (activeTab === "work") loadToday(); };
 $("saleFind").oninput = () => { сПоиск = $("saleFind").value; нарисоватьНайденноеПродажи(); };
 
 // ---------- Рисование ----------

@@ -106,6 +106,8 @@
     <section class="tab" id="tab-fav"></section>
     <section class="tab" id="tab-bonus"></section>
     <section class="tab" id="tab-profile"></section>
+    <!-- «Работа» — главная вкладка рабочего меню продавца (5.10.2026). -->
+    <section class="tab" id="tab-work"></section>
   </div>
 
   <nav class="nav" id="nav"></nav>
@@ -153,6 +155,27 @@
       <div class="dlvsum" id="pauseSum"></div>
       <button class="bigbtn" id="pauseGo">Закрыть точку</button>
       <button class="closebtn" id="pauseCancel">Отмена</button>
+    </div>
+  </div>
+
+  <!-- «＋ Добавить» в «Товарах»: новый товар (владельцу) и завоз на точку. -->
+  <div class="overlay" id="addMenuOverlay">
+    <div class="sheet">
+      <h2>Добавить</h2>
+      <div class="addrow">
+        <button class="addopt" id="npOpen" hidden><b>✨ Новый товар</b><small id="npOpenNote">описание, фото, цена и приход</small></button>
+        <button class="addopt" id="openStockPick"><b>📥 Завезти на точку</b><small>то, что уже есть в ассортименте</small></button>
+      </div>
+      <button class="closebtn" id="addMenuCancel">Отмена</button>
+    </div>
+  </div>
+
+  <!-- Выбор точки или категории для списка «Товаров». -->
+  <div class="overlay" id="admPickOverlay">
+    <div class="sheet">
+      <h2 id="admPickTitle">Точка</h2>
+      <div class="ochips" id="admPickList"></div>
+      <button class="closebtn" id="admPickCancel">Закрыть</button>
     </div>
   </div>
 
@@ -716,25 +739,22 @@
     <div class="viewhead"><h2>🛍 Товары</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="productsClose">‹ Назад</button></div>
 
-    <!-- Добавить товар. Новый — одним маршрутом (владельцу): описание, фото,
-         варианты, цена и первый приход сразу. Уже заведённый в ассортименте —
-         завезти на точку. Раньше здесь была свёрнутая гармошка с одной кнопкой
-         внутри: два нажатия ради одного действия. -->
-    <div class="addrow" id="addRow">
-      <button class="addopt" id="saleOpen"><b>🧾 Продажа на точке</b><small>продал у прилавка, мимо приложения</small></button>
-      <button class="addopt" id="npOpen" hidden><b>✨ Новый товар</b><small id="npOpenNote">описание, фото, цена и приход</small></button>
-      <button class="addopt" id="openStockPick"><b>📥 Завезти на точку</b><small>то, что уже есть в ассортименте</small></button>
-    </div>
-
-    <!-- Список товаров. Фильтры — ряды в одну строку с прокруткой вбок:
-         раньше они переносились на семь строк, и на первом экране телефона
-         помещалось полтора товара. Сворачивать список было незачем — у него
-         больше нет заголовка-гармошки. -->
+    <!-- Верх — компактный (приёмка f58f7d2, 5.10.2026): на телефоне шириной
+         320 px первый товар начинался на 522-м пикселе из 640 — три плитки,
+         поиск и три ряда фильтров занимали весь экран. Теперь: поиск и
+         «＋ Добавить» одной строкой (новый товар и завоз — в её меню;
+         «Продажа на точке» — вкладка внизу), отбор по остатку — рядом чипов,
+         точка и категория — двумя кнопками-выборами. -->
     <div class="sect prodlist">
-      <input id="admSearch" class="admsearch" placeholder="🔍 Поиск по названию или бренду">
-      <div class="ochips chiprow" id="admLocChips"></div>
+      <div class="prodtools">
+        <input id="admSearch" class="admsearch" placeholder="🔍 Поиск">
+        <button type="button" class="barbtn" id="addMenuOpen">＋ Добавить</button>
+      </div>
       <div class="ochips chiprow" id="admStockChips"></div>
-      <div class="ochips chiprow" id="admCatChips"></div>
+      <div class="filtrow">
+        <button type="button" class="ochip pick" id="admLocPick"></button>
+        <button type="button" class="ochip pick" id="admCatPick"></button>
+      </div>
       <!-- Сколько товаров показано и приём поставки: несколько товаров и
            их вариантов одним «Провести» (экран #supplyView ниже). -->
       <div class="listbar">

@@ -556,10 +556,22 @@ function нарисоватьСписокТоваров() {
     if (q && !(`${p.name} ${p.brand || ""} ${p.flavor || ""}`.toLowerCase().includes(q))) return false;
     return true;
   });
+  // Точку пишем в строке, только когда в списке все точки сразу. Выбран один
+  // город или продавец ведёт свою точку — «Минск» в каждой строке ничего не
+  // сообщает, а место под сведения на узком телефоне дорого.
+  const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
+  // «Все точки»: один товар на нескольких точках — одной строкой с остатками
+  // по точкам, раскрывается в строки точек (приёмка f58f7d2: кабель в Минске
+  // и Турове считался двумя товарами, и «39 товаров» было неправдой).
+  const группы = сТочкой ? сгруппироватьПоОписанию(list) : list.map(p => [p]);
+  const слито = группы.length < list.length;
   // Сколько показано — и заодно видно, что отбор включён: «3 товара» при
   // забытом фильтре читались бы как «на точке всего три».
-  счёт.textContent = list.length === свои.length ? `${свои.length} ${plural(свои.length, "товар", "товара", "товаров")}`
-    : `Показано ${list.length} из ${свои.length}`;
+  const товаров = (n) => `${n} ${plural(n, "товар", "товара", "товаров")}`;
+  счёт.textContent = !слито
+    ? (list.length === свои.length ? товаров(свои.length) : `Показано ${list.length} из ${свои.length}`)
+    : (list.length === свои.length ? `${товаров(группы.length)} · ${list.length} на точках`
+       : `Показано ${товаров(группы.length)} · ${list.length} из ${свои.length} на точках`);
   if (!list.length) {
     const msg = admStockFilter === "out" ? "Ничего не кончилось — на всех точках есть остаток."
               : admStockFilter === "need" ? "Завозить нечего: везде больше " + LOW_STOCK + " шт."
@@ -568,16 +580,57 @@ function нарисоватьСписокТоваров() {
     привязатьНигде(); привязатьАрхив(); привязатьНесвежий();
     return;
   }
-  // Точку пишем в строке, только когда в списке все точки сразу. Выбран один
-  // город или продавец ведёт свою точку — «Минск» в каждой строке ничего не
-  // сообщает, а место под сведения на узком телефоне дорого.
-  const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
-  $("adminList").innerHTML = блокНесвежий() + list.map(p => строкаТовара(p, сТочкой)).join("") + блокНигде() + блокАрхив();
+  $("adminList").innerHTML = блокНесвежий()
+    + группы.map(г => г.length > 1 ? группаТовара(г) : строкаТовара(г[0], сТочкой)).join("")
+    + блокНигде() + блокАрхив();
   привязатьНигде(); привязатьАрхив(); привязатьНесвежий();
   $("adminList").querySelectorAll("[data-price]").forEach(b => b.onclick = () => открытьЦену(+b.dataset.price));
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
   $("adminList").querySelectorAll("[data-more]").forEach(b => b.onclick = () => открытьЕщё(+b.dataset.more));
+  $("adminList").querySelectorAll("[data-group]").forEach(b => b.onclick = () => {
+    const к = b.dataset.group;
+    if (раскрытыеГруппы.has(к)) раскрытыеГруппы.delete(к); else раскрытыеГруппы.add(к);
+    renderAdminList();
+  });
+}
+
+// Строки одного описания (модели) — вместе, в порядке списка. Без описания
+// (старые товары) — каждая сама по себе.
+function сгруппироватьПоОписанию(list) {
+  const группы = [], где = new Map();
+  for (const p of list) {
+    const к = p.model_id ? `m${p.model_id}` : `p${p.id}`;
+    if (!где.has(к)) { где.set(к, []); группы.push(где.get(к)); }
+    где.get(к).push(p);
+  }
+  return группы;
+}
+const раскрытыеГруппы = new Set();
+// Товар на нескольких точках: название, итог и остаток по каждой точке —
+// сразу видно, где кончилось. Нажатие раскрывает строки точек: цена, склад,
+// карточка — те же, что в списке одной точки.
+function группаТовара(строки) {
+  const к = `m${строки[0].model_id}`, раскрыта = раскрытыеГруппы.has(к);
+  const нр = (t) => String(t).replace(/ /g, "&nbsp;");
+  const всего = строки.reduce((s, p) => s + (+p.stock || 0), 0);
+  const обещано = строки.reduce((s, p) => s + (+p.reserved || 0), 0);
+  const цены = [...new Set(строки.map(p => (+p.price).toFixed(2)))].sort((a, b) => a - b);
+  const цена = цены.length === 1 ? `${цены[0]} Br` : `${цены[0]}–${цены[цены.length - 1]} Br`;
+  const ждут = строки.reduce((s, p) => s + (+p.waiting || 0), 0);
+  const точки = строки.map(p => {
+    const st = stockState(p);
+    return `<span class="gpt ${st}">${нр(`${p.city} ${p.stock}`)}${p.hidden ? "&nbsp;·&nbsp;снят" : ""}</span>`;
+  }).join(" · ");
+  return `<div class="admrow prodgroup${раскрыта ? " open" : ""}">
+      <button type="button" class="grouphead" data-group="${к}" aria-expanded="${раскрыта}">
+        <span class="prodhead"><span class="prodname">${esc(строки[0].name)}</span>
+          <span class="prodstock">Всего&nbsp;<b>${всего}</b>&nbsp;шт${обещано ? ` · ${нр("в заказах")}&nbsp;<b>${обещано}</b>` : ""} · ${нр(`${строки.length} ${plural(строки.length, "точка", "точки", "точек")}`)}</span></span>
+        <span class="gprice">${цена}</span><span class="gchev" aria-hidden="true">▾</span>
+      </button>
+      <div class="prodmeta">${ждут ? `<span class="warnc">${нр(`ждут поступления ${ждут}`)}</span> · ` : ""}${точки}</div>
+      ${раскрыта ? `<div class="grows">${строки.map(p => строкаТовара(p, false, true)).join("")}</div>` : ""}
+    </div>`;
 }
 
 // Товары, у которых есть описание, но нет ни одной точки. Раньше их видно
@@ -707,7 +760,9 @@ function вариантовСтрокой(p) {
 // Строка товара. Сверху — название, под ним остаток; справа — цена-кнопка:
 // за ней в этот список заходят чаще всего. Ниже — второстепенное (точка,
 // варианты, «хит», кто ждёт) и действия с подписями.
-function строкаТовара(p, сТочкой) {
+// вГруппе — строка точки внутри раскрытой группы «Все точки»: название уже
+// стоит над группой, заголовок строки — точка.
+function строкаТовара(p, сТочкой, вГруппе = false) {
   // Неразрывные пробелы внутри кусков: «без фото» или «в заказах 3»,
   // разорванные переносом по словам, читаются как мусор.
   const нр = (t) => String(t).replace(/ /g, "&nbsp;");
@@ -753,7 +808,7 @@ function строкаТовара(p, сТочкой) {
     </div>`;
   return `<div class="admrow prodrow${p.hidden ? " off" : ""}">
       <div class="prodtop">
-        <div class="prodhead"><div class="prodname">${esc(p.name)}</div><div class="prodstock">${остаток}</div></div>
+        <div class="prodhead"><div class="prodname">${esc(вГруппе ? `📍 ${p.city}` : p.name)}</div><div class="prodstock">${остаток}</div></div>
         ${цена}
       </div>
       ${снят || детали ? `<div class="prodmeta">${снят}${снят && детали ? " " : ""}${детали}</div>` : ""}

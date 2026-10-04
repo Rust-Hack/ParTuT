@@ -79,7 +79,9 @@ async function loadOrdersBadge() {
     const d = await r.json();
     adminOrders = d.orders || [];
     // Ждут ИМЕННО продавца: 'new' — это заказ картой без чека, там ход клиента.
-    setBadge("ordBadge", adminOrders.filter(o => o.status === "paid").length);
+    заказовЖдут = adminOrders.filter(o => o.status === "paid").length;
+    setBadge("ordBadge", заказовЖдут);
+    if (рабочийРежим()) renderNav();                  // значок на «Заказах» внизу
   } catch (e) {}
 }
 // Сводка дня. Отвечает на четыре вопроса, ради которых сюда и заходят:
@@ -89,9 +91,14 @@ async function loadToday() {
   try {
     const r = await fetch("/api/admin/today", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
-    if (!d.ok) { $("todayCard").innerHTML = ""; return; }
+    if (!d.ok) { сводкаВ(""); return; }
     renderToday(d.today);
-  } catch (e) { $("todayCard").innerHTML = ""; }
+  } catch (e) { сводкаВ(""); }
+}
+// Сводка дня и строка точки — в «Управлении» и на вкладке «Работа».
+const МЕСТА_СВОДКИ = ["todayCard", "workToday"], МЕСТА_ПАУЗЫ = ["pauseCard", "workPause"];
+function сводкаВ(html, привязать) {
+  МЕСТА_СВОДКИ.forEach(id => { const у = $(id); if (у) { у.innerHTML = html; if (привязать) привязать(у); } });
 }
 
 function renderToday(t) {
@@ -112,9 +119,9 @@ function renderToday(t) {
   ];
   const quiet = !t.waiting && !need
     ? `<div class="tquiet">Ничего не ждёт — можно спокойно работать.</div>` : "";
-  $("todayCard").innerHTML = `<div class="today">${tiles.map((x, i) =>
-    `<button class="tcard ${x.cls}" data-t="${i}"><div class="tnum">${x.n}</div><div class="tlab">${x.lab}</div></button>`).join("")}</div>${quiet}`;
-  $("todayCard").querySelectorAll("[data-t]").forEach(b => b.onclick = () => tiles[+b.dataset.t].go());
+  сводкаВ(`<div class="today">${tiles.map((x, i) =>
+    `<button class="tcard ${x.cls}" data-t="${i}"><div class="tnum">${x.n}</div><div class="tlab">${x.lab}</div></button>`).join("")}</div>${quiet}`,
+    (у) => у.querySelectorAll("[data-t]").forEach(b => b.onclick = () => tiles[+b.dataset.t].go()));
 }
 
 // ----- Точка закрыта на время -----
@@ -132,7 +139,9 @@ async function загрузитьПаузы() {
   нарисоватьПаузы();
 }
 function нарисоватьПаузы() {
-  const узел = $("pauseCard"); if (!узел) return;
+  МЕСТА_ПАУЗЫ.forEach(id => { const узел = $(id); if (узел) нарисоватьПаузыВ(узел); });
+}
+function нарисоватьПаузыВ(узел) {
   if (!паузыТочек || !паузыТочек.length) { узел.innerHTML = ""; return; }
   узел.innerHTML = `<div class="sect pausecard">${паузыТочек.map(т => т.closed
     ? `<div class="pauserow closed"><div><b>⏸ «${esc(т.city)}» закрыта ${esc(т.closed.words)}</b>${т.closed.note ? `<small>${esc(т.closed.note)}</small>` : ""}</div>
@@ -551,12 +560,16 @@ const LOW_STOCK = 3;
 const stockState = (p) => p.stock <= 0 ? "out" : (p.stock <= LOW_STOCK ? "low" : "ok");
 
 function renderAdmFilters() {
-  const cats = [["all", "Все"], ...CAT_OPTS];
-  $("admCatChips").innerHTML = cats.map(([c, n]) =>
-    `<button class="ochip ${admCatFilter === c ? 'active' : ''}" data-ac="${c}">${n}</button>`).join("");
-  const locs = [["all", "Все точки"], ...locations.map(l => [l.name, l.name])];
-  $("admLocChips").innerHTML = myScope() ? "" : locs.map(([c, n]) =>
-    `<button class="ochip ${admLocFilter === c ? 'active' : ''}" data-al="${esc(c)}">${esc(n)}</button>`).join("");
+  // Точка и категория — кнопками-выборами в одну строку (приёмка f58f7d2):
+  // два ряда чипов съедали первый экран телефона. Выбранное — на самой
+  // кнопке и подсвечено: отбор, которого не видно, хуже отбора, которого нет.
+  const точка = $("admLocPick"), кат = $("admCatPick");
+  точка.hidden = !!myScope() || locations.length < 2;
+  точка.innerHTML = `<span>📍 ${esc(admLocFilter === "all" ? "Все точки" : admLocFilter)} ▾</span>`;
+  точка.classList.toggle("on", admLocFilter !== "all");
+  const имяКат = admCatFilter === "all" ? "Категория" : ((CAT_OPTS.find(([c]) => c === admCatFilter) || [])[1] || admCatFilter);
+  кат.innerHTML = `<span>🗂 ${esc(имяКат)} ▾</span>`;
+  кат.classList.toggle("on", admCatFilter !== "all");
   // «Что довезти» — главный вопрос к этому списку, а раньше на него отвечали
   // прокруткой всех точек подряд.
   const mine = shelf().filter(p => !myScope() || p.city === myScope());
@@ -566,22 +579,46 @@ function renderAdmFilters() {
               ["out", `Кончились${nOut ? ` · ${nOut}` : ""}`]];
   $("admStockChips").innerHTML = st.map(([c, n]) =>
     `<button class="ochip ${admStockFilter === c ? 'active' : ''}" data-as="${c}">${n}</button>`).join("");
-  $("admCatChips").querySelectorAll("[data-ac]").forEach(b =>
-    b.onclick = () => { admCatFilter = b.dataset.ac; renderAdmFilters(); renderAdminList(); });
-  $("admLocChips").querySelectorAll("[data-al]").forEach(b =>
-    b.onclick = () => { admLocFilter = b.dataset.al; renderAdmFilters(); renderAdminList(); });
   $("admStockChips").querySelectorAll("[data-as]").forEach(b =>
     b.onclick = () => { admStockFilter = b.dataset.as; renderAdmFilters(); renderAdminList(); });
   выбранныеЧипыВВиду();
 }
 $("admSearch").oninput = () => { admSearch = $("admSearch").value; renderAdminList(); };
+// Окно выбора точки или категории: варианты — [[значение, подпись]].
+function выбратьФильтр(заголовок, варианты, текущее, задать) {
+  $("admPickTitle").textContent = заголовок;
+  $("admPickList").innerHTML = варианты.map(([v, n]) =>
+    `<button class="ochip ${v === текущее ? "active" : ""}" data-pv="${esc(v)}">${esc(n)}</button>`).join("");
+  $("admPickList").querySelectorAll("[data-pv]").forEach(b => b.onclick = () => {
+    задать(b.dataset.pv);
+    closeOverlay($("admPickOverlay"));
+    renderAdmFilters(); renderAdminList();
+  });
+  $("admPickOverlay").classList.add("show");
+}
+$("admLocPick").onclick = () => выбратьФильтр("Точка", [["all", "Все точки"], ...locations.map(l => [l.name, l.name])],
+  admLocFilter, (v) => { admLocFilter = v; });
+$("admCatPick").onclick = () => выбратьФильтр("Категория", [["all", "Все категории"], ...CAT_OPTS],
+  admCatFilter, (v) => { admCatFilter = v; });
+$("admPickCancel").onclick = () => closeOverlay($("admPickOverlay"));
+// «＋ Добавить»: новый товар (владельцу) и завоз. У продавца в меню был бы
+// один пункт — кнопка сразу открывает завоз и так и называется.
+$("addMenuOpen").onclick = () => {
+  if (!isOwner()) { openStockPick(); return; }
+  обновитьКнопкуНового();
+  $("addMenuOverlay").classList.add("show");
+};
+$("addMenuCancel").onclick = () => closeOverlay($("addMenuOverlay"));
+["npOpen", "openStockPick"].forEach(id => $(id).addEventListener("click", () => {
+  if ($("addMenuOverlay").classList.contains("show")) closeOverlay($("addMenuOverlay"));
+}));
 
 // Ряды фильтров листаются вбок, и выбранный чип может оказаться за краем:
 // «Аксессуары» в конце ряда или «Надо завезти», выбранный с главного экрана
 // управления. Отбор, которого не видно, хуже отбора, которого нет, — список
 // молча короче, а почему, непонятно. Докручиваем ряд до выбранного.
 function выбранныеЧипыВВиду() {
-  ["admLocChips", "admStockChips", "admCatChips"].forEach(id => {
+  ["admStockChips"].forEach(id => {
     const ряд = $(id), чип = ряд.querySelector(".ochip.active");
     if (!чип || !ряд.clientWidth) return;              // экран ещё скрыт — размеров нет
     const р = ряд.getBoundingClientRect(), ч = чип.getBoundingClientRect();
@@ -605,7 +642,32 @@ async function openProducts() {
   $("productsView").classList.add("show");
   выбранныеЧипыВВиду();                                  // размеры появились только сейчас
 }
-$("productsClose").onclick = () => $("productsView").classList.remove("show");
+$("productsClose").onclick = () => { $("productsView").classList.remove("show"); if (activeTab === "work") renderWork(); };
+
+// ----- Вкладка «Работа» (рабочее меню, 5.10.2026) -----
+// Точка (открыта ли, кнопка «⏸ Закрыть») и сводка дня — то же, что вверху
+// «Управления», только без захода в него. Ниже — поставка и всё управление.
+function renderWork() {
+  const вкладка = $("tab-work");
+  if (!вкладка.dataset.ready) {
+    вкладка.innerHTML = `<div class="workwrap">
+        <h2 class="workhead" id="workHead"></h2>
+        <div id="workPause"></div>
+        <div id="workToday"></div>
+        <div class="plist">
+          <div class="prow" id="workSupply"><span>📦 Приём поставки</span><span>›</span></div>
+          <div class="prow" id="workAdmin"><span>🛠 Всё управление</span><span>›</span></div>
+        </div>
+      </div>`;
+    вкладка.dataset.ready = "1";
+    $("workSupply").onclick = async () => { готовитьАдминку(); await _adminBoot; openSupply(); };
+    $("workAdmin").onclick = openAdmin;
+  }
+  $("workHead").textContent = `🛠 Работа · ${myScope() || "все точки"}`;
+  готовитьАдминку();
+  нарисоватьПаузы();                  // прошлое известное — сразу, свежее — следом
+  loadToday(); загрузитьПаузы(); loadOrdersBadge();
+}
 
 async function openLocations() {
   $("locationsView").classList.add("show");

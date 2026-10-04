@@ -632,6 +632,10 @@ html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shad
 .tcard.warn .tnum { color: var(--warn); }
 .tcard.calm .tnum { color: var(--text); }
 .tquiet { color: var(--hint); font-size: 13.5px; padding: 2px 4px 8px; }
+/* Вкладка «Работа» (рабочее меню). */
+.workwrap { padding: 16px; }
+.workhead { font-size: 20px; font-weight: 800; margin: 4px 2px 12px; }
+.workwrap .sect.pausecard { margin-bottom: 10px; }
 .stathead { font-weight: 800; margin: 20px 0 8px; }
 .stathint { color: var(--hint); font-size: 12px; font-weight: 500; margin-left: 6px; }
 .statlist { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 4px 14px; }
@@ -1027,6 +1031,19 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
    тенью у каждой давала рябь и отнимала ширину у названия и кнопок. */
 .sect.prodlist { padding: 14px 16px 4px; }
 .prodlist .admsearch { margin-bottom: 10px; }
+/* Поиск и «＋ Добавить» — одной строкой. */
+.prodtools { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.prodtools .admsearch { flex: 1 1 auto; min-width: 0; margin: 0; }
+.prodtools .barbtn { min-height: 44px; }
+.prodtools .barbtn.dot::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+/* Точка и категория — кнопки-выборы: одна строка вместо двух рядов чипов. */
+.filtrow { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 4px; }
+.filtrow:empty { display: none; }
+.ochip.pick { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 10px;
+  flex: 1 1 0; min-width: 0; touch-action: manipulation; }
+.ochip.pick span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ochip.pick[hidden] { display: none; }
+.ochip.pick.on { border-color: var(--accent); color: var(--accent); }
 /* Фильтры — ряды в одну строку, листаются вбок. Раньше чипы переносились
    на семь строк, и на первом экране телефона помещалось полтора товара.
    Ряд уходит под край карточки, а край растушёван: обрезанный чип
@@ -1072,6 +1089,20 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 /* Снятый с витрины товар гаснет: покупатели его не видят. Кнопки остаются
    яркими — с ним по-прежнему работают. */
 .prodrow.off .prodhead { opacity: .5; }
+/* «Все точки»: товар на нескольких точках — одной строкой (приёмка f58f7d2). */
+.admrow.prodgroup { display: block; background: none; box-shadow: none; border-radius: 0; margin: 0;
+  padding: 14px 0; border-top: 1px solid var(--line); }
+.grouphead { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 0; border: 0; background: none;
+  color: inherit; font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; }
+.grouphead .prodhead { display: block; }
+.grouphead .prodname, .grouphead .prodstock { display: block; }
+.gprice { flex: 0 0 auto; font-weight: 800; font-size: 15px; padding-top: 2px; white-space: nowrap; }
+.gchev { flex: 0 0 auto; color: var(--hint); font-size: 14px; padding-top: 3px; transition: transform .2s ease; }
+.prodgroup.open .gchev { transform: rotate(180deg); }
+.gpt.low { color: var(--warn); font-weight: 700; }
+.gpt.out { color: var(--danger); font-weight: 700; }
+.grows { margin: 10px 0 0 12px; padding-left: 10px; border-left: 2px solid var(--line); }
+.grows .prodrow:first-child { border-top: 0; }
 
 /* Быстрая цена. Цена в строке — кнопка: цену меняют чаще всего остального,
    и путь к ней не должен идти через всю карточку товара. */

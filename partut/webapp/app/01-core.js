@@ -349,11 +349,51 @@ const NAV = [
 // как плитка в «Товарах».
 const NAV_ПРОДАЖА = { id: "sale", label: "Продажа",
   icon: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2V2z"/><path d="M9 7h6M9 11h6M9 15h4"/>' };
+// Рабочее меню (решение владельца 5.10.2026, приёмка f58f7d2: продавец
+// добирался до заказов через «Профиль → Управление», а «Бонусы» были под
+// рукой). «Работа» — вкладка: точка и сводка дня; «Заказы», «Продажа»,
+// «Товары» открывают свои разделы поверх неё. У продавца включено сразу,
+// у владельца — переключателем в профиле; выбор — у каждого аккаунта свой.
+const NAV_РАБОТА = [
+  { id: "work", label: "Работа", icon: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>' },
+  { id: "orders", label: "Заказы", icon: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v3h6V3"/><path d="M9 11h6M9 15h4"/>' },
+  NAV_ПРОДАЖА,
+  { id: "products", label: "Товары", icon: '<path d="M20.6 13.4L12 22 2 12V2h10l8.6 8.6a2 2 0 010 2.8z"/><circle cx="7" cy="7" r="1.5"/>' },
+  NAV.find(n => n.id === "profile"),
+];
+// Пункты меню, которые открывают раздел поверх, а не вкладку: свайп их пропускает.
+const НЕ_ВКЛАДКИ = new Set(["sale", "orders", "products"]);
+let заказовЖдут = 0;              // для значка на «Заказах»: оплачено, ждёт продавца
+function ключРежима() { const н = номерДляХранилища(); return н ? `partut_work_mode_v1.${н}` : ""; }
+function рабочийРежим() {
+  if (!(me && me.is_admin)) return false;
+  try {
+    const v = ключРежима() ? localStorage.getItem(ключРежима()) : null;
+    if (v === "1") return true;
+    if (v === "0") return false;
+  } catch (e) { /* без хранилища — по умолчанию */ }
+  return me.role === "seller";
+}
+function задатьРабочийРежим(вкл) {
+  try { if (ключРежима()) localStorage.setItem(ключРежима(), вкл ? "1" : "0"); } catch (e) { /* только на этот запуск */ }
+}
 function пунктыМеню() {
   if (!(me && me.is_admin)) return NAV;
-  const вместо = me.role === "seller" ? "cart" : "fav";
-  return NAV.flatMap(n => n.id === вместо ? [NAV_ПРОДАЖА] : (n.id === "fav" ? [] : [n]));
+  if (рабочийРежим()) return NAV_РАБОТА;
+  // Меню покупателя у сотрудника: «Продажа» на месте «Избранного».
+  return NAV.map(n => n.id === "fav" ? NAV_ПРОДАЖА : n);
 }
+// Разделы управления без захода в «Управление»: что показывать по правам
+// (applyAdminScope) и данные (товары, бренды) — как при открытии хаба.
+// свежие — перечитать товары, как openAdmin() при каждом входе: иначе
+// «Товары» из меню показывали бы остатки с первого открытия, а другой
+// продавец за это время мог продать.
+function готовитьАдминку(свежие = false) {
+  applyAdminScope();
+  if (свежие || !_adminBoot) _adminBoot = Promise.all([fetchAdminProducts(), fetchBrands()]);
+}
+function заказыИзМеню() { готовитьАдминку(); openOrders(); }
+async function товарыИзМеню() { готовитьАдминку(true); await openProducts(); }
 async function продажаИзМеню() {
   // Чек строится по списку управления (там и снятое с витрины); не загружен —
   // догружаем, не вышло — откроется по витрине, как и раньше.
@@ -362,13 +402,18 @@ async function продажаИзМеню() {
 }
 function renderNav() {
   $("nav").innerHTML = пунктыМеню().map(n => {
-    const cnt = n.id === "cart" ? cartCount() : 0;
+    const cnt = n.id === "cart" ? cartCount() : n.id === "orders" ? заказовЖдут : 0;
     return `<div class="navwrap"><button class="navbtn ${n.id===activeTab?'active':''}" data-tab="${n.id}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${n.icon}</svg>
       ${n.label}</button>${cnt?`<span class="badge-count">${cnt}</span>`:''}</div>`;
   }).join("");
-  $("nav").querySelectorAll("[data-tab]").forEach(b => b.onclick = () =>
-    b.dataset.tab === "sale" ? продажаИзМеню() : showTab(b.dataset.tab));
+  $("nav").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => {
+    const id = b.dataset.tab;
+    if (id === "sale") продажаИзМеню();
+    else if (id === "orders") заказыИзМеню();
+    else if (id === "products") товарыИзМеню();
+    else showTab(id);
+  });
 }
 function showTab(id) {
   const order = NAV.map(n => n.id);
@@ -381,10 +426,15 @@ function showTab(id) {
   else if (dir < 0) el.classList.add("slide-l");              // назад — слева
   renderNav();
   if (id === "cart") renderCart();
-  if ((id === "cart" || id === "catalog") && city && паузаТочки(city)) перечитатьТочки();
+  // Точку могли закрыть, пока покупатель смотрел каталог (приёмка f58f7d2):
+  // в корзине сверяемся и с открытой точкой — не чаще раза в 30 с; закрытую
+  // (ждём открытия) — как раньше, чаще.
+  if (id === "cart" && city) перечитатьТочки(false, паузаТочки(city) ? 5000 : 30000);
+  else if (id === "catalog" && city && паузаТочки(city)) перечитатьТочки();
   if (id === "fav") renderFav();
   if (id === "bonus") renderBonus();
   if (id === "profile") renderProfile();
+  if (id === "work") renderWork();
   // Деньги на этих экранах могли поменяться без нас (заказ выдали) — F-01.
   // «Бонусы» с ещё не загруженным балансом грузят его сами (renderBonus).
   if (id === "profile" || id === "cart" || (id === "bonus" && bonusReady)) освежитьДеньги();
@@ -505,7 +555,7 @@ document.querySelectorAll(".view").forEach(view => {
     // По тем вкладкам, что человек видит: у продавца нет «Корзины» и
     // «Избранного» — свайп не должен приводить туда. «Продажа» — не вкладка,
     // а чек поверх, свайпом её не открываем.
-    const order = пунктыМеню().map(n => n.id).filter(id => id !== "sale");
+    const order = пунктыМеню().map(n => n.id).filter(id => !НЕ_ВКЛАДКИ.has(id));
     const i = order.indexOf(activeTab);
     if (dx < 0 && i < order.length - 1) showTab(order[i + 1]);          // влево → следующая
     else if (dx > 0 && i > 0) showTab(order[i - 1]);                     // вправо → предыдущая
@@ -597,7 +647,10 @@ async function enterGates() {
   if (me.subscribe_channel && !me.subscribed) {
     $("subscribeView").classList.add("show"); hideSplash(); return;
   }
-  loadCatalog().then(hideSplash).then(prefetchBonuses).then(openDeepLink);
+  // В рабочем меню первым — «Работа», а не витрина (каталог грузится всё
+  // равно: по нему продажа на точке и список товаров).
+  loadCatalog().then(() => { if (рабочийРежим()) showTab("work"); })
+    .then(hideSplash).then(prefetchBonuses).then(openDeepLink);
 }
 
 function showCityGate() {
@@ -1137,10 +1190,10 @@ function паузаТочки(name) {
 // при переходе в корзину и каталог, при возвращении в приложение, по кнопке
 // «Проверить» и в момент, когда наступает время открытия. Не ответил сервер —
 // точка остаётся закрытой: открытой её объявляет только сервер.
-async function перечитатьТочки(сразу) {
-  // Не чаще раза в 5 с при переходах: перечитываем, только пока точка
-  // закрыта, а ответ сервера кэширован — это дёшево.
-  if (!сразу && Date.now() - точкиПрочитаны < 5000) return null;
+async function перечитатьТочки(сразу, интервал = 5000) {
+  // Не чаще раза в `интервал` мс при переходах; ответ сервера кэширован
+  // (и сбрасывается при каждом закрытии и открытии точки) — это дёшево.
+  if (!сразу && Date.now() - точкиПрочитаны < интервал) return null;
   const ок = await fetchLocations();
   обновитьБаннерПаузы();
   if (activeTab === "cart") renderCart();
@@ -1416,7 +1469,19 @@ function renderCart() {
         <a id="termsOffer">офертой</a> и <a id="termsPrivacy">обработкой данных</a>.</div>` : ""}</div>`;
   bindCardButtons($("tab-cart"));
   if ($("useCoinsChk")) $("useCoinsChk").onchange = () => { useCoins = $("useCoinsChk").checked; renderCart(); };
-  $("checkout").onclick = () => { if (!паузаТочки(city)) openDelivery(); };
+  // «Оформить» — сначала свериться, не закрыли ли точку только что: иначе
+  // покупатель проходил доставку и оплату и узнавал о закрытии лишь при
+  // отправке (приёмка f58f7d2). Не ответил сервер — оформляем как раньше:
+  // закрытую точку он всё равно не пропустит.
+  $("checkout").onclick = async () => {
+    if (паузаТочки(city)) return;
+    const кнопка = $("checkout");
+    кнопка.disabled = true; кнопка.textContent = "Проверяю точку…";
+    await перечитатьТочки(false, 5000);
+    if (паузаТочки(city)) { renderCart(); return; }      // корзина скажет «Точка закрыта до …»
+    renderCart();
+    openDelivery();
+  };
   if ($("pauseRecheck")) $("pauseRecheck").onclick = async () => {
     $("pauseRecheck").disabled = true; $("pauseRecheck").textContent = "Проверяю…";
     const ок = await перечитатьТочки(true);
@@ -1489,7 +1554,8 @@ function renderProfile() {
         <button class="pid" id="profIdCopy" style="border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer">ID: ${(tgUser && tgUser.id) || "—"} ⧉</button></div>
       <div class="coins"><b>${bonusReady ? (bonus.coins || 0) : "…"}</b><small>VAPECOINS</small></div></div>
     <div class="plist">
-      ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>` : ""}
+      ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>
+      <div class="prow"><span>🧰 Рабочее меню</span><span class="switch ${рабочийРежим() ? "on" : ""}" id="workSwitch"></span></div>` : ""}
       <!-- Строка называет ТЕКУЩУЮ тему, а не одну и ту же всегда: раньше при
            свете рядом со словом «Тёмная» горело солнышко — значок и подпись
            противоречили друг другу, и было неясно, что показано, а что будет. -->
@@ -1505,6 +1571,13 @@ function renderProfile() {
   $("themeSwitch").onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark");
   $("openMySettings").onclick = openMySettings;
   if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
+  if ($("workSwitch")) $("workSwitch").onclick = () => {
+    const вкл = !рабочийРежим();
+    задатьРабочийРежим(вкл);
+    renderNav(); renderProfile();
+    toast(вкл ? "Рабочее меню: внизу «Работа», «Заказы», «Продажа», «Товары»"
+              : "Меню покупателя: каталог, бонусы, корзина");
+  };
   $("openMyOrders").onclick = openMyOrders;
   $("openCoinHistory").onclick = openCoinHistory;
   $("openMyAlerts").onclick = openMyAlerts;
