@@ -355,7 +355,7 @@ async function doSubmitOrder() {
     closeOverlay($("deliveryOverlay"));
     orderToken = "";                 // заказ есть — следующий будет новым
     currentOrder = d;
-    if (d.coins_used) bonus.coins = Math.max(0, (bonus.coins || 0) - d.coins_used);
+    if (d.coins_used) применитьБаланс(Math.max(0, (bonus.coins || 0) - d.coins_used), номерБаланса());
     useCoins = false;
     for (const k in cart) delete cart[k]; сохранитьКорзину(); renderNav();   // заказ СОЗДАН — чистим корзину сразу (нет дублей)
     if (d.needs_receipt) {

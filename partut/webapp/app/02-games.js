@@ -102,9 +102,11 @@ function scheduleRatchet(ticks, durSec) {
     _ratchetTimers.push(setTimeout(ratchetTick, tsec * 1000));
   }
 }
+// Ставить можно, только когда баланс известен: неизвестный — не «недостаточно».
+function можноСтавить() { return bonusReady && (bonus.coins || 0) >= slotBet; }
 function slotBtnText() {
-  const can = (bonus.coins || 0) >= slotBet;
-  return can ? `Крутить · ${slotBet} 🪙` : "Недостаточно монет";
+  if (!bonusReady) return "Баланс не загрузился";
+  return можноСтавить() ? `Крутить · ${slotBet} 🪙` : "Недостаточно монет";
 }
 function initStrip(el) {   // стартовое состояние барабана — 3 случайных символа
   // Ряд дублирован (3+3 те же символы): заглушка-прокрут (.spinning, CSS) двигает
@@ -164,10 +166,10 @@ function updateSlotPays() {
 }
 function renderSlot() {
   if (!(slot.bets || []).includes(slotBet)) slotBet = (slot.bets || [5])[0];   // защита от stale-значения
-  const canSpin = (bonus.coins || 0) >= slotBet;
+  const canSpin = можноСтавить();
   const pay = slotPayHtml();
   $("gameWrap").innerHTML = `
-    <div class="slot-top"><div class="wheel-head" id="slotHead" style="margin:0">🪙 ${bonus.coins || 0} монет</div>
+    <div class="slot-top"><div class="wheel-head" id="slotHead" style="margin:0">🪙 ${монетНаЭкране()} монет</div>
       <button class="soundtgl" id="slotInfo" aria-label="Правила">ℹ️</button>
       <button class="soundtgl" id="soundTgl" aria-label="Звук">${soundOn ? "🔊" : "🔇"}</button></div>
     <div class="slot3">
@@ -204,7 +206,7 @@ function renderSlot() {
     localStorage.setItem("slotBet", slotBet);
     $("betVal").textContent = `${slotBet} 🪙`;
     updateBetStepBtns();
-    const sb = $("slotBtn"); if (sb) { sb.disabled = (bonus.coins || 0) < slotBet; sb.textContent = slotBtnText(); }
+    const sb = $("slotBtn"); if (sb) { sb.disabled = !можноСтавить(); sb.textContent = slotBtnText(); }
     updateSlotPays();          // суммы пересчитываются на месте (без рефлоу)
     haptic("impact", "light");
   }
@@ -283,7 +285,7 @@ function updateAutoBtn() {
 function toggleAuto() {
   slotAuto = !slotAuto;
   updateAutoBtn();
-  if (slotAuto && !slotSpinning && (bonus.coins || 0) >= slotBet) spinSlot();
+  if (slotAuto && !slotSpinning && можноСтавить()) spinSlot();
   else if (slotAuto) { slotAuto = false; updateAutoBtn(); }   // нет монет — не запускаем
 }
 // Звук — общий тумблер для слота и колеса.
@@ -299,7 +301,7 @@ function showInfo(title, html) {
 }
 $("infoClose").onclick = () => closeOverlay($("infoOverlay"));
 async function spinSlot() {
-  if (slotSpinning || (bonus.coins || 0) < slotBet) return;
+  if (slotSpinning || !можноСтавить()) return;
   slotSpinning = true; $("slotBtn").disabled = true;
   const stage = document.querySelector(".slot3"); if (stage) stage.classList.remove("win");
   haptic("impact", "medium");
@@ -327,7 +329,9 @@ async function spinSlot() {
     [0, 1, 2].forEach(c => { const s = $("strip" + c); if (s) s.classList.remove("spinning"); });
     slotSpinning = false; $("slotBtn").disabled = false; alertMsg(res.error === "no_coins" ? "Недостаточно монет." : "Ошибка."); return;
   }
-  bonus.coins = res.balance;
+  // Баланс после ставки — с номером на момент ответа: чтение, ушедшее до
+  // прокрута и пришедшее после, его не затрёт (приёмка F-01-R2).
+  применитьБаланс(res.balance, номерБаланса());
   const isWin = !!res.win;
   const cols = [0, 1, 2].map(c => [res.grid[0][c], res.grid[1][c], res.grid[2][c]]);
   // Барабаны останавливаются по очереди с заметной, ОДИНАКОВОЙ паузой между
@@ -379,7 +383,7 @@ async function spinSlot() {
     slotSpinning = false;
     if ($("slotHead")) $("slotHead").textContent = `🪙 ${bonus.coins} монет`;
     const btn = $("slotBtn");
-    if (btn) { btn.disabled = (bonus.coins || 0) < slotBet; btn.textContent = slotBtnText(); }
+    if (btn) { btn.disabled = !можноСтавить(); btn.textContent = slotBtnText(); }
     if (isWin) {
       (res.win_cells || []).forEach(([r, c]) => {              // подсветить выигрышные клетки (результат сверху)
         const cell = $("strip" + c) && $("strip" + c).children[r];
@@ -397,7 +401,7 @@ async function spinSlot() {
     if (isWin) { slotStats.won += res.coins; slotStats.best = Math.max(slotStats.best, res.coins); }
     saveSlotStats();
     // Авто-прокрут: продолжаем, если ещё включён, хватает монет и слот на экране.
-    if (slotAuto && document.querySelector(".slot3") && (bonus.coins || 0) >= slotBet) {
+    if (slotAuto && document.querySelector(".slot3") && можноСтавить()) {
       setTimeout(() => { if (slotAuto) spinSlot(); }, isWin ? 900 : 350);
     } else if (slotAuto) { slotAuto = false; updateAutoBtn(); }
   }, maxEnd + 120);
@@ -543,7 +547,7 @@ function referralHtml() {
   const list = (bonus.referrals_list || []).length
     ? bonus.referrals_list.map((r, i) => `<div class="statrow"><span>Реферал ${i + 1}</span><b style="color:${r.active ? '#2e9e4f' : 'var(--hint)'}">${r.active ? "активен" : "ждём заказ"}</b></div>`).join("")
     : `<div class="statrow"><span style="color:var(--hint)">Пока нет рефералов — поделись ссылкой выше</span></div>`;
-  return `<div class="bonushero"><div class="bonuscoin">🪙 ${bonusReady ? (bonus.coins || 0) : "…"}</div><div class="bonuslab">${bonusReady ? "ваши VAPECOINS" : "баланс не загрузился — откройте раздел ещё раз"}</div></div>
+  return `<div class="bonushero"><div class="bonuscoin">🪙 ${монетНаЭкране()}</div><div class="bonuslab">${bonusReady ? "ваши VAPECOINS" : "баланс не загрузился"}</div></div>
     <div class="card-block" style="text-align:left">
       <div style="font-weight:800;margin-bottom:8px">👥 Пригласи друга — получи монеты</div>
       ${bonus.ref_link ? `<div class="reflink">${esc(bonus.ref_link)}</div>` : ""}
@@ -676,7 +680,7 @@ function renderWheel() {
   const canSpin = wheel.spins > 0;
   const pct = Math.min(100, Math.round((wheel.progress / wheel.step) * 100));
   $("wheelWrap").innerHTML = `
-    <div class="slot-top"><div class="wheel-head" id="wheelHead" style="margin:0">🪙 ${bonus.coins || 0} монет</div>
+    <div class="slot-top"><div class="wheel-head" id="wheelHead" style="margin:0">🪙 ${монетНаЭкране()} монет</div>
       <button class="soundtgl" id="wheelInfo" aria-label="Правила">ℹ️</button>
       <button class="soundtgl" id="wheelSound">${soundOn ? "🔊" : "🔇"}</button></div>
     <div class="wheel-stage">
@@ -716,13 +720,13 @@ function renderWheel() {
       const r = await fetch("/api/admin/wheel/grant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
       const d = await r.json();
       if (handledPending(d)) return;
-      if (d.ok) { wheel.spins = d.result.spins; renderWheel(); }
+      if (d.ok && применитьКолесо({ spins: d.result.spins }, номерКолеса())) renderWheel();
     } catch (e) { alertMsg(текстСбоя(e)); }
   };
 }
 function refreshWheelInfo() {
   const canSpin = wheel.spins > 0;
-  if ($("wheelHead")) $("wheelHead").textContent = `🪙 ${bonus.coins || 0} монет`;
+  if ($("wheelHead")) $("wheelHead").textContent = `🪙 ${монетНаЭкране()} монет`;
   if ($("wheelHint")) $("wheelHint").textContent = canSpin ? `Доступно прокрутов: ${wheel.spins}` : `Ещё ${wheel.step - wheel.progress} Br покупок до прокрута`;
   const btn = $("spinBtn");
   if (btn) { btn.disabled = !canSpin || spinning; btn.textContent = canSpin ? "Крутить 🎡" : "Накопите товаров для прокрута"; }
@@ -761,6 +765,7 @@ async function spinWheel() {
   let angle = wheelDeg, lastBucket = sectorIndexAt(angle, bounds);
   let phase = 1, running = true, prevT = performance.now();
   let decelStart = 0, decelDur = 0, startAngle = 0, dist = 0, res = null;
+  let номерБ = 0, номерК = 0;           // номера ответа — на момент, когда он пришёл (F-01-R2)
   // Пройден сектор → тик трещотки.
   const tickCross = () => { const b = sectorIndexAt(angle, bounds); if (b !== lastBucket) { ratchetTick(); lastBucket = b; } };
   // Флажок: резкий толчок по ходу вращения сразу после штырька, плавно к нулю.
@@ -777,7 +782,9 @@ async function spinWheel() {
   function finishWheelSpin() {
     running = false; wheelDeg = angle; spinning = false;
     if (ptr) ptr.style.transform = "";                       // вернуть флажок в покой (для .bump)
-    bonus.coins = res.balance; wheel.spins = res.spins;
+    // Применяем в конце анимации, но с номерами на момент ответа: чтение,
+    // начатое после ответа и уже показанное, свежее — его не затираем.
+    применитьБаланс(res.balance, номерБ); применитьКолесо({ spins: res.spins }, номерК);
     refreshWheelInfo();
     haptic("notify", "success"); winSound();
     if (ptr) { ptr.classList.add("win", "bump"); setTimeout(() => ptr.classList.remove("bump"), 420); }
@@ -818,6 +825,7 @@ async function spinWheel() {
   try {
     const r = await fetch("/api/wheel/spin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     res = await r.json();
+    номерБ = номерБаланса(); номерК = номерКолеса();
   } catch (e) { running = false; spinning = false; $("spinBtn").disabled = false; if ($("wheelResult")) $("wheelResult").textContent = "Сеть недоступна."; return; }
   if (!res.ok) {
     running = false; spinning = false;

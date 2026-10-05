@@ -632,6 +632,8 @@ html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shad
 .tcard.warn .tnum { color: var(--warn); }
 .tcard.calm .tnum { color: var(--text); }
 .tquiet { color: var(--hint); font-size: 13.5px; padding: 2px 4px 8px; }
+/* Баланс не загрузился — над «Бонусами» (приёмка F-01-R1). */
+.bonuswarn { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 /* Вкладка «Работа» (рабочее меню). */
 .workwrap { padding: 16px; }
 .workhead { font-size: 20px; font-weight: 800; margin: 4px 2px 12px; }

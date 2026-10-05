@@ -1552,7 +1552,7 @@ function renderProfile() {
     <div class="profcard"><div class="avatar">${esc(letter)}</div>
       <div><div class="pn">${esc(name)}</div>
         <button class="pid" id="profIdCopy" style="border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer">ID: ${(tgUser && tgUser.id) || "—"} ⧉</button></div>
-      <div class="coins"><b>${bonusReady ? (bonus.coins || 0) : "…"}</b><small>VAPECOINS</small></div></div>
+      <div class="coins"><b>${монетНаЭкране()}</b><small>VAPECOINS</small></div></div>
     <div class="plist">
       ${(me && me.is_admin) ? `<div class="prow" id="openAdmin"><span>🛠 Управление</span><span>›</span></div>
       <div class="prow"><span>🧰 Рабочее меню</span><span class="switch ${рабочийРежим() ? "on" : ""}" id="workSwitch"></span></div>` : ""}
@@ -2051,15 +2051,41 @@ $("supportSend").onclick = async () => {
 let bonus = { coins: 0, referrals: 0, ref_link: "", referral_bonus: 50 };
 let raffleOn = false;            // идёт ли розыгрыш — приходит из /api/me
 let bonusReady = false, wheelReady = false, slotReady = false;   // кэш: не перезапрашивать зря
-// Когда баланс и колесо в последний раз пришли с сервера (Date.now()).
+// Когда начато чтение, чей ответ сейчас на экране (Date.now()).
 let бонусВзят = 0, колесоВзято = 0;
+// Порядок ответов (приёмка F-01-R2, 5.10.2026). Чтения баланса шли из
+// нескольких мест (запуск, «Бонусы», свежесть денег, после заказа), и ответ,
+// ушедший раньше, мог прийти позже: старые 500 затирали свежие 530 и ещё
+// считались свежими. Теперь у каждого чтения — номер; ответ на действие
+// (прокрут, заказ) тоже получает номер в момент, когда пришёл. На экран идёт
+// только значение новее показанного; опоздавшее старое отбрасывается.
+let бонусНомер = 0, бонусПоказан = 0, колесоНомер = 0, колесоПоказано = 0;
 async function fetchBonus() {
+  const мой = ++бонусНомер, начат = Date.now();
   try {
     const r = await fetch("/api/bonus", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
-    if (d.ok) { bonus = d; bonusReady = true; бонусВзят = Date.now(); }
+    if (d.ok && мой > бонусПоказан) { bonus = d; bonusReady = true; бонусВзят = начат; бонусПоказан = мой; }
   } catch (e) {}
 }
+// Номер для ответа на действие — взять в ту же минуту, когда ответ пришёл.
+function номерБаланса() { return ++бонусНомер; }
+function номерКолеса() { return ++колесоНомер; }
+// Баланс из ответа сервера на действие: применяется, только если новее
+// показанного. Неизвестным (ни разу не загруженным) он от этого не перестаёт
+// быть: остальное в bonus (ссылка, рефералы) пришло бы только чтением.
+function применитьБаланс(монет, номер) {
+  if (номер <= бонусПоказан) return false;
+  bonus.coins = монет; бонусПоказан = номер; бонусВзят = Date.now();
+  return true;
+}
+function применитьКолесо(поля, номер) {
+  if (номер <= колесоПоказано) return false;
+  Object.assign(wheel, поля); колесоПоказано = номер; колесоВзято = Date.now();
+  return true;
+}
+// Баланс для экрана: неизвестный — «…», а не ноль (приёмка F-01-R1).
+function монетНаЭкране() { return bonusReady ? String(bonus.coins || 0) : "…"; }
 
 // ---- Свежесть денег на экране (приёмка F-01, 5.10.2026) ----
 // Монеты и прокруты колеса начисляются не только здесь: продавец выдал заказ —
@@ -2105,10 +2131,11 @@ let _slotStats = (() => { try { return JSON.parse(localStorage.getItem("slotStat
 const slotStats = { spins: _slotStats.spins || 0, won: _slotStats.won || 0, wagered: _slotStats.wagered || 0, best: _slotStats.best || 0 };
 const saveSlotStats = () => { try { localStorage.setItem("slotStats", JSON.stringify(slotStats)); } catch (e) {} };
 async function fetchWheel() {
+  const мой = ++колесоНомер, начат = Date.now();
   try {
     const r = await fetch("/api/wheel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
     const d = await r.json();
-    if (d.ok) { wheel = d; wheelReady = true; колесоВзято = Date.now(); }
+    if (d.ok && мой > колесоПоказано) { wheel = d; wheelReady = true; колесоВзято = начат; колесоПоказано = мой; }
   } catch (e) {}
 }
 async function fetchSlot() {
@@ -2151,7 +2178,17 @@ async function renderBonus() {
         <button data-gm="slot" class="${gameMode === 'slot' ? 'on' : ''}">🎰 Облако Монет</button></div>
       <div id="gameWrap"></div>`;
   }
-  $("tab-bonus").innerHTML = `<div class="bonuswrap">${seg}${body}</div>`;
+  // Баланс не загрузился — сказать прямо и дать повторить (приёмка F-01-R1):
+  // раньше колесо и слот писали «0 монет», а слот — «Недостаточно монет».
+  const нетБаланса = bonusReady ? "" : `<div class="dwarn bonuswarn">⚠️ Баланс не загрузился — монеты пока «…», ставить в слоте нельзя.
+      <button type="button" class="barbtn" id="bonusRetry">↻ Повторить</button></div>`;
+  $("tab-bonus").innerHTML = `<div class="bonuswrap">${нетБаланса}${seg}${body}</div>`;
+  if ($("bonusRetry")) $("bonusRetry").onclick = async () => {
+    const кнопка = $("bonusRetry");
+    кнопка.disabled = true; кнопка.textContent = "Загружаю…";
+    await освежитьДеньги(true);
+    if (!bonusReady) { toast("Баланс снова не загрузился — проверьте связь."); renderBonus(); }
+  };
   $("tab-bonus").querySelectorAll("[data-bt]").forEach(b => b.onclick = () => { bonusTab = b.dataset.bt; renderBonus(); });
   $("tab-bonus").querySelectorAll("[data-gm]").forEach(b => b.onclick = () => { gameMode = b.dataset.gm; renderBonus(); });
   if (bonusTab === "wheel") {
