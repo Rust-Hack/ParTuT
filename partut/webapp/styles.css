@@ -632,6 +632,10 @@ html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shad
 .tcard.warn .tnum { color: var(--warn); }
 .tcard.calm .tnum { color: var(--text); }
 .tquiet { color: var(--hint); font-size: 13.5px; padding: 2px 4px 8px; }
+/* Раздел, открытый из нижнего меню («Заказы», «Продажа», «Товары»), — над
+   меню, а не поверх него: меню видно и подсвечивает раздел (5.10.2026). */
+.view.vnav { bottom: calc(var(--nav-h) + max(env(safe-area-inset-bottom), 14px)); padding-bottom: 16px; }
+.view.vnav .dlvbar { bottom: 8px; }
 /* Баланс не загрузился — над «Бонусами» (приёмка F-01-R1). */
 .bonuswarn { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 /* Вкладка «Работа» (рабочее меню). */

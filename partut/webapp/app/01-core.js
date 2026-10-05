@@ -396,23 +396,68 @@ function заказыИзМеню() { готовитьАдминку(); openOrde
 async function товарыИзМеню() { готовитьАдминку(true); await openProducts(); }
 async function продажаИзМеню() {
   // Чек строится по списку управления (там и снятое с витрины); не загружен —
-  // догружаем, не вышло — откроется по витрине, как и раньше.
-  if (!adminProducts.length) await fetchAdminProducts();
+  // догружаем, не вышло — откроется по витрине, как и раньше. Окно — сразу,
+  // с «загружаю»: раньше нажатие ничем не отвечало, пока шёл запрос.
+  if (!adminProducts.length) {
+    $("saleView").classList.add("show");
+    $("saleFound").innerHTML = loaderHtml(); $("saleDoc").innerHTML = "";
+    await fetchAdminProducts();
+    if (!$("saleView").classList.contains("show")) return;   // закрыли, пока грузилось
+  }
   openSale();
 }
+
+// ---- Разделы нижнего меню — как вкладки (замечание владельца 5.10.2026) ----
+// «Заказы», «Продажа», «Товары» открывали окно на весь экран: меню пропадало,
+// подсвеченной оставалась «Работа», окно появлялось только после ответа
+// сервера — а пока он шёл, нажатие «Заказы» открывало второе окно поверх.
+// Теперь раздел открывается сразу, над меню (оно видно и подсвечивает
+// раздел), другой пункт меню переключает раздел, а не кладёт окно на окно.
+const РАЗДЕЛЫ_МЕНЮ = { orders: "ordersView", sale: "saleView", products: "productsView" };
+let разделМеню = null;            // какой раздел открыт из меню (его пункт подсвечен)
+// Закрыть раздел меню его же «Назад»: у продажи оно сохраняет черновик чека.
+function закрытьРазделМеню() {
+  if (!разделМеню) return;
+  const вид = $(РАЗДЕЛЫ_МЕНЮ[разделМеню]);
+  if (вид.classList.contains("show")) вид.querySelector(".viewhead button").click();
+  вид.classList.remove("vnav");
+  разделМеню = null;
+}
+function открытьРазделМеню(id) {
+  if (разделМеню === id && $(РАЗДЕЛЫ_МЕНЮ[id]).classList.contains("show")) return;   // уже открыт
+  закрытьРазделМеню();
+  разделМеню = id;
+  $(РАЗДЕЛЫ_МЕНЮ[id]).classList.add("vnav", "show");
+  renderNav();
+  if (id === "sale") продажаИзМеню(); else if (id === "orders") заказыИзМеню(); else товарыИзМеню();
+}
+// Раздел закрыли любым путём (своё «Назад», «Назад» Telegram, жест) — меню
+// перестаёт его подсвечивать.
+Object.entries(РАЗДЕЛЫ_МЕНЮ).forEach(([id, вид]) => {
+  const el = $(вид);
+  if (!el || typeof MutationObserver === "undefined") return;
+  new MutationObserver(() => {
+    if (el.classList.contains("show") || !el.classList.contains("vnav")) return;
+    el.classList.remove("vnav");
+    if (разделМеню === id) { разделМеню = null; renderNav(); }
+  }).observe(el, { attributes: true, attributeFilter: ["class"] });
+});
 function renderNav() {
+  // Точка в шапке — где покупать. В рабочем меню она ничего не выбирает
+  // (сводка и продажа — по точке продавца), а выглядела выбором рабочей
+  // точки: сменил — и ничего не изменилось. Прячем, пока меню рабочее.
+  $("pointBtn").hidden = рабочийРежим();
+  const активный = разделМеню || activeTab;
   $("nav").innerHTML = пунктыМеню().map(n => {
     const cnt = n.id === "cart" ? cartCount() : n.id === "orders" ? заказовЖдут : 0;
-    return `<div class="navwrap"><button class="navbtn ${n.id===activeTab?'active':''}" data-tab="${n.id}">
+    return `<div class="navwrap"><button class="navbtn ${n.id===активный?'active':''}" data-tab="${n.id}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${n.icon}</svg>
       ${n.label}</button>${cnt?`<span class="badge-count">${cnt}</span>`:''}</div>`;
   }).join("");
   $("nav").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => {
     const id = b.dataset.tab;
-    if (id === "sale") продажаИзМеню();
-    else if (id === "orders") заказыИзМеню();
-    else if (id === "products") товарыИзМеню();
-    else showTab(id);
+    if (РАЗДЕЛЫ_МЕНЮ[id]) открытьРазделМеню(id);
+    else { закрытьРазделМеню(); showTab(id); }
   });
 }
 function showTab(id) {
@@ -564,12 +609,21 @@ document.querySelectorAll(".view").forEach(view => {
 
 // ---------- Нативная кнопка «Назад» Telegram ----------
 // Показываем её, когда открыт экран/шторка, и закрываем верхний слой (а не приложение).
+// Верхний из открытых — тот, у кого слой выше (экраны «ontop»), при равном —
+// кто ниже в разметке. Раньше брали просто последний в разметке, а «Склад»
+// стоит в ней выше «Товаров», правка заказа и «Причина отказа» — выше
+// «Заказов»: «Назад» закрывал нижний экран, а верхний оставался висеть
+// (пересмотр 5.10.2026).
+function верхний(список) {
+  const слой = (el) => parseInt(getComputedStyle(el).zIndex, 10) || 0;
+  return список.reduce((верх, el) => (слой(el) >= слой(верх) ? el : верх));
+}
 function managedTopLayer() {
   const ov = [...document.querySelectorAll(".overlay.show")];
-  if (ov.length) return { type: "overlay", el: ov[ov.length - 1] };
+  if (ov.length) return { type: "overlay", el: верхний(ov) };
   // экраны с кнопкой в шапке (18+/оплата/готово не трогаем — у них свой поток)
   const views = [...document.querySelectorAll(".view.show")].filter(v => v.querySelector(".viewhead button"));
-  if (views.length) return { type: "view", el: views[views.length - 1] };
+  if (views.length) return { type: "view", el: верхний(views) };
   return null;
 }
 function updateBackButton() {
@@ -1571,12 +1625,14 @@ function renderProfile() {
   $("themeSwitch").onclick = () => applyTheme(currentTheme() === "dark" ? "light" : "dark");
   $("openMySettings").onclick = openMySettings;
   if ($("openAdmin")) $("openAdmin").onclick = openAdmin;
+  // Переключили режим — сразу туда, где он начинается: рабочее — «Работа»,
+  // покупательское — каталог. Раньше менялось только меню, а человек
+  // оставался в профиле и не понимал, что произошло.
   if ($("workSwitch")) $("workSwitch").onclick = () => {
     const вкл = !рабочийРежим();
     задатьРабочийРежим(вкл);
-    renderNav(); renderProfile();
-    toast(вкл ? "Рабочее меню: внизу «Работа», «Заказы», «Продажа», «Товары»"
-              : "Меню покупателя: каталог, бонусы, корзина");
+    showTab(вкл ? "work" : "catalog");
+    toast(вкл ? "Рабочее меню включено — выключается в «Профиле»" : "Меню покупателя — рабочее включается в «Профиле»");
   };
   $("openMyOrders").onclick = openMyOrders;
   $("openCoinHistory").onclick = openCoinHistory;
@@ -2127,9 +2183,19 @@ let slotBet = parseInt(localStorage.getItem("slotBet") || "5", 10) || 5;   // т
 let slotHistory = [];   // последние результаты слота (сессия): >0 выигрыш, 0 промах
 let _anticHb = null;    // таймер пульс-хаптика на предвкушении
 let slotAuto = false;   // авто-прокрут вкл/выкл
-let _slotStats = (() => { try { return JSON.parse(localStorage.getItem("slotStats") || "{}"); } catch (e) { return {}; } })();
+// «Ваша статистика» слота — у каждого аккаунта своя, как корзина (F-02): раньше
+// одна запись на телефон, и второй аккаунт видел цифры первого как свои.
+// Прежнюю общую запись не получает никто — чья она, неизвестно.
+const ключСтатистики = () => { const н = номерДляХранилища(); return н ? `slotStats.${н}` : ""; };
+let _slotStats = (() => {
+  try {
+    localStorage.removeItem("slotStats");
+    const к = ключСтатистики();
+    return (к && JSON.parse(localStorage.getItem(к) || "{}")) || {};
+  } catch (e) { return {}; }
+})();
 const slotStats = { spins: _slotStats.spins || 0, won: _slotStats.won || 0, wagered: _slotStats.wagered || 0, best: _slotStats.best || 0 };
-const saveSlotStats = () => { try { localStorage.setItem("slotStats", JSON.stringify(slotStats)); } catch (e) {} };
+const saveSlotStats = () => { try { const к = ключСтатистики(); if (к) localStorage.setItem(к, JSON.stringify(slotStats)); } catch (e) {} };
 async function fetchWheel() {
   const мой = ++колесоНомер, начат = Date.now();
   try {

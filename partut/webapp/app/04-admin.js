@@ -101,11 +101,15 @@ function сводкаВ(html, привязать) {
   МЕСТА_СВОДКИ.forEach(id => { const у = $(id); if (у) { у.innerHTML = html; if (привязать) привязать(у); } });
 }
 
+// С вкладки «Работа» плитка открывает раздел так же, как нижнее меню (над
+// ним, пункт подсвечен); из «Управления» — поверх него, как и раньше.
+function кЗаказам(фильтр, сРаботы) { ordersStatusFilter = фильтр; if (сРаботы) открытьРазделМеню("orders"); else openOrders(); }
+
 function renderToday(t) {
   const need = t.out_stock + t.low_stock;
   const tiles = [
-    { n: t.waiting, lab: "ждут подтверждения", cls: t.waiting ? "act" : "calm", go: () => { ordersStatusFilter = "paid"; openOrders(); } },
-    { n: t.to_issue, lab: "к выдаче", cls: "calm", go: () => { ordersStatusFilter = "confirmed"; openOrders(); } },
+    { n: t.waiting, lab: "ждут подтверждения", cls: t.waiting ? "act" : "calm", go: (сРаботы) => кЗаказам("paid", сРаботы) },
+    { n: t.to_issue, lab: "к выдаче", cls: "calm", go: (сРаботы) => кЗаказам("confirmed", сРаботы) },
     { n: `${(+t.revenue_today).toFixed(2)} ${CUR}`,
       // Выручка дня — вместе с продажами на точке: называем и их, иначе сумма
       // не сходилась бы с числом заказов под ней.
@@ -113,15 +117,16 @@ function renderToday(t) {
         + (t.point_today ? ` · ${t.point_today} на точке` : ""),
       cls: "calm",
       // Продавцу точки статистика магазина закрыта — ведём его в свои выданные.
-      go: () => { if (isOwner()) openStats(); else { ordersStatusFilter = "issued"; openOrders(); } } },
+      go: (сРаботы) => { if (isOwner()) openStats(); else кЗаказам("issued", сРаботы); } },
     { n: need, lab: t.out_stock ? `надо завезти · ${t.out_stock} кончилось` : "надо завезти",
-      cls: need ? "warn" : "calm", go: () => { admStockFilter = "need"; openProducts(); } },
+      cls: need ? "warn" : "calm",
+      go: (сРаботы) => { admStockFilter = "need"; if (сРаботы) открытьРазделМеню("products"); else openProducts(); } },
   ];
   const quiet = !t.waiting && !need
     ? `<div class="tquiet">Ничего не ждёт — можно спокойно работать.</div>` : "";
   сводкаВ(`<div class="today">${tiles.map((x, i) =>
     `<button class="tcard ${x.cls}" data-t="${i}"><div class="tnum">${x.n}</div><div class="tlab">${x.lab}</div></button>`).join("")}</div>${quiet}`,
-    (у) => у.querySelectorAll("[data-t]").forEach(b => b.onclick = () => tiles[+b.dataset.t].go()));
+    (у) => у.querySelectorAll("[data-t]").forEach(b => b.onclick = () => tiles[+b.dataset.t].go(у.id === "workToday")));
 }
 
 // ----- Точка закрыта на время -----
@@ -629,17 +634,24 @@ function выбранныеЧипыВВиду() {
 }
 
 async function openProducts() {
+  // Окно — сразу (замечание владельца 5.10.2026): раньше оно появлялось
+  // только после ответа сервера, и нажатие ничем не отвечало. Пока данные
+  // идут — прежний список с «Обновляю…» или, если его ещё нет, «загружаю».
+  const вид = $("productsView");
+  вид.classList.add("show");
+  if (adminProducts.length) { renderAdmFilters(); renderAdminList(); $("admCount").textContent = "Обновляю…"; }
+  else { $("adminList").innerHTML = loaderHtml(); $("admCount").textContent = ""; }
   // Список читает shelf() — тот самый adminProducts, который заводит
   // openAdmin(). Тап сразу после открытия хаба мог обогнать этот запрос
   // и показать пустоту или прошлый визит; ждём тот же промис, а не свой.
   if (_adminBoot) await _adminBoot;
   // Описания нужны списку: товары, которые нигде не продаются, — внизу.
   await Promise.all([isOwner() ? fetchModels() : null, загрузитьАрхив()]);   // архив — внизу, свёрнутым
+  if (!вид.classList.contains("show")) return;            // закрыли, пока грузилось
   renderAdmFilters();
   renderAdminList();
   обновитьКнопкуПоставки();                              // напомнить о непроведённом черновике
   обновитьКнопкуНового();                                // «Новый товар» — владельцу, с пометкой о черновике
-  $("productsView").classList.add("show");
   выбранныеЧипыВВиду();                                  // размеры появились только сейчас
 }
 $("productsClose").onclick = () => { $("productsView").classList.remove("show"); if (activeTab === "work") renderWork(); };
