@@ -68,7 +68,7 @@ $("brSearch").oninput = () => { brandSearch = $("brSearch").value; renderBrandLi
 function renderBrandList() {
   if (!brands.length) { $("brList").innerHTML = `<p style="color:var(--hint);margin-top:12px">Брендов пока нет.</p>`; return; }
   const q = brandSearch.trim().toLowerCase();
-  const filtered = brands.filter(b => !q || b.name.toLowerCase().includes(q));
+  const filtered = brands.filter(b => !q || ищетсяВ(b.name.toLowerCase(), q));
   if (!filtered.length) { $("brList").innerHTML = `<p style="color:var(--hint);margin-top:12px">Ничего не найдено.</p>`; return; }
   let html = "";
   // Общие бренды идут первыми: бренд «во всех категориях» — теперь норма,
@@ -499,7 +499,7 @@ async function openStockPick() {
 
 function renderStockPick() {
   const q = ($("stockPickSearch").value || "").trim().toLowerCase();
-  const список = models.filter(m => !q || `${m.name} ${m.brand || ""}`.toLowerCase().includes(q));
+  const список = models.filter(m => нашласьМодель(m, q));
   if (!models.length) {
     $("stockPickList").innerHTML = `<p style="color:var(--hint);font-size:13.5px;margin:8px 0 0">Товаров пока нет. Новый товар заводит владелец — кнопкой «✨ Новый товар».</p>`;
     return;
@@ -553,7 +553,7 @@ function нарисоватьСписокТоваров() {
     const st = stockState(p);
     if (admStockFilter === "need" && st === "ok") return false;
     if (admStockFilter === "out" && st !== "out") return false;
-    if (q && !(`${p.name} ${p.brand || ""} ${p.flavor || ""}`.toLowerCase().includes(q))) return false;
+    if (q && !нашлось(p, q)) return false;                // и по вариантам, и «е» = «ё» (ROLE-04/05)
     return true;
   });
   // Точку пишем в строке, только когда в списке все точки сразу. Выбран один
@@ -655,7 +655,7 @@ function блокНигде() {
   const стоят = new Set([...shelf(), ...архивТоваров].map(p => p.model_id).filter(Boolean));
   const нигде = models.filter(m => !стоят.has(m.id)
     && (admCatFilter === "all" || m.category === admCatFilter)
-    && (!q || `${m.name} ${m.brand || ""}`.toLowerCase().includes(q)));
+    && нашласьМодель(m, q));
   if (!нигде.length) return "";
   return `<div class="nowhere"><div class="nowhere-h">Нигде не продаётся · ${нигде.length}</div>
     <p class="dlvscope">Описание есть, а на точках товара нет. Завезите его или удалите, если больше не нужен.</p>
@@ -722,7 +722,7 @@ function блокАрхив() {
   const список = архивТоваров.filter(p => (!myScope() || p.city === myScope())
     && (admLocFilter === "all" || p.city === admLocFilter)
     && (admCatFilter === "all" || p.category === admCatFilter)
-    && (!q || `${p.name} ${p.brand || ""}`.toLowerCase().includes(q)));
+    && нашлось(p, q));
   if (!список.length) return "";
   const сТочкой = !myScope() && admLocFilter === "all" && locations.length > 1;
   return `<details class="archive" id="admArchive"${архивОткрыт ? " open" : ""}>
@@ -785,7 +785,13 @@ function строкаТовара(p, сТочкой, вГруппе = false) {
   // Второстепенное — отдельной строкой под остатком и только то, что есть:
   // впихнуть всё в одну строку узкого телефона — значит сделать нечитаемым.
   // Словами, а не значками: «♥ 2» без подсказки не расшифровать.
+  // Нашли по варианту («Белый»), а не по названию — сразу его остаток: ради
+  // этого и искали (приёмка ROLE-04), а открывать «Склад» ради взгляда незачем.
+  const запрос = (admSearch || "").trim().toLowerCase();
+  const совпали = запрос && hasVariants(p) && !ищетсяВ(`${p.name} ${p.brand || ""}`.toLowerCase(), запрос)
+    ? p.variants.filter(v => ищетсяВ(String(v.flavor || "").toLowerCase(), запрос)) : [];
   const детали = [
+    совпали.length ? `<span class="matchv">${совпали.map(v => `${esc(v.flavor)}&nbsp;—&nbsp;${+v.stock || 0}&nbsp;шт`).join(" · ")}</span>` : "",
     // Сколько человек подписались на поступление — прямой повод завезти,
     // поэтому первым.
     p.waiting ? `<span class="warnc">${нр(`ждут поступления ${p.waiting}`)}</span>` : "",

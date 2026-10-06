@@ -198,7 +198,7 @@ function нарисоватьНайденное() {
   // вспоминать название. Когда товары уже есть, список — только по поиску.
   if (пЧерн.order.length && !q) { $("dlvFound").innerHTML = ""; return; }
   const все = shelf().filter(p => p.city === пТочка && !в.has(p.id)
-    && (!q || `${p.name} ${p.brand || ""} ${(p.variants || []).map(v => v.flavor).join(" ")}`.toLowerCase().includes(q)));
+    && нашлось(p, q));
   const видно = все.slice(0, 40);
   $("dlvFound").innerHTML = (видно.length
     ? `<div class="dlvhint">${q ? "Нашлось:" : "Выберите, что привезли, — или найдите поиском:"}</div>`

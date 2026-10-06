@@ -44,7 +44,7 @@ function стенд({ ручная = false } = {}) {
   const сервер = { монет: 0, прокрутов: 0, лежит: false };
   const ждут = [];
   const часы = { t: 1_000_000 };
-  const журнал = { запросов: { bonus: 0, wheel: 0 }, профиль: 0, бонусы: 0, корзина: 0 };
+  const журнал = { запросов: { bonus: 0, wheel: 0 }, профиль: 0, бонусы: 0, корзина: 0, витрина: [] };
   const слушатели = {};
   const документ = {
     visibilityState: "visible",
@@ -53,6 +53,8 @@ function стенд({ ручная = false } = {}) {
   };
   const вкладка = { classList: { add() {}, remove() {} } };
   const ctx = vm.createContext({
+    // Витрина — не предмет этого теста, но вход в каталог и корзину обязан её освежать (ROLE-03).
+    освежитьВитрину: () => { журнал.витрина.push(ctx.activeTab); return Promise.resolve(true); },
     Date: { now: () => часы.t }, JSON, Promise, Math, String, Object, initData: "qa",
     localStorage: { getItem: () => null, setItem() {} }, parseInt,
     document: документ, window: { scrollTo() {} }, $: () => вкладка,
@@ -216,6 +218,13 @@ function стенд({ ручная = false } = {}) {
     проверка(`баланс 3 при ставке 5 — «${текст()}»`, текст() === "Недостаточно монет" && !можно());
     vm.runInContext("bonus.coins = 500", слот);
     проверка(`баланс 500 — «${текст()}»`, текст() === "Крутить · 5 🪙" && можно());
+  }
+  // ---- Вход в каталог и корзину освежает витрину (приёмка ROLE-03) ----
+  {
+    const с = стенд();
+    for (const вкладка of ["profile", "catalog", "bonus", "cart"]) { с.js(`showTab("${вкладка}")`); await с.тик(); }
+    проверка("вход в каталог и в корзину зовёт освежение витрины, в профиль и бонусы — нет",
+      с.журнал.витрина.join() === "catalog,cart", с.журнал.витрина);
   }
 
   дошлиДоКонца = true;

@@ -159,8 +159,14 @@ def run():
         # ---------- Владелец ----------
         c5 = Checker("Владелец")
         _as(OWNER)
-        c5("заводит модель",
-          _post("/api/admin/model", category="podsystem", name="Общая").get_json().get("ok"))
+        r = _post("/api/admin/model", category="podsystem", name="Общая")
+        c5("заводит модель", r.get_json().get("ok"))
+        c5("правит описание: новое название и вкус",
+          _post("/api/admin/model", id=r.get_json().get("id"), category="podsystem", name="Общая Про",
+                flavors=["Мята"]).get_json().get("ok"))
+        # Открыть «Товары», «Работу», «Продажу», «Зарплату» — это просмотр, не действие.
+        for путь in ("/api/admin/archive", "/api/admin/pauses", "/api/admin/sales", "/api/admin/payroll"):
+            _post(путь)
         c5("меняет реквизиты",
           _post("/api/admin/settings/update", payment_info="Карта 1234").get_json().get("ok"))
         c5("видит статистику", _post("/api/admin/stats").get_json().get("ok"))
@@ -203,6 +209,15 @@ def run():
           all(r["action"] not in ("orders", "models", "stats", "today", "log") for r in rows))
         c8("секрет не сохранён", all("initData" not in (r["details"] or "") for r in rows))
         c8("действия владельца тоже записаны", any(r["action"] == "model" for r in rows))
+        # Просмотры писались как действия: журнал тонул в «archive» и «sales» (6.10.2026).
+        c8("просмотры «Товаров», «Работы», «Продажи», «Зарплаты» журнал не засоряют",
+          all(r["action"] not in ("archive", "pauses", "sales", "payroll") for r in rows))
+        # Правка описания писалась перечнем полей «id=11 · name=…» — без прежнего названия.
+        c8("правка описания — по-человечески: было → стало и новый вкус",
+          any("название «Общая» → «Общая Про»" in (r["details"] or "") and "варианты + Мята" in (r["details"] or "")
+              for r in rows if r["action"] == "model"))
+        c8("новое описание тоже названо", any((r["details"] or "").startswith("Новое описание «Общая»")
+                                               for r in rows if r["action"] == "model"))
 
         fails = (c.fails + c2.fails + c3.fails + c4.fails + c5.fails
                  + c6.fails + c7.fails + c8.fails)

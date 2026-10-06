@@ -272,6 +272,10 @@ _ADMIN_READS = {
     "/api/admin/orders", "/api/admin/stats", "/api/admin/stock/moves", "/api/admin/promos",
     "/api/admin/staff", "/api/admin/raffle", "/api/admin/settings", "/api/admin/models",
     "/api/admin/referrals", "/api/admin/log", "/api/admin/products", "/api/admin/today",
+    # Тоже только читают, а писались в журнал при каждом входе в «Товары»,
+    # «Работу», «Продажу», «Зарплату»: журнал тонул в «archive» и «sales», и
+    # правку цены в нём было не найти (проход трёх ролей, 6.10.2026).
+    "/api/admin/archive", "/api/admin/pauses", "/api/admin/sales", "/api/admin/payroll",
 }
 
 # Поля запроса, которые стоит сохранить в журнале. Остальные — либо секреты

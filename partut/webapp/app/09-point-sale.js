@@ -147,7 +147,7 @@ function нарисоватьНайденноеПродажи() {
   const в = new Set(сЧек.order);
   if (сЧек.order.length && !q) { $("saleFound").innerHTML = ""; return; }
   const все = shelf().filter(p => p.city === сТочка && !в.has(p.id) && +p.stock > 0
-    && (!q || `${p.name} ${p.brand || ""} ${(p.variants || []).map(v => v.flavor).join(" ")}`.toLowerCase().includes(q)));
+    && нашлось(p, q));
   const видно = все.slice(0, 40);
   $("saleFound").innerHTML = видно.length
     ? `<div class="dlvhint">${q ? "Нашлось:" : "Что продали? Выберите — или найдите поиском:"}</div>`

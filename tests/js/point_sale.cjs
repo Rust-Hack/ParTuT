@@ -60,7 +60,7 @@ function стенд(сеть, настройки = {}) {
       return { json: async () => ответ };
     },
   });
-  vm.runInContext(код, ctx);
+  vm.runInContext(require("./_search.cjs") + "\n" + код, ctx);      // поиск — настоящий (ROLE-04/05)
   const js = (к) => vm.runInContext(к, ctx);
   return { ctx, js, сказано, тосты, запросы, хранилище, узлы,
            ждать: async () => { for (let i = 0; i < 5; i++) { await (ctx.__да || null); await new Promise(r => setImmediate(r)); } },
@@ -163,6 +163,20 @@ const список = (продажи) => ({ ok: true, sales: продажи });
     чужой.js("openSale()");
     await чужой.ждать();
     проверка("чужой ключ в списке — чек не трогаем", чужой.чек() && чужой.чек().order.length === 1);
+  }
+
+  // ---- Поиск в «Продаже»: варианты и «е» = «ё» (приёмки ROLE-04/05) ----
+  {
+    const с = стенд({ "/api/admin/sales": список([]) }, { полка: [
+      { id: 7, city: "Минск", name: "QA чехол", price: 20, stock: 3, variants: [{ flavor: "Чёрный", stock: 2 }, { flavor: "Белый", stock: 1 }] },
+      { id: 8, city: "Минск", name: "Кабель", price: 10, stock: 5, variants: [] },
+    ] });
+    с.js("openSale()");
+    await с.ждать();
+    const нашлось = (q) => { с.js(`сПоиск = ${JSON.stringify(q)}; нарисоватьНайденноеПродажи()`);
+      return [...с.узлы.saleFound.innerHTML.matchAll(/data-sadd="(\d+)"/g)].map(m => +m[1]).join(); };
+    проверка("«черный» в «Продаже» находит чехол с вариантом «Чёрный»", нашлось("черный") === "7", нашлось("черный"));
+    проверка("«белый» — тот же чехол, «кабель» — кабель", нашлось("белый") === "7" && нашлось("кабель") === "8");
   }
 
   // ---- Свежесть остатков в чеке (приёмка UX-48-01) ----

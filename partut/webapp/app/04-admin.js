@@ -1889,7 +1889,7 @@ function renderStockRows() {
   const q = ($("stockFind").value || "").trim().toLowerCase();
   const строки = stockСтроки();
   $("stockFind").style.display = строки.length > 8 ? "" : "none";
-  $("stockRows").innerHTML = строки.filter(s => !q || s.flavor.toLowerCase().includes(q)).map(s => {
+  $("stockRows").innerHTML = строки.filter(s => !q || ищетсяВ(s.flavor.toLowerCase(), q)).map(s => {
     const есть = `свободно ${s.stock}` + (s.reserved ? ` · в заказах ${s.reserved}` : "");
     const отказ = stockErrors[s.key]
       ? `<div class="dwarn" style="flex-basis:100%;margin-top:4px">${esc(stockErrors[s.key])}</div>` : "";
@@ -2397,6 +2397,15 @@ const LOG_NAMES = {
   "category/spec/delete": "удалил характеристику",
   "referral/unlink": "отвязал реферала", "referral/clear": "отвязал всех рефералов",
   "wheel/grant": "начислил прокруты",
+  // Действия, появившиеся позже, — тоже по-русски (приёмка ROLE-02): в журнале
+  // стояли «sale», «stock/move/batch», «product/publish».
+  "sale": "продажа на точке", "sale/cancel": "отменил продажу на точке",
+  "stock/move/batch": "движение склада", "product/publish": "новый товар",
+  "product/variants/change": "изменил варианты", "photo/draft": "фото для нового товара",
+  "pause": "закрыл точку", "pause/open": "открыл точку", "location/rename": "переименовал точку",
+  "category/restore": "вернул категорию", "payroll/pay": "отметил выплату",
+  "raffle/cancel": "отменил розыгрыш", "stats/export": "выгрузил заказы",
+  "catalog/fix": "наводка каталога",          // разовая правка данных при выкатке, не маршрут
 };
 
 const LOG_FIELDS = { price: "цена", cost: "закупка", stock: "остаток", name: "название",
@@ -2409,10 +2418,16 @@ const LOG_ACTIONS = { confirm: "подтверждён", issued: "выдан", r
 // «id=14 · field=price · value=15.5» — это язык запроса, а не человека.
 // Показываем товар по имени и говорим, что именно изменилось.
 function logLine(x) {
+  // Сервер пишет готовую строку «было → стало» («ЗЛАЯ МИЛФА · Туров: Цена
+  // 18.50 Br → 19.00 Br»), а разбор ждал старое «ключ=значение» и выбрасывал
+  // её: правка цены выглядела как «изменил товар · :», публикация и новый
+  // вкус — пустыми (приёмка ROLE-02). Пар «ключ=значение» нет — строка уже
+  // человеческая, показываем как есть; старые записи разбираем по-старому.
   const kv = {};
   (x.details || "").split(" · ").forEach(p => {
-    const i = p.indexOf("="); if (i > 0) kv[p.slice(0, i)] = p.slice(i + 1);
+    const m = p.match(/^([a-z_]+)=(.*)$/); if (m) kv[m[1]] = m[2];
   });
+  if (!Object.keys(kv).length) return x.details || "";
   const pid = +(kv.id || kv.product_id || 0);
   const p = shelf().find(o => o.id === pid);
   const what = p ? `${p.name} · ${p.city}` : (kv.name || (pid ? `товар #${pid}` : ""));
@@ -2423,8 +2438,14 @@ function logLine(x) {
   if (x.action === "order/status")
     return `заказ #${kv.id || "?"} — ${LOG_ACTIONS[kv.action] || kv.action || ""}`;
   if (x.action.startsWith("product/") || x.action === "product") return what;
-  return x.details || "";
+  // Остальные старые записи — поля запроса: «code=accessories» читается как
+  // язык машины, поэтому ключи — по-русски («категория: accessories»).
+  return Object.entries(kv).map(([к, з]) => `${LOG_KEYS[к] || к}: ${LOG_FIELDS[з] || з}`).join(" · ");
 }
+const LOG_KEYS = { id: "№", user_id: "покупатель", city: "точка", code: "категория", name: "название",
+  field: "поле", value: "значение", price: "цена", cost: "закупка", stock: "остаток", reason: "причина",
+  qty: "шт", status: "статус", action: "действие", delta: "изменение", coins: "монет", spins: "прокрутов",
+  text: "текст", model_id: "описание №", product_id: "товар №" };
 
 async function openLog() {
   $("logView").classList.add("show");

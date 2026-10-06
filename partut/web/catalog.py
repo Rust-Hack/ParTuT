@@ -986,16 +986,51 @@ def api_admin_model_save():
     if twin:
         return jsonify({"ok": False, "error": "exists", "name": twin["name"]}), 400
     if mid:
-        if not db.get_model(int(mid)):
+        до = db.get_model(int(mid))
+        if not до:
             return jsonify({"ok": False, "error": "not_found"}), 404
         moved = db.update_model(int(mid), category=category, name=name, brand=data.get("brand") or "",
                                 description=data.get("description") or "", specs=specs, flavors=flavors)
+        g.log_note = _журнал_описания(до, category, name, data.get("brand") or "",
+                                      data.get("description") or "", specs, flavors, moved)
         # Вкус, убранный из модели, продолжает лежать и продаваться на точке.
         # Стирать остаток нельзя, но сказать об этом обязаны.
         return jsonify({"ok": True, "id": int(mid), "updated": moved,
                         "orphans": db.orphan_flavors(int(mid))})
     new_id = db.add_model(category, name, data.get("brand") or "", data.get("description") or "", specs, flavors)
+    g.log_note = (f"Новое описание «{name}»" + (f" · {data.get('brand')}" if data.get("brand") else "")
+                  + (f": варианты — {', '.join(flavors)}" if flavors else ""))
     return jsonify({"ok": True, "id": new_id})
+
+
+def _журнал_описания(до, category, name, brand, description, specs, flavors, точек):
+    """Правка описания — для журнала по-человечески: что было и что стало.
+
+    Раньше в журнал уходил перечень полей запроса — «id=11 · name=…»: новое
+    название без старого, и ни слова о вкусах (проход трёх ролей, 6.10.2026).
+    """
+    имена = {c["code"]: c["name"] for c in db.list_categories()}
+    части = []
+    if (до.get("name") or "") != name:
+        части.append(f"название «{до.get('name') or ''}» → «{name}»")
+    if (до.get("brand") or "") != (brand or ""):
+        части.append(f"бренд «{до.get('brand') or '—'}» → «{brand or '—'}»")
+    if (до.get("category") or "") != category:
+        части.append(f"категория {имена.get(до.get('category'), до.get('category'))} → {имена.get(category, category)}")
+    if (до.get("description") or "") != (description or ""):
+        части.append("описание изменено")
+    было = {inputs.ключ_варианта(f): f for f in (до.get("flavors") or [])}
+    стало = {inputs.ключ_варианта(f): f for f in flavors}
+    добавлены = [f for к, f in стало.items() if к not in было]
+    убраны = [f for к, f in было.items() if к not in стало]
+    if добавлены:
+        части.append("варианты + " + ", ".join(добавлены))
+    if убраны:
+        части.append("варианты − " + ", ".join(убраны))
+    if (до.get("specs") or {}) != (specs or {}):
+        части.append("характеристики изменены")
+    return (f"Описание «{name}»: " + ("; ".join(части) if части else "без изменений")
+            + (f" · точек: {точек}" if точек else ""))
 
 
 _КЛЮЧ_ПУБЛИКАЦИИ = re.compile(r"[A-Za-z0-9_-]{8,64}")

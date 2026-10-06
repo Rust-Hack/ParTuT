@@ -1398,3 +1398,8 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 #saleView.stockupd .dlvfname small, #saleView.stockupd .dlvvar small { opacity: .45; }
 #saleStale .dwarn.staleall { margin: 8px 0 10px; }
 #adminList.updating { opacity: .5; pointer-events: none; transition: opacity .15s ease; }
+/* Найдено по варианту — его остаток прямо в строке (приёмка ROLE-04). */
+.matchv { color: var(--accent); font-weight: 700; }
+/* Плитка вкуса нажимается целиком, как обещает подсказка (ROLE-06). */
+.frow[data-fltile] { cursor: pointer; touch-action: manipulation; }
+.frow[data-fltile]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

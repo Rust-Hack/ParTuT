@@ -9,19 +9,39 @@ let payInfoText = "";          // реквизиты магазина — при
 let payConfirmMin = 15;        // за сколько обычно подтверждают (из настроек магазина)
 let payUnpaidHours = 0;        // сколько заказ ждёт чек, прежде чем отмениться сам
 $("myOrdersClose").onclick = () => $("myOrdersView").classList.remove("show");
+// Загрузилась ли история (приёмка ROLE-01). Сбой — не «заказов нет»: раньше
+// 503 или обрыв связи превращались в пустой список, и покупатель видел
+// «Заказов пока нет» сразу после того, как оформил заказ. Пустота — только по
+// успешному ответу; при сбое — прежний список с пометкой времени или
+// «не загрузилось» с «Повторить». Поздний ответ старого запроса не применяется.
+let мояИсторияВзята = 0, мояИсторияСбой = false, мояИсторияНомер = 0;
 async function openMyOrders() {
   $("myOrdersView").classList.add("show");
-  $("myOrdersList").innerHTML = loaderHtml();
+  if (!мояИсторияВзята) $("myOrdersList").innerHTML = loaderHtml();
+  else renderMyOrders();                        // прежнее — сразу, свежее — следом
+  const мой = ++мояИсторияНомер;
+  let d = null;
   try {
     const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
-    const d = await r.json();
-    myOrders = d.orders || [];
+    d = await r.json();
+    if (!r.ok || !d || d.ok !== true || !Array.isArray(d.orders)) d = null;
+  } catch (e) { d = null; }
+  if (мой !== мояИсторияНомер) return;          // ушёл запрос новее — решает он
+  if (d) {
+    myOrders = d.orders; мояИсторияВзята = Date.now(); мояИсторияСбой = false;
     if (d.payment_info) payInfoText = d.payment_info;   // чтобы показать реквизиты повторно
     if (d.confirm_minutes) payConfirmMin = d.confirm_minutes;
     if (d.unpaid_hours) payUnpaidHours = d.unpaid_hours;
-  } catch (e) { myOrders = []; }
+  } else мояИсторияСбой = true;
   await loadReviewables();      // «оцените покупку» показываем сразу, а не вторым экраном
-  renderMyOrders();
+  if (мой === мояИсторияНомер) renderMyOrders();
+}
+// Плашка над историей, когда последнее обновление не удалось.
+function плашкаИстории() {
+  if (!мояИсторияСбой) return "";
+  const когда = new Date(мояИсторияВзята).toTimeString().slice(0, 5);
+  return `<div class="dwarn staleall">⚠️ Не удалось обновить заказы — показан список на ${когда}, статусы могли измениться.
+    <button type="button" class="barbtn" data-myretry>↻ Повторить</button></div>`;
 }
 // ----- Оценить покупку (из «Мои заказы») -----
 let reviewables = [];
@@ -69,11 +89,24 @@ function openReviewSheet(p) {
 }
 
 function renderMyOrders() {
+  const повтор = () => $("myOrdersList").querySelectorAll("[data-myretry]").forEach(b => b.onclick = () => {
+    b.disabled = true; b.textContent = "Загружаю…"; openMyOrders();
+  });
+  if (мояИсторияСбой && !myOrders.length) {
+    // Не загрузилась, а показать нечего (ни разу не грузилась или прежде была
+    // пуста) — это не «заказов нет», а «не знаю»: заказ мог появиться с тех пор.
+    $("myOrdersList").innerHTML = `<div class="empty"><div class="circ">📶</div><h3>Не удалось загрузить заказы</h3>
+      <p>Проверьте связь и попробуйте ещё раз — ваши заказы никуда не делись.</p>
+      <button type="button" class="bigbtn" data-myretry style="margin-top:12px">↻ Повторить</button></div>`;
+    повтор();
+    return;
+  }
   if (!myOrders.length) {
+    // Сюда — только по успешному ответу: при сбое пустота выше стала «не загрузилось».
     $("myOrdersList").innerHTML = `<div class="empty"><div class="circ">📦</div><h3>Заказов пока нет</h3><p>Оформите первый заказ в ассортименте.</p></div>`;
     return;
   }
-  $("myOrdersList").innerHTML = reviewPromptHtml() + myOrders.map((o, idx) => {
+  $("myOrdersList").innerHTML = плашкаИстории() + reviewPromptHtml() + myOrders.map((o, idx) => {
     const st = OSTATUS[o.status] || { label: o.status, cls: "new" };
     const items = (o.items || []).map(it =>
       `<div class="oitem"><span>${esc(имяПозиции(it))} × ${it.qty}</span><span>${(it.price * it.qty).toFixed(2)} ${CUR}</span></div>`).join("");
@@ -101,6 +134,7 @@ function renderMyOrders() {
       ${cancelBtn}
     </div>`;
   }).join("");
+  повтор();
   $("myOrdersList").querySelectorAll("[data-rev]").forEach(b => b.onclick = () => openReviewSheet(reviewables[+b.dataset.rev]));
   $("myOrdersList").querySelectorAll("[data-repeat]").forEach(b => b.onclick = () => repeatOrder(myOrders[+b.dataset.repeat]));
   $("myOrdersList").querySelectorAll("[data-ask]").forEach(b => b.onclick = () => openSupport(myOrders[+b.dataset.ask].id));

@@ -484,6 +484,7 @@ function showTab(id) {
   // (ждём открытия) — как раньше, чаще.
   if (id === "cart" && city) перечитатьТочки(false, паузаТочки(city) ? 5000 : 30000);
   else if (id === "catalog" && city && паузаТочки(city)) перечитатьТочки();
+  if (id === "catalog" || id === "cart") освежитьВитрину();      // не чаще раза в 20 с (ROLE-03)
   if (id === "fav") renderFav();
   if (id === "bonus") renderBonus();
   if (id === "profile") renderProfile();
@@ -823,7 +824,12 @@ $("ageNo").onclick = () => { if (tg) tg.close(); };
 // Подтверждена ли витрина последней загрузкой: «Повторить» над списком
 // товаров нужен и тогда, когда не загрузилась только она (приёмка AR-03-R1).
 let витринаСвежа = true;
+// Когда витрина прочитана и какой ответ показан: запросов бывает несколько
+// сразу (вход в каталог, правка в управлении), и поздний ответ старого не
+// должен затереть свежий (то же правило, что у баланса, F-01-R2).
+let витринаВзята = 0, витринаНомер = 0, витринаПоказана = 0;
 async function fetchProducts() {
+  const мой = ++витринаНомер;
   // try/catch — иначе обрыв сети роняет весь Promise.all в loadCatalog()
   // необработанным отказом: заставка уходит по страховочному таймеру, а
   // каталог остаётся пустым навсегда, без единого слова об ошибке.
@@ -832,12 +838,43 @@ async function fetchProducts() {
     // Форма ответа — тоже проверка, не только код: сервер, отвечающий 200 с
     // чем-то, кроме списка, для нас не отличим от честной пустой витрины,
     // а на самом деле это тоже сбой, который лучше показать, чем скрыть.
-    if (!Array.isArray(список)) { витринаСвежа = false; return false; }
-    allProducts = список;
-    витринаСвежа = true;
+    if (!Array.isArray(список)) { if (мой > витринаПоказана) витринаСвежа = false; return false; }
+    if (мой > витринаПоказана) { allProducts = список; витринаПоказана = мой; витринаВзята = Date.now(); витринаСвежа = true; }
     return true;
   }
-  catch (e) { витринаСвежа = false; return false; }
+  catch (e) { if (мой > витринаПоказана) витринаСвежа = false; return false; }
+}
+
+// Витрина в открытом приложении тоже стареет: товар, опубликованный с другого
+// телефона, не находился до перезагрузки страницы (приёмка ROLE-03).
+// Перечитываем при входе в каталог и корзину, при поиске и при возвращении
+// в приложение — не чаще раза в 20 с (ответ без изменений — пустой 304).
+// Поиск, фильтры, прокрутка и корзина остаются; не обновилась — так и сказано.
+const ВИТРИНА_ЖИВЁТ = 20000;
+let витринаИдёт = null;
+function освежитьВитрину(сразу = false) {
+  if (витринаИдёт) return витринаИдёт;
+  if (!витринаВзята || (!сразу && Date.now() - витринаВзята < ВИТРИНА_ЖИВЁТ)) return Promise.resolve(true);
+  витринаИдёт = (async () => {
+    const ок = await fetchProducts();
+    витринаИдёт = null;
+    const прокрутка = window.scrollY;
+    if (activeTab === "catalog") { updateFilterBtn(); renderGrid(); window.scrollTo(0, прокрутка); }
+    else if (activeTab === "cart") renderCart();
+    else if (activeTab === "fav") renderFav();
+    нарисоватьСвежестьВитрины();
+    return ок;
+  })();
+  return витринаИдёт;
+}
+function нарисоватьСвежестьВитрины() {
+  const место = $("catStale");
+  if (!место) return;
+  if (витринаСвежа || !витринаВзята) { место.hidden = true; место.innerHTML = ""; return; }
+  место.hidden = false;
+  место.innerHTML = `⚠️ Не удалось обновить витрину — показана на ${new Date(витринаВзята).toTimeString().slice(0, 5)}, цены и наличие могли измениться.
+    <button type="button" class="barbtn" id="catRetry">↻ Обновить</button>`;
+  $("catRetry").onclick = () => { $("catRetry").disabled = true; $("catRetry").textContent = "Загружаю…"; освежитьВитрину(true); };
 }
 
 // Витрина и админка смотрят на разные списки: покупателю снятое с продажи
@@ -935,7 +972,7 @@ async function refreshAll() {
 }
 
 function перерисоватьПослеПравки() {
-  renderChips(); updateFilterBtn(); renderGrid(); renderNav();
+  renderChips(); updateFilterBtn(); renderGrid(); renderNav(); нарисоватьСвежестьВитрины();
   if ($("productsView").classList.contains("show")) renderAdminList();
   if ($("locationsView").classList.contains("show")) renderLocList();
 }
@@ -1116,10 +1153,23 @@ function searchText(p) {
     .filter(Boolean).join(" ").toLowerCase();
 }
 // «xros3» и «XROS 3» — одно и то же: пробелы в модели пишут как придётся.
+// «е» и «ё» — тоже одно (приёмка ROLE-05): «черный» не находил «Чёрный».
+// Только для сравнения — названия, варианты и заказы не меняются.
+const безЁ = (s) => String(s).replace(/ё/g, "е").replace(/Ё/g, "Е");
 function ищетсяВ(текст, запрос) {
+  текст = безЁ(текст); запрос = безЁ(запрос);
   if (текст.includes(запрос)) return true;
   const сжатый = запрос.replace(/\s+/g, "");
   return !!сжатый && текст.replace(/\s+/g, "").includes(сжатый);
+}
+// Рабочие экраны ищут по тем же правилам, что каталог (приёмка ROLE-04):
+// «Белый» в «Товарах» не находил чехлы — там смотрели только название и
+// бренд, а «Продажа» и «Приём поставки» — ещё и варианты, но без «ё».
+function нашлось(p, запрос) { return !запрос || ищетсяВ(searchText(p), запрос); }
+// Описание (модель): название, бренд, варианты, характеристики.
+function нашласьМодель(m, запрос) {
+  return !запрос || ищетсяВ(searchText({ name: m.name, brand: m.brand, specs: m.specs,
+                                         variants: (m.flavors || []).map(f => ({ flavor: f })) }), запрос);
 }
 function visibleProducts() {
   const s = search.trim().toLowerCase();
@@ -1284,6 +1334,8 @@ document.addEventListener("visibilitychange", () => {
   // Вернулись в приложение — пока его не было, заказ могли выдать (F-01).
   if (activeTab === "profile" || activeTab === "bonus" || activeTab === "cart") освежитьДеньги(true);
   else бонусВзят = колесоВзято = 0;                // на следующем входе в деньги — перечитать
+  // И витрина: пока приложения не было, могли завезти или поменять цену (ROLE-03).
+  if (activeTab === "catalog" || activeTab === "cart") освежитьВитрину();
 });
 let таймерПаузы = null;
 function обновитьБаннерПаузы() {
@@ -1351,6 +1403,7 @@ $("searchInput").oninput = (e) => {
   search = e.target.value;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(renderGrid, 160);   // перерисовать после паузы в наборе
+  освежитьВитрину();                            // ищут то, чего нет? Может, уже завезли (ROLE-03)
 };
 
 // Смена города — одна на всё приложение: и для кнопки в шапке, и для настроек.

@@ -540,7 +540,11 @@ function renderProduct() {
               ? `<div class="fstep"><button data-fldec="${f}">−</button><span>${qty}</span><button data-flinc="${f}">+</button></div>`
               : `<button class="addbtn" data-fladd="${f}">+</button>`);
         const left = out ? `нет в наличии` : `${v.stock} шт`;
-        return `<div class="frow ${qty>0?'on':''} ${out?'out':''}">
+        // Подсказка внизу говорит «нажмите на вкус» — значит, нажимается вся
+        // плитка, а не только «+» (приёмка ROLE-06). Уже в корзине — плитка не
+        // добавляет: количество меняют «−»/«+», случайный тап лишнего не положит.
+        const плитка = !out && qty === 0 ? ` data-fltile="${f}" role="button" tabindex="0" aria-label="Добавить: ${label}"` : "";
+        return `<div class="frow ${qty>0?'on':''} ${out?'out':''}"${плитка}>
             <div class="fname">${label}</div>
             <div class="fbottom"><span class="fbn">${left}</span>${right}</div></div>`;
       }).join("") + `</div>`;
@@ -572,7 +576,12 @@ function renderProduct() {
     };
   }
   $("prodBody").querySelectorAll("[data-axis1]").forEach(b => b.onclick = () => { selAxis1 = b.dataset.axis1; renderProduct(); });
-  $("prodBody").querySelectorAll("[data-fladd]").forEach(b => b.onclick = () => flavorQty(b.dataset.fladd, +1));
+  // «+» внутри плитки — своё нажатие не отдаёт плитке: один тап — одна штука.
+  $("prodBody").querySelectorAll("[data-fladd]").forEach(b => b.onclick = (e) => { e.stopPropagation(); flavorQty(b.dataset.fladd, +1); });
+  $("prodBody").querySelectorAll("[data-fltile]").forEach(t => {
+    t.onclick = () => flavorQty(t.dataset.fltile, +1);
+    t.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flavorQty(t.dataset.fltile, +1); } };
+  });
   $("prodBody").querySelectorAll("[data-flinc]").forEach(b => b.onclick = () => flavorQty(b.dataset.flinc, +1));
   $("prodBody").querySelectorAll("[data-fldec]").forEach(b => b.onclick = () => flavorQty(b.dataset.fldec, -1));
 
