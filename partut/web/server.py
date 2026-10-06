@@ -290,6 +290,10 @@ def _write_admin_log(resp):
     вписывать вызов в каждый маршрут — значит однажды забыть про новый."""
     if not request.path.startswith("/api/admin/") or request.path in _ADMIN_READS:
         return
+    # Маршрут, который и читает, и пишет (документы), сам говорит, что этот
+    # запрос — просмотр.
+    if getattr(g, "не_в_журнал", False):
+        return
     admin = getattr(g, "admin", None)
     if not admin:
         return                                   # действие не админа — не наш журнал

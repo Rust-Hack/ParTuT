@@ -665,6 +665,10 @@ html[data-theme="dark"] .gamecard { border-color: rgba(95,242,242,.22); box-shad
 html[data-theme="dark"] .chartwrap { border: 1px solid rgba(95,242,242,.22); box-shadow: var(--shadow), 0 0 15px rgba(95,242,242,.10); }
 .statrow { display: flex; justify-content: space-between; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .statrow:last-child { border-bottom: none; }
+/* Зарплата: строки «из чего сложилось» под продавцом и пояснение к перерасчёту. */
+.statrow.sub { padding: 6px 0 6px 12px; font-size: 13px; color: var(--hint); }
+.statrow.sub b { font-weight: 600; white-space: nowrap; }
+.paynote { color: var(--hint); font-size: 13px; padding: 6px 0 10px 12px; border-bottom: 1px solid var(--line); }
 html[data-theme="dark"] .statcard, html[data-theme="dark"] .statlist { border: 1px solid rgba(95,242,242,.22); box-shadow: var(--shadow), 0 0 15px rgba(95,242,242,.10); }
 .brgroup { font-weight: 700; color: var(--hint); font-size: 13px; margin: 16px 0 8px; }
 .brrow { cursor: pointer; }
@@ -1375,6 +1379,13 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 .salesale .salewhat { color: var(--hint); font-size: 13px; grid-column: 1 / -1; }
 .salesale.off { opacity: .55; }
 .salesale.off b { text-decoration: line-through; }
+/* Продажи по дням: ‹ день › и поиск по номеру (приёмка DAY-03). */
+.saledays { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.saledays .saledayname { flex: 1; text-align: center; font-weight: 800; font-size: 15px; }
+.saledays .barbtn { min-width: 44px; justify-content: center; }
+.saledays .barbtn:disabled { opacity: .35; }
+.salenum { display: flex; gap: 8px; margin: 10px 0 8px; }
+.salenum .admsearch { flex: 1; min-width: 0; margin: 0; }
 #salePay { margin-bottom: 8px; }
 
 /* Точка закрыта на время — над каталогом и в корзине. */

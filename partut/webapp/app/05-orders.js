@@ -384,7 +384,7 @@ function renderOrders() {
     return `<div class="ocard">
       <div class="ocard-top">
         <div><div class="ocard-id">Заказ #${o.id}</div>
-          <div class="ocard-sub">${esc(o.city)} · ${who}<br>${esc(o.created_at)}</div></div>
+          <div class="ocard-sub">${esc(o.city)} · ${who}<br>${esc(o.created_at)}${o.status === "issued" && o.issued_at ? ` · выдан ${esc(o.issued_at.slice(0, 10) === (o.created_at || "").slice(0, 10) ? o.issued_at.slice(11, 16) : o.issued_at)}` : ""}</div></div>
         <span class="obadge ${st.cls}">${st.label}</span>
       </div>
       ${deliv}${contact}

@@ -997,6 +997,7 @@ async function loadStats() {
       <div class="statcard"><div class="statnum">${money(s.avg_check)}</div><div class="statlab">Средний чек</div>${delta(s.avg_check, "avg_check")}</div>
       <div class="statcard"><div class="statnum">${s.buyers_period}</div><div class="statlab">Покупателей · ${pl}</div>${delta(s.buyers_period, "buyers")}</div>
     </div>
+    <div class="dnote" style="margin:-6px 0 14px">Выручка, заказы, покупатели и графики — по дню выдачи: заказ, оформленный вчера и выданный сегодня, — в сегодняшних цифрах. Продажи на точке — в выручке, но не в покупателях.</div>
     ${(s.losses || []).length ? `<div class="stathead">📉 Списано <span class="stathint">${pl}</span></div><div class="statlist">${
         s.losses.map(l => `<div class="statrow"><span>${esc({broken:"Брак или бой",expired:"Просрочка",lost:"Недостача",gift:"Подарок или образец",fix:"Пересчёт"}[l.reason] || l.reason)}</span><b style="color:var(--danger)">${l.qty} шт${l.money ? ` · ${money(l.money)}` : ""}</b></div>`).join("")
       }</div>` : ""}
@@ -1007,7 +1008,7 @@ async function loadStats() {
     ${dayChart(s.daily || [], "orders", "Заказы по дням", (v) => `${v} шт`)}
     <div class="stathead">🏆 Топ товаров <span class="stathint">${pl}</span></div><div class="statlist">${topRows}</div>
     <div class="stathead">🏙 Выручка по точкам <span class="stathint">${pl}</span></div><div class="statlist">${cityRows}</div>
-    <div class="stathead">📦 Заказы по статусам <span class="stathint">${pl}</span></div><div class="statlist">${statusRows}
+    <div class="stathead">📦 Оформленные заказы по статусам <span class="stathint">${pl} · по дню оформления</span></div><div class="statlist">${statusRows}
       <div class="statrow"><span>В работе (ждут выдачи)</span><b>${money(s.inwork_total)}</b></div></div>
     <div class="stathead">👥 Пользователи</div><div class="statlist">
       <div class="statrow"><span>Всего пользователей</span><b>${s.users_total}</b></div>
@@ -1111,89 +1112,153 @@ function сдвинутьПериод(p, delta) {
 }
 async function openPayroll() {
   $("payrollView").classList.add("show");
-  payrollPeriod = текущийПериод();
+  payrollPeriod = payrollТекущий || текущийПериод();
   await loadPayroll();
 }
+// Текущий месяц — по часам магазина: сервер присылает его с каждым ответом.
+// Часы телефона могут жить в другом поясе, и «›» пускал бы в месяц, которого
+// у магазина ещё нет.
+let payrollТекущий = null, payrollЗапрос = 0;
+// cur — для текста без разметки (вопрос Telegram, всплывашка): там CUR с его
+// <span> вывелся бы буквами.
+const знакДенег = (v, cur = CUR) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(+v).toFixed(2)} ${cur}`;
 async function loadPayroll() {
+  const мой = ++payrollЗапрос;
   $("payrollBody").innerHTML = payrollNavHtml() + loaderHtml();
   bindPayrollNav();
-  let rows;
+  let d = null;
   try {
     const r = await fetch("/api/admin/payroll", { method: "POST", headers: { "Content-Type": "application/json" },
                                                    body: JSON.stringify({ initData, period: payrollPeriod }) });
-    const d = await r.json();
-    if (!d.ok) { $("payrollBody").innerHTML = payrollNavHtml() + `<p style="color:var(--hint)">Не удалось загрузить.</p>`; bindPayrollNav(); return; }
-    rows = d.rows;
-  } catch (e) { $("payrollBody").innerHTML = payrollNavHtml() + `<p style="color:var(--hint)">Сеть недоступна.</p>`; bindPayrollNav(); return; }
-
-  const money = (v) => `${(+v).toFixed(2)} ${CUR}`;
-
-  // Продавцу — не финансовый отчёт, а мотивация: сколько УЖЕ заработал в этом
-  // месяце, без чужих сумм и без кнопки выплаты (сервер и так прислал только
-  // его точку и его самого в sellers — здесь просто рисуем это попроще).
-  if (!isOwner()) {
-    const row = rows[0];
-    const свой = row && row.sellers[0];
-    if (!row || !свой) {
-      $("payrollBody").innerHTML = payrollNavHtml() + `<div class="statlist"><div class="statrow"><span style="color:var(--hint)">Нет данных за этот месяц.</span></div></div>`;
-      bindPayrollNav();
-      return;
-    }
-    const выплачено = свой.paid;
-    $("payrollBody").innerHTML = payrollNavHtml() + `
-      <div class="statgrid">
-        <div class="statcard"><div class="statnum" style="color:#1f8a5f">${выплачено ? money(выплачено.amount) : (row.amount != null ? money(row.amount) : "—")}</div>
-          <div class="statlab">${выплачено ? "Выплачено" : "Заработано · пока не выплачено"}</div></div>
-      </div>
-      <div class="statlist">
-        <div class="statrow"><span>Выручка точки за месяц</span><b>${money(row.revenue)}</b></div>
-        <div class="statrow"><span>Ваш процент</span><b>${row.percent}%</b></div>
-      </div>
-      ${row.amount == null ? `<div class="dnote" style="margin:10px 0 0">На точке несколько продавцов — сумму на каждого делит владелец, здесь общая цифра на одного не считается.</div>` : ""}
-      <div class="dnote" style="margin:10px 0 0">Растёт вместе с выручкой точки за месяц — чем больше продано, тем больше сумма. Считается по уже выданным заказам.</div>`;
-    bindPayrollNav();
-    return;
+    d = await r.json().catch(() => null);
+  } catch (e) { d = undefined; }
+  if (мой !== payrollЗапрос) return;              // пока грузили, перелистнули месяц
+  if (!d || !d.ok || !Array.isArray(d.rows)) {
+    $("payrollBody").innerHTML = payrollNavHtml() + `<p style="color:var(--hint)">${d === undefined ? "Сеть недоступна." : "Не удалось загрузить."}</p>`;
+    bindPayrollNav(); return;
   }
+  if (d.current) payrollТекущий = d.current;
+  $("payrollBody").innerHTML = payrollNavHtml() + (isOwner() ? зарплатаВладельцу(d) : зарплатаПродавцу(d));
+  bindPayrollNav();
+  $("payrollBody").querySelectorAll("[data-pay]").forEach(b => b.onclick = () => payNow(b.dataset.pay, b, d));
+}
 
-  const listHtml = rows.length ? rows.map(r => {
-    const один = r.sellers.length === 1;
+// Строки перерасчёта: разница месяца, за который уже заплатили, а потом
+// продажу того месяца отменили (решение владельца 7.10.2026, DAY-02).
+function строкиПерерасчёта(список, хвост) {
+  return (список || []).map(п => `<div class="statrow sub"><span>Перерасчёт за ${esc(п.label)}${хвост || ""}</span><b>${знакДенег(п.amount)}</b></div>`).join("");
+}
+// Выплаченный месяц: сколько, из чего и что изменилось после.
+function оВыплате(в) {
+  const дата = (в.created_at || "").slice(0, 10).split("-").reverse().join(".");
+  let html = строкиПерерасчёта(в.corrections, " — в этой выплате");
+  if (в.corrections && в.corrections.length)
+    html = `<div class="statrow sub"><span>Начислено за месяц</span><b>${(+в.base).toFixed(2)} ${CUR}</b></div>` + html;
+  if (в.diff) {
+    const где = (в.settled || []).map(x => x.label).join(", ");
+    html += `<div class="paynote">После выплаты продажи месяца изменились: начислено сейчас ${(+в.now).toFixed(2)} ${CUR} вместо ${(+в.base).toFixed(2)} ${CUR} (${знакДенег(в.diff)}). `
+      + (!в.left ? `Разница учтена в выплате за ${esc(где)}.`
+        : где ? `Часть учтена в выплате за ${esc(где)}, остаток ${знакДенег(в.left)} — в ближайшей выплате.`
+        : `Разница ${знакДенег(в.left)} учтётся в ближайшей выплате.`) + `</div>`;
+  }
+  return { дата, html };
+}
+// Невыплаченный закончившийся месяц: из чего складывается «к выплате».
+function кВыплате(s, начислено) {
+  const закроет = (s.settle || []).reduce((t, x) => t + x.amount, 0);
+  const всего = (s.carry || []).reduce((t, x) => t + x.amount, 0);
+  const останется = Math.round((всего - закроет) * 100) / 100;
+  return (s.settle && s.settle.length ? `<div class="statrow sub"><span>Начислено за месяц</span><b>${(+начислено).toFixed(2)} ${CUR}</b></div>` : "")
+    + строкиПерерасчёта(s.settle)
+    + `<div class="statrow"><span><b>К выплате</b></span><b>${(+s.to_pay).toFixed(2)} ${CUR}</b></div>`
+    + (останется ? `<div class="paynote">${останется < 0 ? `Переплата ${(-останется).toFixed(2)} ${CUR} больше начисленного — остаток перейдёт в следующую выплату.`
+                                                       : `Ещё ${останется.toFixed(2)} ${CUR} перерасчёта — в следующую выплату.`}</div>` : "");
+}
+
+function зарплатаВладельцу(d) {
+  const money = (v) => `${(+v).toFixed(2)} ${CUR}`;
+  if (!d.rows.length) return `<div class="statlist"><div class="statrow"><span style="color:var(--hint)">Нет ни одной точки с назначенным продавцом.</span></div></div>`;
+  const месяц = periodLabel(payrollPeriod);
+  const шапка = d.open ? `<div class="dnote" style="margin:0 0 12px">Месяц ещё идёт — суммы растут с каждой выдачей. Выплату за ${месяц} можно отметить с ${esc(d.pay_from)}.</div>` : "";
+  return шапка + d.rows.map(r => {
+    const живые = r.sellers.filter(s => !s.former);
+    const один = живые.length === 1;
     const продавцы = r.sellers.map(s => {
-      const имя = esc(s.note || String(s.user_id));
-      if (!один) return `<div class="statrow"><span style="padding-left:12px;color:var(--hint)">${имя}</span></div>`;
-      if (s.paid) return `<div class="statrow"><span style="padding-left:12px">${имя}</span><b style="color:#1f8a5f">выплачено ${money(s.paid.amount)}</b></div>`;
-      return `<div class="statrow"><span style="padding-left:12px">${имя}</span>
-        <button class="iconbtn ok" style="width:auto;padding:4px 14px" data-pay="${esc(r.city)}::${s.user_id}">Отметить выплаченным</button></div>`;
+      const имя = esc(s.note || String(s.user_id)) + (s.former ? ` <small style="color:var(--hint)">· больше не продавец этой точки</small>` : "");
+      if (s.paid) {
+        const в = оВыплате(s.paid);
+        return `<div class="statrow"><span>${имя}</span><b style="color:#1f8a5f">выплачено ${money(s.paid.amount)}${в.дата ? ` · ${в.дата}` : ""}</b></div>${в.html}`;
+      }
+      if (s.paid_elsewhere) return `<div class="statrow"><span>${имя}</span><b style="color:var(--hint)">за этот месяц выплачено на точке «${esc(s.paid_elsewhere)}»</b></div>`;
+      if (s.former) return `<div class="statrow"><span>${имя}</span></div>`;
+      if (d.open || !один) return `<div class="statrow"><span>${имя}</span>${d.open && один ? `<b style="color:var(--hint)">месяц идёт</b>` : ""}</div>`
+        + строкиПерерасчёта(s.carry, " · учтётся при выплате");
+      return `<div class="statrow"><span>${имя}</span></div>${кВыплате(s, r.amount)}
+        <div class="statrow"><span></span><button class="iconbtn ok" style="width:auto;padding:4px 14px" data-pay="${esc(r.city)}::${s.user_id}">${
+          s.to_pay > 0 ? `Отметить: выплачено ${money(s.to_pay)}` : `Закрыть месяц: выплата 0 ${CUR}`}</button></div>`;
     }).join("");
     return `<div class="stathead">🏙 ${esc(r.city)}</div><div class="statlist">
       <div class="statrow"><span>Выручка за месяц (без доставки)</span><b>${money(r.revenue)}</b></div>
-      <div class="statrow"><span>${r.percent}% — к выплате</span><b>${один ? money(r.amount) : "поделите сумму сами"}</b></div>
+      <div class="statrow"><span>${r.percent}% — ${d.open ? "начислено пока" : "начислено"}</span><b>${один ? money(r.amount) : "поделите сумму сами"}</b></div>
       ${продавцы}
-      ${!один ? `<div class="statrow"><span style="color:var(--warn)">На точке несколько продавцов — авто-разбивки нет, распределите вручную</span></div>` : ""}
+      ${!один && живые.length ? `<div class="statrow"><span style="color:var(--warn)">На точке несколько продавцов — авто-разбивки нет, распределите вручную</span></div>` : ""}
     </div>`;
-  }).join("") : `<div class="statlist"><div class="statrow"><span style="color:var(--hint)">Нет ни одной точки с назначенным продавцом.</span></div></div>`;
+  }).join("") + `<div class="dnote" style="margin:10px 0 0">Выручка месяца — по дню выдачи заказа: оформленный 31-го и выданный 1-го идёт в новый месяц. У старых заказов время выдачи не записано — они считаются по дню оформления.</div>`;
+}
 
-  $("payrollBody").innerHTML = payrollNavHtml() + listHtml;
-  bindPayrollNav();
-  $("payrollBody").querySelectorAll("[data-pay]").forEach(b => b.onclick = () => payNow(b.dataset.pay, b));
+// Продавцу — не финансовый отчёт, а мотивация: сколько УЖЕ заработал в этом
+// месяце, без чужих сумм и без кнопки выплаты (сервер и так прислал только
+// его точку и его самого в sellers — здесь просто рисуем это попроще).
+function зарплатаПродавцу(d) {
+  const money = (v) => `${(+v).toFixed(2)} ${CUR}`;
+  const row = d.rows[0];
+  const свой = row && row.sellers[0];
+  if (!row || !свой) return `<div class="statlist"><div class="statrow"><span style="color:var(--hint)">Нет данных за этот месяц.</span></div></div>`;
+  const выплачено = свой.paid;
+  const в = выплачено ? оВыплате(выплачено) : null;
+  const главное = выплачено ? money(выплачено.amount) : свой.to_pay != null ? money(свой.to_pay) : row.amount != null ? money(row.amount) : "—";
+  const подпись = выплачено ? `Выплачено${в.дата ? ` · ${в.дата}` : ""}`
+    : d.open ? "Заработано пока · месяц идёт" : свой.to_pay != null ? "К выплате" : "Заработано · пока не выплачено";
+  return `
+    <div class="statgrid">
+      <div class="statcard"><div class="statnum" style="color:#1f8a5f">${главное}</div><div class="statlab">${подпись}</div></div>
+    </div>
+    <div class="statlist">
+      <div class="statrow"><span>Выручка точки за месяц</span><b>${money(row.revenue)}</b></div>
+      <div class="statrow"><span>Ваш процент</span><b>${row.percent}%</b></div>
+      ${в ? в.html : d.open ? строкиПерерасчёта(свой.carry, " · учтётся при выплате") : свой.to_pay != null ? кВыплате(свой, row.amount) : ""}
+    </div>
+    ${row.amount == null ? `<div class="dnote" style="margin:10px 0 0">На точке несколько продавцов — сумму на каждого делит владелец, здесь общая цифра на одного не считается.</div>` : ""}
+    <div class="dnote" style="margin:10px 0 0">Растёт вместе с выручкой точки за месяц — чем больше продано, тем больше сумма. Считается по заказам, выданным в этом месяце${d.open ? `; выплата — после окончания месяца, с ${esc(d.pay_from)}` : ""}.</div>`;
 }
 function payrollNavHtml() {
   return `<div class="periodsel">
     <button class="periodbtn" id="payrollPrev">‹</button>
     <button class="periodbtn on" style="flex:2" disabled>${periodLabel(payrollPeriod)}</button>
-    <button class="periodbtn" id="payrollNext" ${payrollPeriod >= текущийПериод() ? "disabled" : ""}>›</button>
+    <button class="periodbtn" id="payrollNext" ${payrollPeriod >= (payrollТекущий || текущийПериод()) ? "disabled" : ""}>›</button>
   </div>`;
 }
 function bindPayrollNav() {
   if ($("payrollPrev")) $("payrollPrev").onclick = () => { payrollPeriod = сдвинутьПериод(payrollPeriod, -1); loadPayroll(); };
   if ($("payrollNext")) $("payrollNext").onclick = () => { payrollPeriod = сдвинутьПериод(payrollPeriod, 1); loadPayroll(); };
 }
-async function payNow(key, btn) {
+async function payNow(key, btn, d) {
   const [city, uid] = key.split("::");
-  confirmMsg(`Отметить зарплату продавца за ${periodLabel(payrollPeriod)} выплаченной?\n\nЭто только запись в приложении — сам перевод денег делаете отдельно, как договорились с продавцом.`, async () => {
+  const строка = d && d.rows.find(r => r.city === city);
+  const s = строка && строка.sellers.find(x => String(x.user_id) === uid);
+  const период = payrollPeriod;
+  // Вопрос Telegram — простой текст: валюта словом, а не разметкой CUR.
+  const состав = s && s.settle && s.settle.length
+    ? `\n\nВ сумме: начислено ${(+строка.amount).toFixed(2)} Br, ` + s.settle.map(п => `перерасчёт за ${п.label} ${знакДенег(п.amount, "Br")}`).join(", ") + "."
+    : "";
+  const сумма = s ? `${(+s.to_pay).toFixed(2)} Br` : "";
+  confirmMsg(`Отметить зарплату продавца за ${periodLabel(период)} выплаченной${сумма ? `: ${сумма}` : ""}?${состав}\n\nЭто только запись в приложении — сам перевод денег делаете отдельно, как договорились с продавцом.`, async () => {
     btn.disabled = true; btn.textContent = "Отмечаю…";
-    const d = await админПост("/api/admin/payroll/pay", { period: payrollPeriod, city, user_id: +uid }, "отметить выплату");
-    if (d) { toast("Отмечено ✓"); loadPayroll(); }
-    else { btn.disabled = false; btn.textContent = "Отметить выплаченным"; }
+    const ответ = await админПост("/api/admin/payroll/pay", { period: период, city, user_id: +uid }, "отметить выплату");
+    if (ответ) toast(`Отмечено ✓ · ${(+ответ.amount).toFixed(2)} Br`);
+    // И при отказе перечитываем: «уже отмечено», «месяц идёт», «продавца
+    // убрали» — экран должен показать, как есть теперь, а не прежнюю кнопку.
+    if (payrollPeriod === период) loadPayroll();
   });
 }
 
@@ -2392,7 +2457,7 @@ const LOG_NAMES = {
   "raffle/photo": "фото розыгрыша", "model/hide": "скрыл/вернул модель",
   "product/to-model": "перенёс товар в ассортимент", "photo": "фото товара",
   "point": "добавил адрес самовывоза", "point/update": "изменил адрес самовывоза",
-  "point/delete": "удалил адрес самовывоза", "docs": "правка оферты",
+  "point/delete": "удалил адрес самовывоза", "docs": "правка документов",
   "category/spec": "добавил характеристику", "category/spec/update": "изменил характеристику",
   "category/spec/delete": "удалил характеристику",
   "referral/unlink": "отвязал реферала", "referral/clear": "отвязал всех рефералов",

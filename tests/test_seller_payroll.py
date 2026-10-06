@@ -2,10 +2,14 @@
 
 Числа круглые нарочно (100/50/200 Br, 10%/20%), чтобы ошибку в самой доле
 было видно сразу, а не искать в округлении. Проверяется весь смысл фичи:
-выручка без доставки, только выданные заказы, только текущий месяц, точка
+выручка без доставки, только выданные заказы, только свой месяц, точка
 с одним продавцом — можно отметить выплаченным (дважды нельзя), точка с
 несколькими — только показывается, авто-разбивки нет, а смена процента в
 настройках не переписывает задним числом уже отмеченные выплаты.
+
+Платят за ПРОШЛЫЙ месяц: за идущий выплату не отмечают (решение владельца
+7.10.2026, приёмка DAY-02) — это проверено здесь же. Перерасчёт после
+выплаты — в tests/test_payroll_corrections.py.
 """
 from _common import db, client, Checker, as_admin, deny_admin
 
@@ -38,13 +42,16 @@ def run():
     db.add_staff(7002, CITY2, "Аня")
     db.add_staff(7003, CITY2, "Боря")
 
-    # CITY1: 100-10=90 да 50-0=50 -> выручка 140. Плюс мусор, который не должен войти:
-    _order(CITY1, 100, 10, "issued")
-    _order(CITY1, 50, 0, "issued")
-    _order(CITY1, 999, 0, "paid")          # не выдан — не считается
-    _order(CITY1, 999, 0, "issued", months_ago=1)   # прошлый месяц — не считается
+    # Прошлый месяц. CITY1: 100-10=90 да 50-0=50 -> выручка 140. Плюс мусор, который не должен войти:
+    _order(CITY1, 100, 10, "issued", months_ago=1)
+    _order(CITY1, 50, 0, "issued", months_ago=1)
+    _order(CITY1, 999, 0, "paid", months_ago=1)     # не выдан — не считается
+    _order(CITY1, 999, 0, "issued", months_ago=2)   # позапрошлый месяц — не считается
+    _order(CITY1, 777, 0, "issued")                 # идущий месяц — не считается
 
-    period = db.shop_now().strftime("%Y-%m")
+    сейчас = db.shop_now()
+    period = (сейчас.replace(day=1) - __import__("datetime").timedelta(days=1)).strftime("%Y-%m")
+    идущий = сейчас.strftime("%Y-%m")
     d = client.post("/api/admin/payroll", json={"initData": "x", "period": period}).get_json()
     c("ответ ok", d.get("ok"))
     row1 = next((r for r in d["rows"] if r["city"] == CITY1), None)
@@ -59,6 +66,17 @@ def run():
     c("точка без заказов тоже в отчёте (выручка 0)", row2 is not None and row2["revenue"] == 0)
 
     c2 = Checker("Зарплата продавцов: точка с одним продавцом — выплата")
+    r = client.post("/api/admin/payroll/pay", json={"initData": "x", "period": идущий, "city": CITY1, "user_id": 7001})
+    c2(f"за идущий месяц выплату не отметить: {r.status_code} {r.get_json()}",
+       r.status_code == 400 and r.get_json().get("error") == "month_open"
+       and "можно отметить с 1 " in r.get_json().get("message", ""))
+    d_open = client.post("/api/admin/payroll", json={"initData": "x", "period": идущий}).get_json()
+    row_open = next(r for r in d_open["rows"] if r["city"] == CITY1)
+    c2("идущий месяц: экран знает, что он открыт, и не предлагает сумму к выплате",
+       d_open.get("open") is True and row_open["sellers"][0]["to_pay"] is None
+       and abs(row_open["revenue"] - 777.0) < 0.01)
+    c2("прошлый месяц закрыт: к выплате 14.00",
+       d.get("open") is False and abs(row1["sellers"][0]["to_pay"] - 14.0) < 0.01)
     r = client.post("/api/admin/payroll/pay", json={"initData": "x", "period": period, "city": CITY1, "user_id": 7001})
     d2 = r.get_json()
     c2("выплата отмечена", d2.get("ok") and abs(d2["amount"] - 14.0) < 0.01)
@@ -72,7 +90,7 @@ def run():
     c2("повторная попытка отбита", r.status_code == 400 and r.get_json().get("error") == "already_paid")
 
     c3 = Checker("Зарплата продавцов: точка с двумя продавцами — без авто-разбивки")
-    _order(CITY2, 200, 0, "issued")
+    _order(CITY2, 200, 0, "issued", months_ago=1)
     d4 = client.post("/api/admin/payroll", json={"initData": "x", "period": period}).get_json()
     row2b = next(r for r in d4["rows"] if r["city"] == CITY2)
     c3("выручка посчитана", abs(row2b["revenue"] - 200.0) < 0.01)
@@ -84,7 +102,7 @@ def run():
 
     c4 = Checker("Зарплата продавцов: смена процента не переписывает старые выплаты")
     db.add_staff(7004, CITY3, "Света")
-    _order(CITY3, 100, 0, "issued")
+    _order(CITY3, 100, 0, "issued", months_ago=1)
     d5 = client.post("/api/admin/payroll", json={"initData": "x", "period": period}).get_json()
     row3 = next(r for r in d5["rows"] if r["city"] == CITY3)
     c4("по умолчанию 10% от 100 = 10", abs(row3["amount"] - 10.0) < 0.01)

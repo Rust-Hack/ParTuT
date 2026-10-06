@@ -19,6 +19,7 @@ partut/web/orders.py — заказ от корзины до выдачи.
 а Flask, база и уведомления импортируются напрямую.
 """
 
+import datetime
 import json
 
 from flask import Blueprint, g, jsonify, request
@@ -586,6 +587,9 @@ def _order_json(o, init_data=""):
         "pickup_time": o["pickup_time"] or "",
         "status": o["status"],
         "created_at": o["created_at"],
+        # Когда выдан (DAY-01): «выдано сегодня» считается по нему. У старых
+        # заказов пусто — время выдачи тогда не записывали.
+        "issued_at": (o["issued_at"] or "") if "issued_at" in o.keys() else "",
         "delivery_method": (o["delivery_method"] or ""),
         "delivery_address": (o["delivery_address"] or ""),
         "delivery_fee": round(o["delivery_fee"] or 0, 2),
@@ -863,16 +867,75 @@ def api_admin_sale():
     return jsonify({"ok": True, "id": oid, "total": total, "replay": повтор})
 
 
+# Продавец видит и отменяет продажи своей точки за неделю — сегодня и шесть
+# дней до него; владелец — любые (решение владельца 7.10.2026, приёмка DAY-03).
+# Раньше экран показывал только сегодня: вчерашнюю ошибку смены было не найти,
+# хотя отмена на сервере была.
+ДНЕЙ_ПРОДАВЦУ = 7
+
+
+def _первый_день(admin):
+    """Самый ранний день продаж, который этот человек видит и отменяет; None — без срока."""
+    if admin.get("role") in ("owner", "dev"):
+        return None
+    return (db.shop_now().date() - datetime.timedelta(days=ДНЕЙ_ПРОДАВЦУ - 1)).isoformat()
+
+
+def _день(сырое):
+    """"ГГГГ-ММ-ДД" → он же, если такой день бывает; иначе None."""
+    if not сырое or len(сырое) != 10:
+        return None
+    try:
+        return datetime.date.fromisoformat(сырое).isoformat()
+    except ValueError:
+        return None
+
+
+def _дата_словами(день):
+    """"2026-10-05" → "05.10"."""
+    return f"{день[8:10]}.{день[5:7]}"
+
+
+_СТАРАЯ_ПРОДАЖА = ("Продажи старше 7 дней видит и отменяет владелец — попросите его.")
+
+
 @bp.route("/api/admin/sales", methods=["POST"])
 def api_admin_sales():
-    """Продажи на точке за сегодня. Продавцу — своя точка, владельцу — выбранная или все."""
+    """Продажи на точке за день: по умолчанию — сегодня, day — другой день,
+    id — одна продажа по номеру (номер виден в журнале и в списке).
+
+    Продавцу — своя точка и последние 7 дней, владельцу — выбранная или все
+    точки и любой день. Каждая продажа приходит с can_cancel: экран не
+    гадает о правилах, а показывает «Отменить» там, где сервер её примет."""
     data = request.get_json(force=True, silent=True) or {}
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
+    сегодня = db.shop_now().strftime("%Y-%m-%d")
+    с = _первый_день(admin)
     city = admin.get("city") or inputs._text(data.get("city")) or None
+    if data.get("id") not in (None, ""):
+        номер = inputs.целое(data.get("id"))
+        o = db.get_order(номер) if номер is not None else None
+        if not o or (o["source"] or "") != "point":
+            return jsonify({"ok": False, "error": "not_found",
+                            "message": "Продажи на точке с таким номером нет."}), 404
+        deny = auth.deny_city(admin, o["city"])
+        if deny:
+            return deny
+        день = (o["created_at"] or "")[:10]
+        if с and день < с:
+            return jsonify({"ok": False, "error": "too_old", "message": _СТАРАЯ_ПРОДАЖА}), 403
+        продажи = [o]
+    else:
+        день = _день(inputs._text(data.get("day"))) if data.get("day") else сегодня
+        if not день or день > сегодня:
+            return jsonify({"ok": False, "error": "bad_day", "message": "Такого дня ещё не было."}), 400
+        if с and день < с:
+            return jsonify({"ok": False, "error": "too_old", "message": _СТАРАЯ_ПРОДАЖА}), 403
+        продажи = db.point_sales(city, день)
     out = []
-    for o in db.point_sales(city):
+    for o in продажи:
         try:
             состав = json.loads(o["items"] or "[]")
         except (TypeError, ValueError):
@@ -882,13 +945,18 @@ def api_admin_sales():
                     # Ключ попытки: экран с потерянным ответом узнаёт по нему,
                     # что его чек уже записан, и не просит провести ещё раз.
                     "token": o["client_token"] or "",
+                    "can_cancel": o["status"] == "issued" and not (с and (o["created_at"] or "")[:10] < с),
                     "items": [{"name": и.get("name"), "qty": и.get("qty"), "price": и.get("price")} for и in состав]})
-    return jsonify({"ok": True, "sales": out})
+    return jsonify({"ok": True, "sales": out, "day": день, "today": сегодня, "min_day": с})
 
 
 @bp.route("/api/admin/sale/cancel", methods=["POST"])
 def api_admin_sale_cancel():
-    """Отменить продажу на точке — ошиблись. Штуки вернутся на полку."""
+    """Отменить продажу на точке — ошиблись. Штуки вернутся на полку.
+
+    Продавец — продажи своей точки за последние 7 дней, владелец — любые.
+    Отменили продажу месяца, за который зарплату уже отметили, — выплату не
+    трогаем, а говорим, что разница уйдёт в ближайшую выплату (DAY-02)."""
     data = request.get_json(force=True, silent=True) or {}
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
@@ -900,9 +968,23 @@ def api_admin_sale_cancel():
     deny = auth.deny_city(admin, заказ["city"])
     if deny:
         return deny
+    день = (заказ["created_at"] or "")[:10]
+    с = _первый_день(admin)
+    if с and день < с:
+        return jsonify({"ok": False, "error": "too_old", "message": _СТАРАЯ_ПРОДАЖА}), 403
     try:
         db.cancel_point_sale(oid)
     except db.PointSaleRefused as e:
         return jsonify({"ok": False, "error": e.code, "message": e.message, **e.extra}), 409
-    g.log_note = f"продажа на точке {заказ['city']} №{oid} отменена: {float(заказ['total'] or 0):.2f} Br, штуки вернулись"
-    return jsonify({"ok": True})
+    сегодня = db.shop_now().strftime("%Y-%m-%d")
+    когда = "" if день == сегодня else f" от {_дата_словами(день)}"
+    g.log_note = (f"продажа на точке {заказ['city']} №{oid}{когда} отменена: "
+                  f"{float(заказ['total'] or 0):.2f} Br, штуки вернулись")
+    ответ = {"ok": True}
+    период = день[:7]
+    # Выплата за этот месяц уже записана (в том числе отмеченная посреди
+    # месяца — до правила «только за закончившийся»).
+    if any(в["city"] == заказ["city"] for в in db.seller_payouts_for_period(период).values()):
+        ответ["note"] = (f"Зарплата за {db.месяц_словами(период)} уже отмечена выплаченной — "
+                         "разница учтётся в ближайшей выплате.")
+    return jsonify(ответ)

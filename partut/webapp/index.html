@@ -834,7 +834,16 @@
       <div id="saleFound"></div>
     </div>
     <div id="saleDoc"></div>
-    <div class="sect dlvtop" id="saleToday"></div>
+    <!-- Продажи по дням: сегодня, а листанием — прошлые (продавцу 7 дней,
+         владельцу — любые) и поиск по номеру: ошибку вчерашней смены видно и
+         можно отменить (приёмка DAY-03). -->
+    <div class="sect dlvtop">
+      <div id="saleToday"></div>
+      <form class="salenum" id="saleNumForm" autocomplete="off">
+        <input id="saleNum" class="admsearch" inputmode="numeric" maxlength="9" placeholder="Найти продажу по номеру" aria-label="Номер продажи">
+        <button type="submit" class="barbtn" id="saleNumGo">Найти</button>
+      </form>
+    </div>
     <div class="dlvbar" id="saleBar">
       <div class="ochips" id="salePay">
         <button class="ochip" data-spay="cash">💵 Наличные</button>

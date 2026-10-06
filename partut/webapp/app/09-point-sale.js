@@ -16,6 +16,13 @@ let сЧек = null;          // { order: [pid], rows: {ключ: {pid, flavor, 
 let сИдёт = false;        // «Провести» в пути
 let сПоиск = "";
 let сСегодня = null;      // продажи за сегодня; null — не загрузились
+// История (приёмка DAY-03): показанный прошлый день и его продажи. Сегодня
+// всегда грузится отдельно — по нему узнаётся записанный чек с потерянным ответом.
+let сДень = null;         // показанный прошлый день "ГГГГ-ММ-ДД"; null — сегодня
+let сДеньСписок = null;   // его продажи; undefined — грузятся, null — не загрузились
+let сНайдено = null;      // продажа, найденная по номеру (показывается вместо дня)
+let сГраницы = null;      // {today, min_day} — по часам магазина, с сервера
+let сИсторияНомер = 0;    // номер запроса истории: опоздавший ответ не перетирает новый
 
 const продажаКлюч = (city) => `${ПРОДАЖА_КЛЮЧ}.${человек()}.${city}`;
 const строкаКлюч = (pid, flavor) => JSON.stringify([pid, flavor || ""]);
@@ -84,6 +91,7 @@ function выбратьТочкуПродажи(точка) {
   сЧек = точка ? прочитатьЧек(точка) : null;
   сПоиск = ""; $("saleFind").value = "";
   сСегодня = null;
+  сДень = null; сДеньСписок = null; сНайдено = null; сИсторияНомер++;
   нарисоватьПродажу();
   загрузитьСегодня();
 }
@@ -351,7 +359,7 @@ function чекЗаписан(точка, чек) {
   return true;
 }
 
-// ---------- Сегодня на точке ----------
+// ---------- Продажи по дням ----------
 // true — загрузились. Не загрузились — так и сказано, с «Повторить»: пустой
 // список читался бы как «сегодня продаж не было».
 async function загрузитьСегодня() {
@@ -361,7 +369,10 @@ async function загрузитьСегодня() {
     const r = await fetch("/api/admin/sales", { method: "POST", headers: { "Content-Type": "application/json" },
                                                body: JSON.stringify({ initData, city: точка }) });
     const d = await r.json();
-    if (d && d.ok && Array.isArray(d.sales)) список = d.sales;
+    if (d && d.ok && Array.isArray(d.sales)) {
+      список = d.sales;
+      if (d.today) сГраницы = { today: d.today, min_day: d.min_day || null };
+    }
   } catch (e) { /* список = null */ }
   if (точка !== сТочка) return false;           // пока грузили, выбрали другую точку
   сСегодня = список;
@@ -371,40 +382,147 @@ async function загрузитьСегодня() {
   нарисоватьСегодня();
   return список !== null;
 }
+// Прошлый день — по запросу: листают редко, а сегодня нужно всегда.
+async function загрузитьДень(день) {
+  const мой = ++сИсторияНомер, точка = сТочка;
+  сДень = день; сДеньСписок = undefined; сНайдено = null;
+  нарисоватьСегодня();
+  let d = null;
+  try {
+    const r = await fetch("/api/admin/sales", { method: "POST", headers: { "Content-Type": "application/json" },
+                                               body: JSON.stringify({ initData, city: точка, day: день }) });
+    d = await r.json().catch(() => null);
+  } catch (e) { d = null; }
+  if (мой !== сИсторияНомер || точка !== сТочка) return false;
+  сДеньСписок = d && d.ok && Array.isArray(d.sales) ? d.sales : null;
+  if (d && d.ok && d.today) сГраницы = { today: d.today, min_day: d.min_day || null };
+  нарисоватьСегодня();
+  if (d && !d.ok && d.message) alertMsg(d.message);
+  return сДеньСписок !== null;
+}
+// "ГГГГ-ММ-ДД" ± дни — в UTC: переход на летнее время не съест сутки.
+function сдвинутьДень(день, n) {
+  const [y, m, d] = день.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+const ДНИ_НЕДЕЛИ = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+const МЕСЯЦА = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа",
+                "сентября", "октября", "ноября", "декабря"];
+function деньСловами(день, сегодня) {
+  const [y, m, d] = день.split("-").map(Number);
+  const дата = `${d} ${МЕСЯЦА[m - 1]}${сегодня && y !== +сегодня.slice(0, 4) ? ` ${y}` : ""}`;
+  if (день === сегодня) return `Сегодня, ${дата}`;
+  if (сегодня && день === сдвинутьДень(сегодня, -1)) return `Вчера, ${дата}`;
+  return `${ДНИ_НЕДЕЛИ[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]}, ${дата}`;
+}
+// Что сейчас на экране: найденная по номеру, прошлый день или сегодня.
+function показанныеПродажи() {
+  if (сНайдено) return [сНайдено];
+  return сДень ? (сДеньСписок || []) : (сСегодня || []);
+}
+function строкаПродажи(x) {
+  const день = (x.created_at || "").slice(0, 10);
+  const можно = x.status !== "canceled" && x.can_cancel !== false;
+  return `<div class="salesale${x.status === "canceled" ? " off" : ""}">
+    <b>№${x.id} · ${сНайдено && сГраницы ? `${esc(деньСловами(день, сГраницы.today))}, ` : ""}${esc((x.created_at || "").slice(11, 16))} · ${деньги(x.total)} Br · ${x.payment === "card" ? "картой" : x.payment === "cash" ? "наличными" : "—"}</b>
+    ${x.status === "canceled" ? `<span class="dlvhint">отменена</span>`
+      : можно ? `<button type="button" class="barbtn" data-scancel="${x.id}">Отменить</button>`
+      : `<span class="dlvhint">отменяет владелец</span>`}
+    <div class="salewhat">${esc(x.items.map(и => `${и.name} × ${и.qty}`).join(", "))}${x.seller ? ` · ${esc(x.seller)}` : ""}${x.city && x.city !== сТочка ? ` · ${esc(x.city)}` : ""}</div>
+  </div>`;
+}
 function нарисоватьСегодня() {
   const узел = $("saleToday");
   if (!сТочка) { узел.innerHTML = ""; return; }
-  if (сСегодня === null) {
-    узел.innerHTML = `<div class="dlvhint">Продажи за сегодня не загрузились. <button type="button" class="barbtn" id="saleTodayRetry">↻ Повторить</button></div>`;
-    const b = $("saleTodayRetry"); if (b) b.onclick = загрузитьСегодня;
-    return;
+  const г = сГраницы;
+  const сегодня = г ? г.today : null;
+  const показан = сДень || сегодня;
+  // Листать можно, когда сервер сказал, какое сегодня у магазина: часы
+  // телефона могут быть в другом поясе.
+  const назад = !!г && !!показан && !сНайдено && (!г.min_day || показан > г.min_day);
+  const вперёд = !!сДень && !сНайдено;
+  const листалка = `<div class="saledays">
+      <button type="button" class="barbtn" id="saleDayPrev" aria-label="Предыдущий день"${назад ? "" : " disabled"}>‹</button>
+      <div class="saledayname">${сНайдено ? `Продажа №${сНайдено.id}` : показан ? esc(деньСловами(показан, сегодня)) : "Сегодня"}</div>
+      <button type="button" class="barbtn" id="saleDayNext" aria-label="Следующий день"${вперёд ? "" : " disabled"}>›</button>
+    </div>`;
+  let тело;
+  const список = сНайдено ? [сНайдено] : сДень ? сДеньСписок : сСегодня;
+  if (сНайдено) {
+    тело = строкаПродажи(сНайдено) + `<button type="button" class="barbtn" id="saleFoundClose">‹ К продажам дня</button>`;
+  } else if (список === undefined) {
+    тело = `<div class="dlvhint">Загружаю продажи…</div>`;
+  } else if (список === null) {
+    тело = `<div class="dlvhint">Продажи ${сДень ? "за этот день" : "за сегодня"} не загрузились. <button type="button" class="barbtn" id="saleTodayRetry">↻ Повторить</button></div>`;
+  } else {
+    const живые = список.filter(x => x.status !== "canceled");
+    const сумма = живые.reduce((s, x) => s + x.total, 0);
+    тело = `<div class="nowhere-h">${живые.length} ${plural(живые.length, "продажа", "продажи", "продаж")} на ${деньги(сумма)} Br</div>`
+      + (список.length ? список.map(строкаПродажи).join("") : `<div class="dlvhint">${сДень ? "В этот день продаж не было." : "Пока ни одной."}</div>`);
   }
-  const живые = сСегодня.filter(x => x.status !== "canceled");
-  const сумма = живые.reduce((s, x) => s + x.total, 0);
-  узел.innerHTML = `<div class="nowhere-h">Сегодня на точке · ${живые.length} ${plural(живые.length, "продажа", "продажи", "продаж")} на ${деньги(сумма)} Br</div>`
-    + (сСегодня.length ? сСегодня.map(x => `<div class="salesale${x.status === "canceled" ? " off" : ""}">
-        <b>${esc((x.created_at || "").slice(11, 16))} · ${деньги(x.total)} Br · ${x.payment === "card" ? "картой" : x.payment === "cash" ? "наличными" : "—"}</b>
-        ${x.status === "canceled" ? `<span class="dlvhint">отменена</span>`
-          : `<button type="button" class="barbtn" data-scancel="${x.id}">Отменить</button>`}
-        <div class="salewhat">${esc(x.items.map(и => `${и.name} × ${и.qty}`).join(", "))}${x.seller ? ` · ${esc(x.seller)}` : ""}</div>
-      </div>`).join("") : `<div class="dlvhint">Пока ни одной.</div>`);
+  const край = г && г.min_day && показан === г.min_day && !сНайдено
+    ? `<div class="dlvhint">Продавцу видны продажи за 7 дней — более ранние видит и отменяет владелец.</div>` : "";
+  узел.innerHTML = листалка + тело + край;
+  const b = $("saleTodayRetry"); if (b) b.onclick = () => (сДень ? загрузитьДень(сДень) : загрузитьСегодня());
+  const закрыть = $("saleFoundClose"); if (закрыть) закрыть.onclick = () => { сНайдено = null; нарисоватьСегодня(); };
+  $("saleDayPrev").onclick = () => { if (назад) загрузитьДень(сдвинутьДень(показан, -1)); };
+  $("saleDayNext").onclick = () => {
+    if (!вперёд) return;
+    const день = сдвинутьДень(сДень, 1);
+    if (день >= сегодня) { сИсторияНомер++; сДень = null; сДеньСписок = null; нарисоватьСегодня(); }
+    else загрузитьДень(день);
+  };
   узел.querySelectorAll("[data-scancel]").forEach(b => b.onclick = () => отменитьПродажу(+b.dataset.scancel));
 }
+// Поиск по номеру: номер виден в журнале («продажа на точке Минск №123») и в списке.
+$("saleNumForm").onsubmit = (e) => { e.preventDefault(); найтиПродажу(); };
+async function найтиПродажу() {
+  const номер = ($("saleNum").value || "").replace(/\D/g, "");
+  if (!номер || !сТочка) return;
+  const мой = ++сИсторияНомер, точка = сТочка;
+  let d = null;
+  try {
+    const r = await fetch("/api/admin/sales", { method: "POST", headers: { "Content-Type": "application/json" },
+                                               body: JSON.stringify({ initData, city: точка, id: +номер }) });
+    d = await r.json().catch(() => null);
+  } catch (e) { d = null; }
+  if (мой !== сИсторияНомер || точка !== сТочка) return;
+  if (!d) { alertMsg("Сеть недоступна — найти продажу не вышло."); return; }
+  if (!d.ok || !d.sales || !d.sales.length) { alertMsg(d.message || "Такой продажи нет."); return; }
+  if (d.today) сГраницы = { today: d.today, min_day: d.min_day || null };
+  сНайдено = d.sales[0];
+  нарисоватьСегодня();
+}
 function отменитьПродажу(id) {
-  const x = (сСегодня || []).find(s => s.id === id); if (!x) return;
-  confirmMsg(`Отменить продажу ${деньги(x.total)} Br (${(x.created_at || "").slice(11, 16)})?\n\nШтуки вернутся на полку, из выручки она уйдёт.`, async () => {
+  const x = показанныеПродажи().find(s => s.id === id); if (!x) return;
+  const день = (x.created_at || "").slice(0, 10);
+  const прошлый = сГраницы && день !== сГраницы.today;
+  const когда = прошлый ? `${деньСловами(день, сГраницы.today)}, ${(x.created_at || "").slice(11, 16)}` : (x.created_at || "").slice(11, 16);
+  confirmMsg(`Отменить продажу №${x.id} на ${деньги(x.total)} Br (${когда})?\n\nШтуки вернутся на полку, из выручки ${прошлый ? "того дня" : "дня"} она уйдёт.`, async () => {
     let d = null;
     try {
       const r = await fetch("/api/admin/sale/cancel", { method: "POST", headers: { "Content-Type": "application/json" },
                                                       body: JSON.stringify({ initData, id }) });
       d = await r.json().catch(() => null);
     } catch (e) { d = null; }
-    const [товарыЕсть, списокЕсть] = await Promise.all([refreshProducts(), загрузитьСегодня()]);
+    const найдено = сНайдено && сНайдено.id === id;
+    const [товарыЕсть, списокЕсть] = await Promise.all([refreshProducts(), загрузитьСегодня(),
+      сДень && !найдено ? загрузитьДень(сДень) : null, найдено ? обновитьНайденное(id) : null]);
     нарисоватьПродажу();
     if (!d) alertMsg("Ответ сервера не дошёл — не знаю, отменилась ли продажа. " + (товарыЕсть && списокЕсть
       ? "Список обновлён: посмотрите, отменена ли она." : "Обновить список тоже не вышло — проверьте связь и посмотрите позже."));
     else if (!d.ok) alertMsg(d.message || "Не удалось отменить.");
+    else if (d.note) alertMsg(`Продажа отменена — штуки на полке.\n\n${d.note}`);
     else toast("Продажа отменена — штуки на полке");
   });
+}
+// Найденную по номеру перечитываем после отмены — чтобы она показалась отменённой.
+async function обновитьНайденное(id) {
+  try {
+    const r = await fetch("/api/admin/sales", { method: "POST", headers: { "Content-Type": "application/json" },
+                                               body: JSON.stringify({ initData, city: сТочка, id }) });
+    const d = await r.json();
+    if (d && d.ok && d.sales && d.sales.length && сНайдено && сНайдено.id === id) сНайдено = d.sales[0];
+  } catch (e) { /* останется прежней — список дня всё равно перечитан */ }
 }
 // ----- /Продажа на точке -----

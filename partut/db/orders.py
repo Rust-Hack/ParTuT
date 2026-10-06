@@ -409,10 +409,10 @@ def record_point_sale(city, lines, admin_id, seller, payment="", client_token=""
             cur,
             """INSERT INTO orders (user_id, username, city, items, total, pickup_time, status, created_at,
                                    coins_used, delivery_method, delivery_address, delivery_fee, payment_method,
-                                   comment, phone, promo_code, promo_discount, client_token, source)
-               VALUES (0, %s, %s, %s, %s, '', 'issued', %s, 0, %s, '', 0, %s, '', '', NULL, 0, %s, 'point')""",
+                                   comment, phone, promo_code, promo_discount, client_token, source, issued_at)
+               VALUES (0, %s, %s, %s, %s, '', 'issued', %s, 0, %s, '', 0, %s, '', '', NULL, 0, %s, 'point', %s)""",
             ((seller or "")[:64], city, json.dumps(items, ensure_ascii=False), total, created_at,
-             ПРОДАЖА_НА_ТОЧКЕ, payment or "", token or None),
+             ПРОДАЖА_НА_ТОЧКЕ, payment or "", token or None, created_at),     # выдана в момент продажи
         )
         conn.commit()
     except PointSaleRefused:
@@ -570,6 +570,14 @@ def cancel_point_sale(order_id):
 # Статусы «заказ ещё живой»: до выдачи или отмены.
 ОТКРЫТЫЕ = ("new", "paid", "confirmed")
 
+# День выдачи заказа — по нему считаются «выдано сегодня», выручка и зарплата
+# продавца (решение владельца 7.10.2026, приёмка DAY-01). Время выдачи пишется
+# с этого дня (issue_order, record_point_sale); у заказов, выданных раньше, его
+# нет — для них остаётся дата оформления, выдумывать время выдачи нельзя.
+# Одно выражение на все запросы: свести сводку дня, статистику, выгрузку и
+# зарплату к разным правилам было бы проще простого, а заметить — трудно.
+ДЕНЬ_ВЫДАЧИ = "COALESCE(issued_at, created_at)"
+
 
 def open_orders_with_product(pid):
     """Сколько незакрытых заказов содержат этот товар.
@@ -640,9 +648,10 @@ def seller_today(city=None):
     Раньше на эти четыре числа уходило два экрана: заказы открой и посчитай,
     остаток посмотри в товарах, деньги — в статистике за месяц.
 
-    «Сегодня» считается по дате создания заказа — так же, как в «Статистике»:
-    два экрана с одинаковой подписью и разными числами хуже, чем небольшая
-    неточность в редком случае «заказали вчера, забрали сегодня».
+    «Выдано сегодня» — по дню ВЫДАЧИ (ДЕНЬ_ВЫДАЧИ), как и «Статистика» с
+    зарплатой. Раньше считали по дню оформления, и заказ «оформили вчера,
+    забрали сегодня» в сегодняшнюю выдачу не попадал: на кассе деньги есть, а
+    в сводке нет (приёмка DAY-01, решение владельца 7.10.2026).
     """
     today = db.shop_now().strftime("%Y-%m-%d")
     where_city = " AND city = %s" if city else ""
@@ -657,7 +666,7 @@ def seller_today(city=None):
 
     cur.execute(db._q(f"SELECT COALESCE(source, '') = 'point' AS на_точке, COUNT(*) AS c, "
                       f"COALESCE(SUM(total), 0) AS s FROM orders "
-                      f"WHERE status = 'issued' AND created_at LIKE %s{where_city} "
+                      f"WHERE status = 'issued' AND {ДЕНЬ_ВЫДАЧИ} LIKE %s{where_city} "
                       f"GROUP BY COALESCE(source, '') = 'point'"),
                 (today + "%", *args_city))
     по = {bool(r["на_точке"]): (int(r["c"]), float(r["s"] or 0)) for r in cur.fetchall()}
@@ -844,7 +853,7 @@ def issue_order(order_id, allowed=("paid", "confirmed")):
         if not order:
             conn.close()
             return None, None
-        cur.execute(db._q("UPDATE orders SET status = 'issued' WHERE id = %s"), (order_id,))
+        cur.execute(db._q("UPDATE orders SET status = 'issued', issued_at = %s WHERE id = %s"), (now, order_id))
 
         try:
             items = json.loads(order["items"])

@@ -15,7 +15,7 @@ partut/web/admin.py — экран владельца: настройки маг
 
 import io
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from partut import cache
 from partut.web import auth
@@ -247,6 +247,9 @@ def api_admin_docs():
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
     if "offer" not in data and "privacy" not in data:
+        # Просто открыли экран — не действие: раньше каждый просмотр ложился
+        # в журнал строкой «правка оферты».
+        g.не_в_журнал = True
         return jsonify({"ok": True, "docs": db.documents()})
 
     # Пустой текст — не «удалить», а промах: очищенное поле оставило бы магазин
@@ -259,8 +262,10 @@ def api_admin_docs():
 
     редакция = db.set_documents(оферта, политика)
     cache.bust()
-    db.log_admin_action(int(admin["id"]), admin.get("name", ""), "docs/update",
-                        f"редакция {редакция}")
+    # Одной строкой через общий журнал: маршрут писал и сам («docs/update»),
+    # и каждая правка лежала в журнале дважды.
+    что = " и ".join(x for x, есть in (("оферта", оферта is not None), ("политика данных", политика is not None)) if есть)
+    g.log_note = f"{что}: новая редакция {редакция}"
     return jsonify({"ok": True, "version": редакция, "docs": db.documents()})
 
 
@@ -374,7 +379,10 @@ def api_admin_payroll():
     Владелец видит все точки — это его деньги и его решение, кому платить.
     Продавец видит ТОЛЬКО свою точку и только себя в списке продавцов — это
     не финансовый отчёт для него, а мотивация «вот сколько ты уже заработал
-    в этом месяце», а не чужая зарплата и не чужой остаток к выплате."""
+    в этом месяце», а не чужая зарплата и не чужой остаток к выплате.
+
+    open — месяц ещё идёт: выплату за него не отмечают (решение владельца
+    7.10.2026), pay_from — с какого дня можно."""
     data = request.get_json(force=True, silent=True) or {}
     admin = auth.get_admin(data.get("initData", ""))
     if not admin:
@@ -388,15 +396,18 @@ def api_admin_payroll():
         uid = int(admin["id"])
         rows = [{**r, "sellers": [s for s in r["sellers"] if s["user_id"] == uid]}
                 for r in rows if r["city"] == my_city]
-    return jsonify({"ok": True, "period": period, "rows": rows})
+    return jsonify({"ok": True, "period": period, "rows": rows,
+                    "current": db.shop_now().strftime("%Y-%m"),
+                    "open": db.месяц_открыт(period), "pay_from": db.выплата_с(period)})
 
 
 @bp.route("/api/admin/payroll/pay", methods=["POST"])
 def api_admin_payroll_pay():
-    """Отметить зарплату продавца за месяц выплаченной.
+    """Отметить зарплату продавца за закончившийся месяц выплаченной.
 
-    Сумму не принимаем от клиента — пересчитываем на сервере той же функцией,
-    что и сам экран: так владелец не может случайно (или намеренно, чужим
+    Сумму не принимаем от клиента — считает сервер (db.pay_seller) тем же
+    правилом, что и экран: начислено за месяц плюс перерасчёт прошлых
+    выплаченных месяцев. Так владелец не может случайно (или намеренно, чужим
     запросом в обход приложения) записать в журнал любое число."""
     data = request.get_json(force=True, silent=True) or {}
     admin = auth.get_admin(data.get("initData", ""))
@@ -407,25 +418,16 @@ def api_admin_payroll_pay():
     user_id = inputs.целое(data.get("user_id"))
     if not period or not city or user_id is None or not _валидный_период(period):
         return jsonify({"ok": False, "error": "bad_input"}), 400
-
-    строка = next((r for r in db.payroll_for_period(period) if r["city"] == city), None)
-    if not строка:
-        return jsonify({"ok": False, "error": "not_found"}), 404
-    продавец = next((s for s in строка["sellers"] if s["user_id"] == user_id), None)
-    if not продавец:
-        return jsonify({"ok": False, "error": "not_found"}), 404
-    if продавец["paid"]:
-        return jsonify({"ok": False, "error": "already_paid"}), 400
-    # Сумма на точку с несколькими продавцами не разделена — платить с этого
-    # экрана нечем, пока их не разведут вручную (см. payroll_for_period).
-    if строка["amount"] is None:
-        return jsonify({"ok": False, "error": "not_split",
-                        "message": "На этой точке несколько продавцов — разделите сумму сами, отметить отсюда нельзя."}), 400
-
-    ok = db.record_seller_payout(user_id, city, period, строка["revenue"], строка["percent"],
-                                 строка["amount"], int(admin["id"]))
-    if not ok:
-        return jsonify({"ok": False, "error": "already_paid"}), 400
-    db.log_admin_action(int(admin["id"]), admin.get("name", ""), "payroll/pay",
-                        f"{city} {period}: {строка['amount']} Br продавцу {user_id}")
-    return jsonify({"ok": True, "amount": строка["amount"]})
+    try:
+        итог = db.pay_seller(user_id, city, period, int(admin["id"]))
+    except db.PayrollRefused as e:
+        return jsonify({"ok": False, "error": e.code, "message": e.message}), 404 if e.code == "not_found" else 400
+    # Одной строкой через общий журнал (server._write_admin_log): раньше
+    # маршрут писал ещё и сам, и каждая выплата лежала в журнале дважды.
+    поправки = "".join(f", перерасчёт за {db.месяц_словами(п)} {с:+.2f}" for п, с in sorted(итог["corrections"].items()))
+    имя = next((s["note"] for s in db.list_staff() if int(s["user_id"]) == user_id and s["note"]), "")
+    g.log_note = (f"зарплата за {db.месяц_словами(period)}, {city}: выплачено {итог['amount']:.2f} Br "
+                  f"продавцу {f'{имя} ({user_id})' if имя else user_id}"
+                  + (f" (начислено {итог['base']:.2f}{поправки})" if поправки else ""))
+    return jsonify({"ok": True, "amount": итог["amount"], "base": итог["base"],
+                    "corrections": [{"period": п, "amount": с} for п, с in sorted(итог["corrections"].items())]})

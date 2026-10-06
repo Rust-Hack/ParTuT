@@ -700,6 +700,7 @@ def init_db():
     _ensure_product_columns()   # доклеит новые колонки на старой базе (миграция)
     _ensure_user_columns()      # coins / referred_by у пользователей
     _ensure_order_columns()     # coins_used / доставка у заказов
+    _ensure_payout_columns()    # перерасчёты прошлых месяцев внутри выплаты продавцу
     _ensure_coin_log_columns()  # related_id — какой реферал за начислением
     _ensure_stock_move_columns()  # ключ попытки у движения склада — против двойного прихода
     _ensure_price_rev_column()    # номер версии цены — против перестановки запросов
@@ -1188,9 +1189,34 @@ def _ensure_order_columns():
     # (user_id = 0): в выручку она идёт, а в покупательское — нет.
     if "source" not in cols:
         cur.execute("ALTER TABLE orders ADD COLUMN source TEXT")
+    # Когда заказ выдан (приёмка DAY-01). «Выдано сегодня», выручка и зарплата
+    # продавца считаются по дню выдачи — решение владельца 7.10.2026. Раньше
+    # считали по дню оформления, и заказ, оформленный вчера и выданный
+    # сегодня, в сегодняшнюю выдачу не попадал. У заказов, выданных до этой
+    # колонки, она пустая: время выдачи никто не записывал, и выдумывать его
+    # нельзя — для них берётся дата оформления (orders.ДЕНЬ_ВЫДАЧИ).
+    if "issued_at" not in cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN issued_at TEXT")
     conn.commit()
     conn.close()
     _ensure_delivery_columns()
+
+
+def _ensure_payout_columns():
+    """corrections — какие перерасчёты прошлых месяцев вошли в эту выплату.
+
+    Приёмка DAY-02, решение владельца 7.10.2026: зарплату отмечают только за
+    закончившийся месяц, а если после выплаты продажу того месяца отменили,
+    разница переходит в ближайшую выплату отдельной строкой. Чтобы одна и та
+    же разница не ушла дважды, выплата помнит, что она уже закрыла:
+    {"2026-08": -2.0}. Пусто — перерасчётов в выплате не было (все выплаты,
+    отмеченные до этой колонки)."""
+    conn = connect()
+    cur = conn.cursor()
+    if "corrections" not in _table_columns(cur, "seller_payouts"):
+        cur.execute("ALTER TABLE seller_payouts ADD COLUMN corrections TEXT")
+    conn.commit()
+    conn.close()
 
 
 def _ensure_delivery_columns():
@@ -2826,6 +2852,7 @@ from partut.db.shop import (                                            # noqa: 
 from partut.db.reports import (                                         # noqa: E402
     inc_stat, reset_statistics, get_business_stats, coin_flow, also_bought,  # noqa: F401
     orders_for_export, payroll_for_period,                               # noqa: F401
+    PayrollRefused, pay_seller, месяц_открыт, выплата_с, месяц_словами,     # noqa: F401
 )
 
 
@@ -2880,7 +2907,7 @@ from partut.db.orders import (                                          # noqa: 
     set_order_status, set_order_status_if, set_order_receipt,               # noqa: F401
     set_order_paid_amount, open_orders_with_product,                        # noqa: F401
     PointSaleRefused, record_point_sale, point_sales, cancel_point_sale,    # noqa: F401
-    CancelRefused, вкус_на_полке,                                           # noqa: F401
+    CancelRefused, вкус_на_полке, ДЕНЬ_ВЫДАЧИ,                              # noqa: F401
 )
 
 
