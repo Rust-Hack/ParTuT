@@ -233,6 +233,27 @@ def run():
            abs(закрыто - (-5.0)) < 0.001)
         суммы = sorted(ответы[п]["amount"] for п in (M6, M7) if isinstance(ответы.get(п), dict))
         c8(f"одна выплата 2.00 (4 − 2), другая 4.00 ({суммы})", суммы == [2.0, 4.0])
+
+        c9 = Checker("История выплат не зависит от того, кто работает сегодня")
+        ДРУГАЯ = "ПерерасчётДругая"
+        db.add_staff(SELLER, ДРУГАЯ, "Лена")          # перевели на другую точку
+        config.refresh_staff()
+        строки = {r["city"]: r for r in db.payroll_for_period(M2)}
+        там = next((s for s in строки.get(CITY, {}).get("sellers", []) if s["user_id"] == SELLER), None)
+        c9(f"на прежней точке выплата за позапрошлый месяц осталась, с пометкой «бывший» ({там and там['former']})",
+           там is not None and там["former"] is True and там["paid"] and там["paid"]["amount"] == 2.0)
+        здесь = next((s for s in строки.get(ДРУГАЯ, {}).get("sellers", []) if s["user_id"] == SELLER), None)
+        c9(f"на новой точке тот же месяц — «выплачено на точке {CITY}», второй выплаты не предлагает",
+           здесь is not None and здесь["paid"] is None and здесь["paid_elsewhere"] == CITY and здесь["to_pay"] is None)
+        r = _post("/api/admin/payroll/pay", period=M2, city=CITY, user_id=SELLER)
+        c9(f"отметить выплату бывшему продавцу точки нельзя ({r.status_code} {r.get_json().get('error')})",
+           r.status_code == 404 and r.get_json().get("error") == "not_found")
+        db.remove_staff(SELLER)                         # убрали из доступа совсем
+        config.refresh_staff()
+        строки = {r["city"]: r for r in db.payroll_for_period(M2)}
+        там = next((s for s in строки.get(CITY, {}).get("sellers", []) if s["user_id"] == SELLER), None)
+        c9("убрали из доступа — выплата из истории месяца не пропала",
+           там is not None and там["former"] is True and там["paid"]["amount"] == 2.0)
     finally:
         config.SUPER_ADMIN_IDS = старые_владельцы
         db.remove_staff(SELLER)
@@ -240,7 +261,7 @@ def run():
         auth.get_user = REAL_GET_USER
         as_admin()
         _clean()
-    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails + c7.fails + c8.fails
+    return c.fails + c2.fails + c3.fails + c4.fails + c5.fails + c6.fails + c7.fails + c8.fails + c9.fails
 
 
 if __name__ == "__main__":
