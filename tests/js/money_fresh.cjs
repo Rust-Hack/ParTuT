@@ -172,7 +172,7 @@ function стенд({ ручная = false } = {}) {
   {
     // Чтение ушло до ставки в слоте, а пришло после неё.
     const р = стенд({ ручная: true });
-    р.js("bonusReady = true; bonus.coins = 500"); 
+    р.js("bonusReady = true; bonus.coins = 500");
     р.js("fetchBonus()"); await р.тик();
     р.js("применитьБаланс(480, номерБаланса())");             // ответ сервера на ставку 20
     await р.ответить(0, { ok: true, coins: 500 });

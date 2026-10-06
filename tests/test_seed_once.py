@@ -58,7 +58,7 @@ def run():
     посеяно = len(db.category_codes())
     c("новая база получила стартовый набор", посеяно == len(db.CATEGORY_SEED))
     c("и точки", len(db.get_locations()) > 0)
-    c("у жидкостей вкусы включены сразу", 
+    c("у жидкостей вкусы включены сразу",
       next(x for x in db.list_categories() if x["code"] == "liquid")["has_flavors"] == 1)
 
     db._засеять_однажды()

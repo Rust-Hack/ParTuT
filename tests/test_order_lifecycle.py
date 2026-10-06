@@ -1,5 +1,6 @@
 """Жизненный цикл заказа: статусы, идемпотентность, кэшбэк, отмена, возвраты."""
 import io as _io
+import threading
 
 from _common import db, client, Checker, as_user, as_admin
 
@@ -189,13 +190,35 @@ def _boom_after_marker(marker):
         def __getattr__(self, name):
             return getattr(self._real, name)
 
+    наш = threading.get_ident()
+
     def patched():
         conn = orig_connect()
+        # Взрыватель — только у соединений проверяемого вызова (он идёт в этом
+        # же потоке). Фоновое уведомление со своим соединением не должно ни
+        # взвести его, ни принять сбой на себя: состояние у взрывателя общее
+        # (тот же класс, что QA-3C-01 — подмена ловила чужие фоновые потоки).
+        if threading.get_ident() != наш:
+            return conn
         orig_cursor = conn.cursor
         conn.cursor = lambda *a, **k: _КурсорСВзрывателем(orig_cursor(*a, **k))
         return conn
     db.connect = patched
     return lambda: setattr(db, "connect", orig_connect)
+
+
+def _курсор_другого_потока():
+    """Какого типа курсор у соединения, открытого в другом потоке."""
+    вид = {}
+
+    def чужой():
+        conn = db.connect()
+        вид["курсор"] = type(conn.cursor()).__name__
+        conn.close()
+    т = threading.Thread(target=чужой, name="qa-чужой-поток")
+    т.start()
+    т.join(10)
+    return вид.get("курсор")
 
 
 def run_атомарность_выдачи_и_отмены():
@@ -214,6 +237,7 @@ def run_атомарность_выдачи_и_отмены():
 
     undo = _boom_after_marker("status = 'issued'")
     try:
+        курсор_чужого = _курсор_другого_потока()
         raised = False
         try:
             db.issue_order(oid, ["paid", "confirmed"])
@@ -221,6 +245,8 @@ def run_атомарность_выдачи_и_отмены():
             raised = True
     finally:
         undo()
+    c(f"взрыватель не трогает соединения других потоков (курсор: {курсор_чужого})",
+      курсор_чужого is not None and курсор_чужого != "_КурсорСВзрывателем")
     c("сбой действительно произошёл", raised)
     c("статус НЕ сменился — откат целиком, не наполовину", db.get_order(oid)["status"] == "paid")
     c("кэшбэк не начислен (транзакция не коммитилась)", db.get_coins(CLIENT) == before_coins)

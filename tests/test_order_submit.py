@@ -3,6 +3,7 @@
 Отдельно проверяем БАТЧИНГ: заказ должен укладываться в считанные подключения к базе.
 На Neon каждое подключение — это поездка по сети, и раньше их было ~20 → кнопка «Оформить» висла.
 """
+import threading
 import time
 from _common import db, client, Checker, as_user, as_admin
 
@@ -16,16 +17,24 @@ PAY_CLIENT = 6164
 
 
 def _count_connects():
-    """Подменяет db.connect на счётчик. Возвращает (счётчик-список, функция-возврат)."""
-    calls = []
-    orig = db.connect
+    """Подменяет db.connect на счётчик ТОЛЬКО потока проверяемого запроса.
 
-    def counting():
-        calls.append(1)
-        return orig()
+    Тестовый клиент Flask выполняет запрос в том же потоке, что и тест. Раньше
+    считались все потоки, и уведомления прошлого заказа, ещё бегущие в фоне,
+    попадали в счёт этого (приёмка QA-3C-01: 6 подключений при своих трёх).
+    Подключения других потоков — отдельным списком: по нему проверяем сам
+    счётчик. Возвращает (свои, чужие, функция-возврат).
+    """
+    свои, чужие = [], []
+    orig = db.connect
+    наш = threading.get_ident()
+
+    def counting(*a, **k):
+        (свои if threading.get_ident() == наш else чужие).append(threading.current_thread().name)
+        return orig(*a, **k)
 
     db.connect = counting
-    return calls, (lambda: setattr(db, "connect", orig))
+    return свои, чужие, (lambda: setattr(db, "connect", orig))
 
 
 def run():
@@ -41,25 +50,28 @@ def run():
     # делаем отправку в Telegram МЕДЛЕННОЙ: если бы она шла в ответе — запрос завис бы на 0.5с.
     orig = tgsend.tg.send_message
     tgsend.tg.send_message = lambda *a, **k: time.sleep(0.5)
+    try:
+        t0 = time.time()
+        r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                            "payment_method": "cash", "items": [{"id": pid, "qty": 2}]})
+        elapsed = time.time() - t0
+        d = r.get_json() or {}
 
-    t0 = time.time()
-    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
-                                        "payment_method": "cash", "items": [{"id": pid, "qty": 2}]})
-    elapsed = time.time() - t0
-    d = r.get_json() or {}
+        c("ответ ok", r.status_code == 200 and d.get("ok"))
+        oid = d.get("order_id")
+        c("заказ создан", bool(oid))
+        o = db.get_order(oid)
+        c("статус paid (ждёт продавца)", o and o["status"] == "paid")
+        c("склад списан 10 → 8", db.get_product(pid)["stock"] == 8)
+        c("итого = 50", abs(float(d.get("total", 0)) - 50) < 0.01)
+        c("способ получения сохранён", o and o["delivery_method"] == "Самовывоз")
+        c(f"ответ быстрый ({elapsed*1000:.0f}мс), уведомления в фоне", elapsed < 0.4)
 
-    c("ответ ok", r.status_code == 200 and d.get("ok"))
-    oid = d.get("order_id")
-    c("заказ создан", bool(oid))
-    o = db.get_order(oid)
-    c("статус paid (ждёт продавца)", o and o["status"] == "paid")
-    c("склад списан 10 → 8", db.get_product(pid)["stock"] == 8)
-    c("итого = 50", abs(float(d.get("total", 0)) - 50) < 0.01)
-    c("способ получения сохранён", o and o["delivery_method"] == "Самовывоз")
-    c(f"ответ быстрый ({elapsed*1000:.0f}мс), уведомления в фоне", elapsed < 0.4)
-
-    time.sleep(0.6)                     # даём медленному фоновому потоку завершиться
-    tgsend.tg.send_message = orig
+        # Медленные уведомления этого заказа — дождаться целиком, а не «0.6 с
+        # наугад» (QA-3C-01): иначе хвост фона идёт рядом со следующей проверкой.
+        c("фон первого заказа доехал до конца", tgsend.дождаться_фона())
+    finally:
+        tgsend.tg.send_message = orig
 
     # --- Батчинг: сколько раз ходим в базу за один заказ ---
     # Считаем ТОЛЬКО путь запроса. Уведомления продавцу и клиенту уходят фоновым
@@ -69,14 +81,23 @@ def run():
     # иначе тест меряет не скорость оформления, а гонку с чужим потоком.
     orig_bg = tgsend.bg
     tgsend.bg = lambda fn, *a, **k: None
-    calls, restore = _count_connects()
-    r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
-                                        "payment_method": "card", "items": [{"id": pid, "qty": 1}]})
-    restore()
-    tgsend.bg = orig_bg
-    n = len(calls)
+    свои, чужие, restore = _count_connects()
+    try:
+        r = client.post("/api/order", json={"initData": "x", "delivery_method_id": mid,
+                                            "payment_method": "card", "items": [{"id": pid, "qty": 1}]})
+        # Проверка самого счётчика: подключение из другого потока (как у
+        # фонового уведомления) идёт мимо счёта заказа.
+        чужой = threading.Thread(target=lambda: db.connect().close(), name="qa-чужой-поток")
+        чужой.start()
+        чужой.join(10)
+    finally:
+        restore()
+        tgsend.bg = orig_bg
+    n = len(свои)
     d = r.get_json() or {}
     c(f"заказ укладывается в ≤3 подключения к базе (сейчас {n})", d.get("ok") and n <= 3)
+    c("счётчик видит подключение другого потока, но в счёт заказа его не берёт",
+      "qa-чужой-поток" in чужие and "qa-чужой-поток" not in свои)
 
     # --- Заказ картой: ждёт чек, статус new ---
     c("карта → needs_receipt", d.get("ok") and d.get("needs_receipt") is True)
