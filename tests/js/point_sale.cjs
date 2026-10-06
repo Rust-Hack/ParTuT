@@ -25,8 +25,12 @@ function проверка(что, ок, подробно) {
 // сеть: { "/api/admin/sale": ответ | "throw" | (тело) => ответ, "/api/admin/sales": ... }
 function стенд(сеть, настройки = {}) {
   const узлы = {};
-  const $ = (id) => узлы[id] || (узлы[id] = { id, value: "", textContent: "", innerHTML: "", disabled: false,
-    classList: { add() {}, remove() {}, toggle() {}, contains: () => false }, querySelectorAll: () => [], querySelector: () => null });
+  const $ = (id) => узлы[id] || (узлы[id] = (() => {
+    const к = new Set();
+    return { id, value: "", textContent: "", innerHTML: "", disabled: false, hidden: false, классы: к,
+      classList: { add: (x) => к.add(x), remove: (x) => к.delete(x), toggle: (x, да) => (да ? к.add(x) : к.delete(x)), contains: (x) => к.has(x) },
+      querySelectorAll: () => [], querySelector: () => null };
+  })());
   const хранилище = new Map(Object.entries(настройки.хранилище || {}));
   const сказано = [], тосты = [], запросы = [];
   const полка = настройки.полка || [
@@ -44,6 +48,9 @@ function стенд(сеть, настройки = {}) {
     plural: (n, a, b, c) => (n === 1 ? a : n < 5 && n > 1 ? b : c), esc: (s) => String(s ?? ""),
     toast: (m) => тосты.push(m), alertMsg: (m) => сказано.push(m), confirmMsg: (m, да) => { ctx.__да = да(); },
     refreshProducts: async () => true, renderAdminList() {},
+    // Свежесть списка управления (приёмка UX-48-01): грузится ли и пришёл ли.
+    админГрузится: настройки.грузится || 0, админСписокСвеж: настройки.свеж !== false,
+    fetchAdminProducts: async () => true, остаткиПродажиПришли() {},
     fetch: async (url, o) => {
       const тело = JSON.parse(o.body);
       запросы.push({ url, тело, вХранилище: хранилище.get("partut_sale_v1.7.Минск") || null });
@@ -55,7 +62,7 @@ function стенд(сеть, настройки = {}) {
   });
   vm.runInContext(код, ctx);
   const js = (к) => vm.runInContext(к, ctx);
-  return { ctx, js, сказано, тосты, запросы, хранилище,
+  return { ctx, js, сказано, тосты, запросы, хранилище, узлы,
            ждать: async () => { for (let i = 0; i < 5; i++) { await (ctx.__да || null); await new Promise(r => setImmediate(r)); } },
            чек: () => JSON.parse(хранилище.get("partut_sale_v1.7.Минск") || "null") };
 }
@@ -156,6 +163,27 @@ const список = (продажи) => ({ ok: true, sales: продажи });
     чужой.js("openSale()");
     await чужой.ждать();
     проверка("чужой ключ в списке — чек не трогаем", чужой.чек() && чужой.чек().order.length === 1);
+  }
+
+  // ---- Свежесть остатков в чеке (приёмка UX-48-01) ----
+  {
+    const свежо = стенд({ "/api/admin/sales": список([]) });
+    свежо.js("openSale()");
+    await свежо.ждать();
+    проверка("остатки свежие — строки «не обновились» нет, цифры не приглушены",
+      свежо.узлы.saleStale.hidden === true && !свежо.узлы.saleView.классы.has("stockupd"));
+    const грузится = стенд({ "/api/admin/sales": список([]) }, { грузится: 1, свеж: false });
+    грузится.js("openSale()");
+    await грузится.ждать();
+    проверка("остатки ещё грузятся — цифры приглушены, предупреждения нет (рано)",
+      грузится.узлы.saleView.классы.has("stockupd") && грузится.узлы.saleStale.hidden === true);
+    const сбой = стенд({ "/api/admin/sales": список([]) }, { свеж: false });
+    сбой.js("openSale()");
+    await сбой.ждать();
+    проверка("остатки не загрузились — так и сказано, с «↻ Повторить»",
+      сбой.узлы.saleStale.hidden === false && /Остатки не обновились/.test(сбой.узлы.saleStale.innerHTML)
+        && /id="saleRetry"/.test(сбой.узлы.saleStale.innerHTML) && typeof сбой.узлы.saleRetry.onclick === "function",
+      сбой.узлы.saleStale.innerHTML);
   }
 
   дошлиДоКонца = true;

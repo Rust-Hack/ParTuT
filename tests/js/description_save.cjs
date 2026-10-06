@@ -41,6 +41,7 @@ function стенд() {
   const ctx = vm.createContext({
     $, console, JSON, Promise, Set, setImmediate, initData: "qa",
     isOwner: () => true, shelf: () => [], CAT_OPTS: [["liquid", "Жидкости"]],
+    esc: (t) => String(t).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
     pickerValue: () => "", collectSpecs: () => ({}), ensureBrandExists: async () => {},
     fetchBrands: async () => {}, fetchFlavors: async () => {}, refreshAll: async () => {},
     обновитьКарточкуПослеОписания: () => {}, confirmMsg: (m, да) => да(),

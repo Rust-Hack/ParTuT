@@ -393,18 +393,26 @@ function готовитьАдминку(свежие = false) {
   if (свежие || !_adminBoot) _adminBoot = Promise.all([fetchAdminProducts(), fetchBrands()]);
 }
 function заказыИзМеню() { готовитьАдминку(); openOrders(); }
-async function товарыИзМеню() { готовитьАдминку(true); await openProducts(); }
+// Свежий список при каждом входе openProducts() берёт сам — откуда бы ни вошли.
+async function товарыИзМеню() { await openProducts(); }
 async function продажаИзМеню() {
-  // Чек строится по списку управления (там и снятое с витрины); не загружен —
-  // догружаем, не вышло — откроется по витрине, как и раньше. Окно — сразу,
-  // с «загружаю»: раньше нажатие ничем не отвечало, пока шёл запрос.
+  // Чек строится по списку управления (там и снятое с витрины). Окно — сразу:
+  // раньше нажатие ничем не отвечало, пока шёл запрос. Остатки в чеке
+  // перечитываются при каждом входе (приёмка UX-48-01): иначе товар, довезённый
+  // с другого телефона, не появлялся в «Продаже» до перезапуска, а проданный
+  // показывал «есть 5 шт». Не загрузился — чек скажет, что остатки прежние.
   if (!adminProducts.length) {
     $("saleView").classList.add("show");
     $("saleFound").innerHTML = loaderHtml(); $("saleDoc").innerHTML = "";
     await fetchAdminProducts();
     if (!$("saleView").classList.contains("show")) return;   // закрыли, пока грузилось
+    openSale();
+    return;
   }
-  openSale();
+  const загрузка = fetchAdminProducts();
+  openSale();                                                // с тем, что есть, и «обновляю остатки»
+  await загрузка;
+  if ($("saleView").classList.contains("show")) остаткиПродажиПришли();
 }
 
 // ---- Разделы нижнего меню — как вкладки (замечание владельца 5.10.2026) ----
@@ -842,14 +850,31 @@ let adminProducts = [];
 // числится.
 let админСписокСвеж = true;
 const shelf = () => adminProducts.length ? adminProducts : allProducts;
-async function fetchAdminProducts() {
-  try {
-    const r = await fetch("/api/admin/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
-    const d = await r.json();
-    if (d.ok && Array.isArray(d.products)) { adminProducts = d.products; админСписокСвеж = true; return true; }
-  } catch (e) { /* останемся на витрине — это хуже, но не пусто */ }
-  админСписокСвеж = false;
-  return false;
+// Запросов списка бывает несколько сразу: каждый вход в «Товары» и «Продажу»
+// перечитывает его (приёмка UX-48-01), а «Управление» в это время могло
+// грузить свой. Ответ применяется, только если он новее уже показанного:
+// поздний ответ старого запроса не затирает свежий (то же правило, что у
+// баланса, F-01-R2). Свеж ли список — решает самый новый запрос: пока он в
+// пути, вызов ждёт его итога.
+let админНомер = 0, админПоказан = 0, админПоследний = null, админГрузится = 0;
+function fetchAdminProducts() {
+  const мой = ++админНомер;
+  админГрузится++;
+  const запрос = (async () => {
+    let список = null;
+    try {
+      const r = await fetch("/api/admin/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
+      const d = await r.json();
+      if (d.ok && Array.isArray(d.products)) список = d.products;
+    } catch (e) { /* останемся на прежнем — это хуже, но не пусто */ }
+    админГрузится--;
+    if (список && мой > админПоказан) { adminProducts = список; админПоказан = мой; }
+    if (мой !== админНомер) return админПоследний;        // ушёл запрос новее — итог за ним
+    админСписокСвеж = !!список;
+    return !!список;
+  })();
+  админПоследний = запрос;
+  return запрос;
 }
 // Когда точки последний раз удалось прочитать — пауза «до 18:00» считается
 // истёкшей, только если список прочитан ПОСЛЕ 18:00 (паузаТочки).
@@ -917,7 +942,7 @@ function перерисоватьПослеПравки() {
 
 function renderChips() {
   $("chips").innerHTML = Object.entries(CATS).map(([code, t]) =>
-    `<button class="chip ${code===cat?'active':''}" data-c="${code}">${t}</button>`).join("");
+    `<button class="chip ${code===cat?'active':''}" data-c="${esc(code)}">${esc(t)}</button>`).join("");
   $("chips").querySelectorAll("[data-c]").forEach(b => b.onclick = () => {
     cat = b.dataset.c; brandFilters = []; flavorFilters = [];   // сменили категорию — сбрасываем фильтры
     renderChips(); updateFilterBtn(); renderGrid();
@@ -1199,7 +1224,7 @@ function gridRating(p) {
   return `<div class="cstars"><span class="stars">★</span> ${r.avg.toFixed(1)} <small>· ${r.count} ${plural(r.count, "отзыв", "отзыва", "отзывов")}</small></div>`;
 }
 function cardHtml(p) {
-  const photo = p.photo_url ? `<img src="${thumbOf(p)}" alt="" loading="lazy" decoding="async" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
+  const photo = p.photo_url ? `<img src="${thumbOf(p)}" alt="" loading="lazy" decoding="async" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${esc(CAT_EMOJI[p.category] || "🛒")}</div>`;
   const isFav = favs.has(p.id);
   const sub = subtitleFor(p);
   let ctrl;
@@ -1473,7 +1498,7 @@ function renderCart() {
   if (!entries.length) { $("tab-cart").innerHTML = `<div class="empty"><div class="circ">🛒</div><h3>Корзина пуста</h3><p>Добавьте товары из ассортимента.</p></div>`; return; }
   const rows = entries.map(it => {
     const p = allProducts.find(x => x.id === it.product_id); if (!p) return "";
-    const thumb = p.photo_url ? `<img src="${thumbOf(p)}" loading="lazy" decoding="async">` : (CAT_EMOJI[p.category] || "🛒");
+    const thumb = p.photo_url ? `<img src="${thumbOf(p)}" loading="lazy" decoding="async">` : esc(CAT_EMOJI[p.category] || "🛒");
     const fattr = it.flavor ? ` data-flavor="${esc(it.flavor)}"` : "";
     return `<div class="citem"><div class="thumb">${thumb}</div>
       <div style="flex:1"><div class="ci-name">${esc(p.name)}${it.flavor ? ` — ${esc(it.flavor)}` : ""}</div><div class="ci-price">${(p.price*it.qty).toFixed(2)} ${CUR}</div></div>
@@ -1580,7 +1605,7 @@ function upsellProducts() {
 function ucard(p) {
   const photo = p.photo_url
     ? `<img src="${thumbOf(p)}" alt="" loading="lazy" decoding="async" data-open="${p.id}">`
-    : `<div class="uph" data-open="${p.id}">${CAT_EMOJI[p.category] || "🛒"}</div>`;
+    : `<div class="uph" data-open="${p.id}">${esc(CAT_EMOJI[p.category] || "🛒")}</div>`;
   const btn = hasVariants(p)
     ? `<button class="uadd" data-pick="${p.id}">Выбрать</button>`
     : `<button class="uadd" data-inc="${p.id}">+ ${p.price.toFixed(2)} ${CUR}</button>`;

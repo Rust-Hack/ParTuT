@@ -495,7 +495,7 @@ function renderProduct() {
   // Галерея: одна картинка — просто картинка, несколько — листаются пальцем.
   const gal = (p.photos && p.photos.length) ? p.photos : (p.photo_url ? [{ url: p.photo_url }] : []);
   const photo = !gal.length
-    ? `<div class="ph">${CAT_EMOJI[p.category] || "🛒"}</div>`
+    ? `<div class="ph">${esc(CAT_EMOJI[p.category] || "🛒")}</div>`
     : gal.length === 1
       ? `<img src="${gal[0].url}" alt="">`
       : `<div class="pgal" id="pgal">${gal.map(g => `<img src="${g.url}" alt="" decoding="async">`).join("")}</div>`

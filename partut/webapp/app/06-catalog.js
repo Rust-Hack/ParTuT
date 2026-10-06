@@ -568,10 +568,11 @@ function нарисоватьСписокТоваров() {
   // Сколько показано — и заодно видно, что отбор включён: «3 товара» при
   // забытом фильтре читались бы как «на точке всего три».
   const товаров = (n) => `${n} ${plural(n, "товар", "товара", "товаров")}`;
-  счёт.textContent = !слито
+  счёт.textContent = (!слито
     ? (list.length === свои.length ? товаров(свои.length) : `Показано ${list.length} из ${свои.length}`)
     : (list.length === свои.length ? `${товаров(группы.length)} · ${list.length} на точках`
-       : `Показано ${товаров(группы.length)} · ${list.length} из ${свои.length} на точках`);
+       : `Показано ${товаров(группы.length)} · ${list.length} из ${свои.length} на точках`))
+    + (админГрузится ? " · обновляю…" : "");             // свежий список ещё в пути (UX-48-01)
   if (!list.length) {
     const msg = admStockFilter === "out" ? "Ничего не кончилось — на всех точках есть остаток."
               : admStockFilter === "need" ? "Завозить нечего: везде больше " + LOW_STOCK + " шт."
@@ -617,18 +618,24 @@ function группаТовара(строки) {
   const обещано = строки.reduce((s, p) => s + (+p.reserved || 0), 0);
   const цены = [...new Set(строки.map(p => (+p.price).toFixed(2)))].sort((a, b) => a - b);
   const цена = цены.length === 1 ? `${цены[0]} Br` : `${цены[0]}–${цены[цены.length - 1]} Br`;
+  // Цена хоть одной точки не подтверждена (ответ не пришёл или запрос ещё в
+  // пути) — у диапазона «?» и сказано, где (приёмка UX-48-02): свёрнутая
+  // группа выдавала прежний диапазон за точный.
+  const сомнения = строки.filter(p => ценаСомнительна(p.id));
   const ждут = строки.reduce((s, p) => s + (+p.waiting || 0), 0);
+  // Название точки — текст, а не разметка (приёмка UX-48-03): «<b>Туров</b>»
+  // в названии становилось настоящим жирным.
   const точки = строки.map(p => {
     const st = stockState(p);
-    return `<span class="gpt ${st}">${нр(`${p.city} ${p.stock}`)}${p.hidden ? "&nbsp;·&nbsp;снят" : ""}</span>`;
+    return `<span class="gpt ${st}">${нр(`${esc(p.city)} ${+p.stock || 0}`)}${p.hidden ? "&nbsp;·&nbsp;снят" : ""}</span>`;
   }).join(" · ");
   return `<div class="admrow prodgroup${раскрыта ? " open" : ""}">
       <button type="button" class="grouphead" data-group="${к}" aria-expanded="${раскрыта}">
         <span class="prodhead"><span class="prodname">${esc(строки[0].name)}</span>
           <span class="prodstock">Всего&nbsp;<b>${всего}</b>&nbsp;шт${обещано ? ` · ${нр("в заказах")}&nbsp;<b>${обещано}</b>` : ""} · ${нр(`${строки.length} ${plural(строки.length, "точка", "точки", "точек")}`)}</span></span>
-        <span class="gprice">${цена}</span><span class="gchev" aria-hidden="true">▾</span>
+        <span class="gprice${сомнения.length ? " unsure" : ""}">${цена}</span><span class="gchev" aria-hidden="true">▾</span>
       </button>
-      <div class="prodmeta">${ждут ? `<span class="warnc">${нр(`ждут поступления ${ждут}`)}</span> · ` : ""}${точки}</div>
+      <div class="prodmeta">${сомнения.length ? `<span class="warnc">${нр(`цена не подтверждена: ${сомнения.map(p => esc(p.city)).join(", ")}`)}</span> · ` : ""}${ждут ? `<span class="warnc">${нр(`ждут поступления ${ждут}`)}</span> · ` : ""}${точки}</div>
       ${раскрыта ? `<div class="grows">${строки.map(p => строкаТовара(p, false, true)).join("")}</div>` : ""}
     </div>`;
 }
@@ -1001,6 +1008,9 @@ async function сохранитьЦену() {
   const своё = () => моё === ценаОткрытие && $("priceOverlay").classList.contains("show");
   ценаИдёт = true;
   ценаВПути.set(p.id, (ценаВПути.get(p.id) || 0) + 1);
+  // Список под окном — сразу с «?» у этой цены (и у её группы): окно могут
+  // закрыть, не дождавшись ответа, и строка не должна выглядеть подтверждённой.
+  renderAdminList();
   const btn = $("priceSave");
   btn.disabled = true; btn.textContent = "Сохраняю…";
   try {
@@ -1318,7 +1328,7 @@ function обновитьКарточкуПослеОписания() {
 
 function renderEdit(p) {
   const isVar = hasVariants(p);
-  const catOptions = CAT_OPTS.map(([c, n]) => `<option value="${c}" ${p.category === c ? 'selected' : ''}>${n}</option>`).join("");
+  const catOptions = CAT_OPTS.map(([c, n]) => `<option value="${esc(c)}" ${p.category === c ? 'selected' : ''}>${esc(n)}</option>`).join("");
   const cityOptions = locations.map(l => `<option value="${esc(l.name)}" ${p.city === l.name ? 'selected' : ''}>${esc(l.name)}</option>`).join("");
 
   // ---- Товар, заведённый из ассортимента: тут только цена и остаток ----
@@ -1362,7 +1372,7 @@ function renderEdit(p) {
     // ---- Товар без модели (заведён до «Ассортимента»): поля правятся вручную ----
     $("editBody").innerHTML = `
       <div class="card-block form">
-        <div class="csub">${catName(p.category)} · ${esc(p.city)}</div>
+        <div class="csub">${esc(catName(p.category))} · ${esc(p.city)}</div>
         <label>Категория</label><select id="edCat">${catOptions}</select>
         <label>Точка (город)</label><select id="edCity">${cityOptions}</select>
         <label>Название</label><input id="edName" value="${esc(p.name)}">
@@ -1398,7 +1408,7 @@ function renderEdit(p) {
   $("editBody").innerHTML = `
     <div class="card-block form">
       <div style="font-weight:800">${esc(p.name)}</div>
-      <div class="csub" style="margin-top:4px">${esc(p.brand || '')} · ${catName(p.category)} · ${esc(p.city)}</div>
+      <div class="csub" style="margin-top:4px">${esc(p.brand || '')} · ${esc(catName(p.category))} · ${esc(p.city)}</div>
       <label>Точка (город)</label><select id="edCity">${cityOptions}</select>
       <label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}">
       <label>Закупочная цена (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}">

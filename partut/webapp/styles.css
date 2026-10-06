@@ -1103,6 +1103,9 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 .grouphead .prodhead { display: block; }
 .grouphead .prodname, .grouphead .prodstock { display: block; }
 .gprice { flex: 0 0 auto; font-weight: 800; font-size: 15px; padding-top: 2px; white-space: nowrap; }
+/* Цена хоть одной точки не подтверждена — как у строки: «?» и цвет (UX-48-02). */
+.gprice.unsure { color: var(--warn); }
+.gprice.unsure::after { content: " ?"; }
 .gchev { flex: 0 0 auto; color: var(--hint); font-size: 14px; padding-top: 3px; transition: transform .2s ease; }
 .prodgroup.open .gchev { transform: rotate(180deg); }
 .gpt.low { color: var(--warn); font-weight: 700; }
@@ -1390,3 +1393,8 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 #pauseChips { flex-wrap: wrap; }
 .pausenote .linkbtn { display: block; margin: 6px auto 0; background: none; border: 0; color: var(--accent); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; min-height: 32px; }
 .dwarn.staleall { margin: 0 0 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Остатки перечитываются (приёмка UX-48-01): прежние цифры приглушены, пока
+   не пришли свежие. Список «Товаров» — так же и без нажатий. */
+#saleView.stockupd .dlvfname small, #saleView.stockupd .dlvvar small { opacity: .45; }
+#saleStale .dwarn.staleall { margin: 8px 0 10px; }
+#adminList.updating { opacity: .5; pointer-events: none; transition: opacity .15s ease; }

@@ -339,7 +339,7 @@ async function открытьОписание(id) {
   if (сеанс !== описаниеСеанс) return;      // пока грузили, открыли другой товар
   const m = models.find(x => x.id === id);
   if (!m) { alertMsg("Этого товара больше нет — обновите список."); return; }
-  $("mdCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+  $("mdCat").innerHTML = CAT_OPTS.map(([c, n]) => `<option value="${esc(c)}">${esc(n)}</option>`).join("");
   editModel(id);
   const города = [...new Set(shelf().filter(p => p.model_id === id).map(p => p.city))];
   $("descScope").textContent = города.length
@@ -639,14 +639,23 @@ async function openProducts() {
   // идут — прежний список с «Обновляю…» или, если его ещё нет, «загружаю».
   const вид = $("productsView");
   вид.classList.add("show");
-  if (adminProducts.length) { renderAdmFilters(); renderAdminList(); $("admCount").textContent = "Обновляю…"; }
-  else { $("adminList").innerHTML = loaderHtml(); $("admCount").textContent = ""; }
-  // Список читает shelf() — тот самый adminProducts, который заводит
-  // openAdmin(). Тап сразу после открытия хаба мог обогнать этот запрос
-  // и показать пустоту или прошлый визит; ждём тот же промис, а не свой.
-  if (_adminBoot) await _adminBoot;
-  // Описания нужны списку: товары, которые нигде не продаются, — внизу.
-  await Promise.all([isOwner() ? fetchModels() : null, загрузитьАрхив()]);   // архив — внизу, свёрнутым
+  // Каждый вход — свежий список, откуда бы ни вошли (приёмка UX-48-01): пункт
+  // и плитка «надо завезти» в «Управлении» ждали прошлую, давно закончившуюся
+  // загрузку, и продавец видел «Свободно 5», которых уже не было. Пока свежий
+  // идёт, прежний приглушён и не нажимается — по нему ничего не решают; не
+  // пришёл — над списком «не обновился, показан прежний» (блокНесвежий).
+  // Поздний ответ более старого запроса свежий не затрёт (fetchAdminProducts).
+  готовитьАдминку(true);
+  const список = $("adminList");
+  if (adminProducts.length) { список.classList.add("updating"); renderAdmFilters(); renderAdminList(); }
+  else { список.innerHTML = loaderHtml(); $("admCount").textContent = ""; }
+  try {
+    await _adminBoot;
+    // Описания нужны списку: товары, которые нигде не продаются, — внизу.
+    await Promise.all([isOwner() ? fetchModels() : null, загрузитьАрхив()]);   // архив — внизу, свёрнутым
+  } finally {
+    список.classList.remove("updating");
+  }
   if (!вид.classList.contains("show")) return;            // закрыли, пока грузилось
   renderAdmFilters();
   renderAdminList();
@@ -672,7 +681,7 @@ function renderWork() {
         </div>
       </div>`;
     вкладка.dataset.ready = "1";
-    $("workSupply").onclick = async () => { готовитьАдминку(); await _adminBoot; openSupply(); };
+    $("workSupply").onclick = async () => { готовитьАдминку(true); await _adminBoot; openSupply(); };   // остатки — свежие (UX-48-01)
     $("workAdmin").onclick = openAdmin;
   }
   $("workHead").textContent = `🛠 Работа · ${myScope() || "все точки"}`;
@@ -882,7 +891,7 @@ async function openBrands() {
   if (_adminBoot) await _adminBoot;
   // «Во всех категориях» — первым: бренд обычно делает не одно, а всё сразу.
   $("brCat").innerHTML = `<option value="">Во всех категориях</option>`
-    + CAT_OPTS.map(([c, n]) => `<option value="${c}">${n}</option>`).join("");
+    + CAT_OPTS.map(([c, n]) => `<option value="${esc(c)}">${esc(n)}</option>`).join("");
   await fetchFlavors();
   renderKnownFlavors();
   renderBrandList();
@@ -1153,7 +1162,7 @@ async function loadPayroll() {
       if (!один) return `<div class="statrow"><span style="padding-left:12px;color:var(--hint)">${имя}</span></div>`;
       if (s.paid) return `<div class="statrow"><span style="padding-left:12px">${имя}</span><b style="color:#1f8a5f">выплачено ${money(s.paid.amount)}</b></div>`;
       return `<div class="statrow"><span style="padding-left:12px">${имя}</span>
-        <button class="iconbtn ok" style="width:auto;padding:4px 14px" data-pay="${r.city}::${s.user_id}">Отметить выплаченным</button></div>`;
+        <button class="iconbtn ok" style="width:auto;padding:4px 14px" data-pay="${esc(r.city)}::${s.user_id}">Отметить выплаченным</button></div>`;
     }).join("");
     return `<div class="stathead">🏙 ${esc(r.city)}</div><div class="statlist">
       <div class="statrow"><span>Выручка за месяц (без доставки)</span><b>${money(r.revenue)}</b></div>

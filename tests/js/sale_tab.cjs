@@ -22,6 +22,11 @@ const админка = fs.readFileSync(path.join(__dirname, "..", "..", "partut"
 const в = админка.indexOf("const МЕСТА_СВОДКИ"), г = админка.indexOf("// ----- Точка закрыта на время -----");
 if (в < 0 || г < 0) { console.log("❌ не нашёл сводку дня в 04-admin.js"); process.exit(1); }
 const сводка = админка.slice(в, г);
+// Открытие «Товаров» — настоящее: свежий список при каждом входе берёт оно само
+// (приёмка UX-48-01), а не тот, кто его зовёт.
+const д = админка.indexOf("async function openProducts() {"), е = админка.indexOf('$("productsClose").onclick');
+if (д < 0 || е < 0) { console.log("❌ не нашёл openProducts в 04-admin.js"); process.exit(1); }
+const товарыКод = админка.slice(д, е);
 
 let провалов = 0, дошлиДоКонца = false;
 process.on("exit", () => {
@@ -49,6 +54,7 @@ function стенд(me, { список = [], загрузка = true, режим
   const журнал = { вкладки: [], чек: 0, заказы: 0, товары: 0, права: 0, загрузок: 0, списокПриЧеке: null, html: "", закрыто: [] };
   const окна = Object.fromEntries(["ordersView", "saleView", "productsView", "saleFound", "saleDoc"].map(id => [id, окно(id, журнал)]));
   окна.pointBtn = { id: "pointBtn", hidden: false };              // точка покупателя в шапке
+  окна.adminList = окно("adminList", журнал); окна.admCount = { id: "admCount", textContent: "" };
   // Места сводки дня: плитки — кнопки data-t, как их рисует renderToday.
   for (const id of ["todayCard", "workToday"]) {
     const плитки = [];
@@ -76,7 +82,9 @@ function стенд(me, { список = [], загрузка = true, режим
     localStorage: { getItem: (k) => (хранилище.has(k) ? хранилище.get(k) : null), setItem: (k, v) => хранилище.set(k, String(v)) },
     _adminBoot: null, fetchBrands: async () => true, applyAdminScope: () => журнал.права++,
     openOrders: () => { журнал.заказы++; окна.ordersView.classList.add("show"); },
-    openProducts: async () => { журнал.товары++; окна.productsView.classList.add("show"); },
+    renderAdmFilters() {}, renderAdminList() {}, fetchModels: async () => true, загрузитьАрхив: async () => true,
+    обновитьКнопкуПоставки() {}, обновитьКнопкуНового() {}, выбранныеЧипыВВиду() {},
+    остаткиПродажиПришли: () => { журнал.остатки = (журнал.остатки || 0) + 1; },
     fetchAdminProducts: async () => {
       журнал.загрузок++;
       if (ручная) await new Promise(r => ждут.push(r));
@@ -88,7 +96,9 @@ function стенд(me, { список = [], загрузка = true, режим
     plural: (n, a, b, c) => (n === 1 ? a : n < 5 ? b : c), CUR: "Br",
     ordersStatusFilter: "all", admStockFilter: "all",
   });
-  vm.runInContext(меню + "\n" + сводка + "\nrenderNav();", ctx);
+  vm.runInContext(меню + "\n" + сводка + "\n" + товарыКод + "\nrenderNav();", ctx);
+  const настоящиеТовары = ctx.openProducts;                         // считаем входы, открывает — настоящий
+  ctx.openProducts = (...а) => { журнал.товары++; return настоящиеТовары(...а); };
   const тик = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)); };
   const открыты = () => ["ordersView", "saleView", "productsView"].filter(id => окна[id].classList.contains("show"));
   const активна = () => (журнал.html.match(/navbtn active" data-tab="([^"]+)"/) || [])[1];
@@ -153,9 +163,33 @@ function стенд(me, { список = [], загрузка = true, режим
     проверка("аккаунт 2 в том же телефоне — своё (по умолчанию) меню покупателя", другой.вкладки() === "catalog,bonus,cart,sale,profile");
   }
   {
+    // Список уже загружен. Раньше чек открывался по нему без запроса — и товар,
+    // довезённый с другого телефона, не появлялся в «Продаже» до перезапуска.
+    // Теперь (приёмка UX-48-01): чек — сразу, по прежнему; остатки перечитаны.
+    const с = стенд({ is_admin: true, role: "owner" }, { список: [{ id: 5 }], ручная: true });
+    с.кнопки.find(k => k.dataset.tab === "sale").onclick();
+    проверка("список уже загружен — чек открыт сразу, по прежнему списку, свежий уже запрошен",
+      с.журнал.чек === 1 && с.журнал.списокПриЧеке === 1 && с.журнал.загрузок === 1 && !с.журнал.остатки, с.журнал);
+    с.ждут[0](); for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+    проверка("…свежий пришёл — чек перерисован по нему", с.журнал.остатки === 1 && с.ctx.adminProducts.length === 2, с.журнал);
+  }
+  {
+    const с = стенд({ is_admin: true, role: "owner" }, { список: [{ id: 5 }], ручная: true });
+    с.кнопки.find(k => k.dataset.tab === "sale").onclick();
+    с.окна.saleView.querySelector(".viewhead button").click();          // закрыл, не дождавшись
+    с.ждут[0](); for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+    проверка("закрыл продажу, пока остатки шли, — чек не перерисовывается в закрытом окне", !с.журнал.остатки, с.журнал);
+  }
+  {
+    // «Товары» из «Управления» (пункт и плитка зовут openProducts напрямую) —
+    // тоже свежий список при каждом входе: в отчёте плитка показывала «Свободно 5».
     const с = стенд({ is_admin: true, role: "owner" }, { список: [{ id: 5 }] });
-    await с.нажать("sale");
-    проверка("список уже загружен — без лишнего запроса", с.журнал.загрузок === 0 && с.журнал.чек === 1, с.журнал);
+    с.js("_adminBoot = Promise.resolve([true, true])");               // «Управление» давно загрузилось
+    await с.js("openProducts()");
+    с.окна.productsView.querySelector(".viewhead button").click();
+    await с.js("openProducts()");
+    проверка("UX-48-01: вход в «Товары» мимо меню (из «Управления») — каждый раз свежий список",
+      с.журнал.загрузок === 2, с.журнал);
   }
   {
     const с = стенд({ is_admin: true, role: "owner" }, { загрузка: false });

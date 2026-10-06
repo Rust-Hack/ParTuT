@@ -102,11 +102,43 @@ function нарисоватьПродажу() {
     $("saleFound").innerHTML = ""; $("saleDoc").innerHTML = ""; нарисоватьИтогПродажи(); return;
   }
   $("saleScope").textContent = `Продажа на точке «${сТочка}». Остаток уменьшится, а выручка попадёт в статистику, когда нажмёте «Провести».`;
+  нарисоватьСвежестьПродажи();
   нарисоватьНайденноеПродажи();
   $("saleDoc").innerHTML = сЧек.order.map(карточкаПродажи).join("");
   привязатьЧек();
   нарисоватьИтогПродажи();
   нарисоватьСегодня();
+}
+
+// Свежи ли остатки в чеке (приёмка UX-48-01). Пока перечитываются — цифры
+// «есть N шт» приглушены; не перечитались — так и сказано, с «Повторить»:
+// прежние цифры могли устареть, а выглядели бы подтверждёнными.
+function нарисоватьСвежестьПродажи() {
+  $("saleView").classList.toggle("stockupd", админГрузится > 0);
+  const место = $("saleStale");
+  if (админГрузится > 0 || админСписокСвеж) { место.hidden = true; место.innerHTML = ""; return; }
+  место.hidden = false;
+  место.innerHTML = `<div class="dwarn staleall">⚠️ Остатки не обновились — показаны прежние, могли устареть.
+    <button type="button" class="barbtn" id="saleRetry">↻ Повторить</button></div>`;
+  $("saleRetry").onclick = async () => {
+    const загрузка = fetchAdminProducts();
+    нарисоватьСвежестьПродажи();                     // «Повторить» пропадает, цифры приглушены
+    await загрузка;
+    if ($("saleView").classList.contains("show")) остаткиПродажиПришли();
+  };
+}
+// Свежий список пришёл, пока чек открыт: перерисовать, не сбив ввод — поле с
+// курсором остаётся тем же, и курсор на месте.
+function остаткиПродажиПришли() {
+  const поле = document.activeElement;
+  const вЧеке = поле && $("saleDoc").contains(поле) ? поле : null;
+  const ключ = !вЧеке ? null : вЧеке.dataset.sq !== undefined ? ["sq", вЧеке.dataset.sq]
+    : вЧеке.dataset.sprice !== undefined ? ["sprice", вЧеке.dataset.sprice] : null;
+  const где = вЧеке ? вЧеке.selectionStart : null;
+  нарисоватьПродажу();
+  if (!ключ) return;
+  const новое = [...$("saleDoc").querySelectorAll(`[data-${ключ[0]}]`)].find(i => i.dataset[ключ[0]] === ключ[1]);
+  if (новое) { новое.focus(); try { новое.setSelectionRange(где, где); } catch (e) { /* поле без курсора */ } }
 }
 
 function нарисоватьНайденноеПродажи() {
