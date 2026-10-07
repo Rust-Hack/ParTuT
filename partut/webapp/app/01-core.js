@@ -839,10 +839,57 @@ async function fetchProducts() {
     // чем-то, кроме списка, для нас не отличим от честной пустой витрины,
     // а на самом деле это тоже сбой, который лучше показать, чем скрыть.
     if (!Array.isArray(список)) { if (мой > витринаПоказана) витринаСвежа = false; return false; }
-    if (мой > витринаПоказана) { allProducts = список; витринаПоказана = мой; витринаВзята = Date.now(); витринаСвежа = true; }
+    if (мой > витринаПоказана) {
+      const прежние = allProducts;
+      allProducts = список; витринаПоказана = мой; витринаВзята = Date.now(); витринаСвежа = true;
+      if (Object.keys(cart).length) сверитьКорзинуСВитриной(прежние);
+    }
     return true;
   }
   catch (e) { if (мой > витринаПоказана) витринаСвежа = false; return false; }
+}
+
+// Витрина обновилась, пока корзина собрана (приёмка ROLE-03-R1). Раньше новый
+// каталог просто заменял прежний: снятый с витрины товар пропадал из списка
+// корзины, но оставался в ней самой — значок считал его, «Оформить · 0.00 Br»
+// звало оформлять, а убрать невидимую строку было нечем. Теперь корзина
+// сверяется с витриной тем же правилом, что при запуске (восстановитьКорзину):
+// снятое и разобранное убирается, лишнее количество подрезается, вкус,
+// переименованный регистром, остаётся тем же вкусом. Что поменялось — словами
+// в корзине, пока человек не нажмёт «Понятно». Остального, что он успел
+// сделать (другие позиции, монеты), сверка не трогает.
+// прежние — каталог до обновления: по нему называем то, чего в новом уже нет.
+let корзинаИзменилась = [];
+function сверитьКорзинуСВитриной(прежние) {
+  const изменения = [];
+  for (const [key, it] of Object.entries(cart)) {
+    const p = allProducts.find(x => x.id === it.product_id);
+    const был = (прежние || []).find(x => x.id === it.product_id);
+    const имя = `«${(p || был) ? (p || был).name : "Товар"}${it.flavor ? ` — ${it.flavor}` : ""}»`;
+    if (!p || p.hidden || p.city !== city) { delete cart[key]; изменения.push(`${имя} больше не продаётся — убран из корзины`); continue; }
+    if (!it.flavor && hasVariants(p)) { delete cart[key]; изменения.push(`${имя}: теперь у товара есть варианты — выберите нужный заново`); continue; }
+    const вкус = it.flavor ? нынешнийВкус(p, it.flavor) : null;
+    if (вкус && !(p.variants || []).some(v => v.flavor === вкус)) {
+      delete cart[key]; изменения.push(`${имя}: такого варианта больше нет — убран из корзины`); continue;
+    }
+    const max = вкус ? variantStock(p, вкус) : p.stock;
+    if (max <= 0) { delete cart[key]; изменения.push(`${имя}: разобрали — убран из корзины`); continue; }
+    let запись = it;
+    if (вкус !== it.flavor) { delete cart[key]; запись = cart[cartKey(p.id, вкус)] = { ...it, flavor: вкус }; }
+    if (запись.qty > max) { изменения.push(`${имя}: осталось ${max} шт — в корзине теперь ${max} вместо ${запись.qty}`); запись.qty = max; }
+    if (был && был.price !== p.price) изменения.push(`${имя}: цена ${(+был.price).toFixed(2)} → ${(+p.price).toFixed(2)} Br`);
+  }
+  if (!изменения.length) return false;
+  корзинаИзменилась = [...new Set(корзинаИзменилась.concat(изменения))].slice(-12);
+  сохранитьКорзину();
+  renderNav();                                      // значок корзины — по новому составу
+  if (activeTab !== "cart") toast("Корзина изменилась — загляните в неё");
+  // Оформление уже открыто — сумма и состав в нём прежние. Ведём в корзину,
+  // где сказано, что поменялось: оформлять не то, что человек видел, нельзя.
+  // Заказ уже отправляется — решает сервер, окно не трогаем.
+  const оформление = $("deliveryOverlay");
+  if (оформление && оформление.classList.contains("show") && !submitting) { closeOverlay(оформление); showTab("cart"); }
+  return true;
 }
 
 // Витрина в открытом приложении тоже стареет: товар, опубликованный с другого
@@ -1546,11 +1593,40 @@ function reconcileCart(d) {
   сохранитьКорзину();
 }
 
+// Что поменялось при последних сверках с витриной (ROLE-03-R1) — до «Понятно».
+function заметкаКорзины() {
+  if (!корзинаИзменилась.length) return "";
+  return `<div class="dwarn cartchanged" id="cartChanged"><b>Витрина обновилась — в корзине изменения:</b>
+    <ul>${корзинаИзменилась.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
+    <button type="button" class="barbtn" id="cartChangedOk">Понятно</button></div>`;
+}
+function привязатьЗаметкуКорзины() {
+  if ($("cartChangedOk")) $("cartChangedOk").onclick = () => { корзинаИзменилась = []; renderCart(); };
+}
+// Витрина не обновилась — сказано там, где сумма (приёмка ROLE-03-R2). Плашка
+// каталога живёт во вкладке каталога и в корзине не видна, а цены в корзине
+// те же, что не обновились.
+function свежестьКорзины() {
+  if (витринаСвежа || !витринаВзята) return "";
+  return `<div class="dwarn staleall" id="cartStale">⚠️ Не удалось обновить витрину — цены и наличие на ${new Date(витринаВзята).toTimeString().slice(0, 5)}, могли измениться.
+    <button type="button" class="barbtn" id="cartRetry">↻ Обновить</button></div>`;
+}
 function renderCart() {
-  const entries = Object.values(cart);
-  if (!entries.length) { $("tab-cart").innerHTML = `<div class="empty"><div class="circ">🛒</div><h3>Корзина пуста</h3><p>Добавьте товары из ассортимента.</p></div>`; return; }
-  const rows = entries.map(it => {
-    const p = allProducts.find(x => x.id === it.product_id); if (!p) return "";
+  const entries = Object.entries(cart);
+  if (!entries.length) {
+    $("tab-cart").innerHTML = заметкаКорзины() + `<div class="empty"><div class="circ">🛒</div><h3>Корзина пуста</h3><p>Добавьте товары из ассортимента.</p></div>`;
+    привязатьЗаметкуКорзины();
+    return;
+  }
+  // Позиция, которой нет в каталоге, — видимая строка с «Убрать», а не пустое
+  // место: сверка с витриной такое убирает, но невидимой строки, которую
+  // считает значок и не видит человек, не должно быть ни при каком пути.
+  const неизвестные = entries.filter(([, it]) => !allProducts.find(x => x.id === it.product_id)).length;
+  const rows = entries.map(([key, it]) => {
+    const p = allProducts.find(x => x.id === it.product_id);
+    if (!p) return `<div class="citem gone"><div class="thumb">🛒</div>
+      <div style="flex:1"><div class="ci-name">Товара нет на витрине${it.flavor ? ` — ${esc(it.flavor)}` : ""}</div><div class="ci-price">в заказ не войдёт</div></div>
+      <button type="button" class="barbtn" data-cdrop="${esc(key)}">Убрать</button></div>`;
     const thumb = p.photo_url ? `<img src="${thumbOf(p)}" loading="lazy" decoding="async">` : esc(CAT_EMOJI[p.category] || "🛒");
     const fattr = it.flavor ? ` data-flavor="${esc(it.flavor)}"` : "";
     return `<div class="citem"><div class="thumb">${thumb}</div>
@@ -1592,21 +1668,31 @@ function renderCart() {
     : total >= freeFrom
       ? `<div class="freehint on">Доставка бесплатная 🎉</div>`
       : `<div class="freehint">До бесплатной доставки — ещё ${(freeFrom - total).toFixed(2)} ${CUR}</div>`;
-  $("tab-cart").innerHTML = `<div class="clist">${rows}</div>${freeHtml}${upsHtml}
-    <div class="checkoutbar">${coinsHtml}${totalLine}
+  const закрыто = паузаТочки(city) || неизвестные;
+  $("tab-cart").innerHTML = заметкаКорзины() + `<div class="clist">${rows}</div>${freeHtml}${upsHtml}
+    <div class="checkoutbar">${свежестьКорзины()}${coinsHtml}${totalLine}
       ${паузаТочки(city) ? `<div class="pausenote">Точка закрыта ${esc(паузаТочки(city).words)} — корзина сохранится, оформить получится после открытия.
         <button type="button" class="linkbtn" id="pauseRecheck">↻ Проверить, открылась ли</button></div>` : ""}
-      <button class="bigbtn" id="checkout"${паузаТочки(city) ? " disabled" : ""}>${паузаТочки(city) ? `Точка закрыта ${esc(паузаТочки(city).words)}` : `Оформить · ${payable.toFixed(2)} ${CUR}`}</button>
+      <button class="bigbtn" id="checkout"${закрыто ? " disabled" : ""}>${паузаТочки(city) ? `Точка закрыта ${esc(паузаТочки(city).words)}`
+        : неизвестные ? "Уберите то, чего нет на витрине" : `Оформить · ${payable.toFixed(2)} ${CUR}`}</button>
       ${docsReady() ? `<div class="termsnote">Оформляя заказ, вы соглашаетесь с
         <a id="termsOffer">офертой</a> и <a id="termsPrivacy">обработкой данных</a>.</div>` : ""}</div>`;
   bindCardButtons($("tab-cart"));
+  привязатьЗаметкуКорзины();
+  $("tab-cart").querySelectorAll("[data-cdrop]").forEach(b => b.onclick = () => {
+    delete cart[b.dataset.cdrop]; сохранитьКорзину(); renderNav(); renderCart();
+  });
+  if ($("cartRetry")) $("cartRetry").onclick = () => {
+    $("cartRetry").disabled = true; $("cartRetry").textContent = "Загружаю…";
+    освежитьВитрину(true);            // дочитает — сам перерисует корзину; не вышло — плашка останется
+  };
   if ($("useCoinsChk")) $("useCoinsChk").onchange = () => { useCoins = $("useCoinsChk").checked; renderCart(); };
   // «Оформить» — сначала свериться, не закрыли ли точку только что: иначе
   // покупатель проходил доставку и оплату и узнавал о закрытии лишь при
   // отправке (приёмка f58f7d2). Не ответил сервер — оформляем как раньше:
   // закрытую точку он всё равно не пропустит.
   $("checkout").onclick = async () => {
-    if (паузаТочки(city)) return;
+    if (паузаТочки(city) || неизвестные) return;
     const кнопка = $("checkout");
     кнопка.disabled = true; кнопка.textContent = "Проверяю точку…";
     await перечитатьТочки(false, 5000);

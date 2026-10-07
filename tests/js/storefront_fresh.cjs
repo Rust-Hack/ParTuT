@@ -47,6 +47,9 @@ function стенд() {
     },
     updateFilterBtn() {}, renderGrid: () => журнал.сетка.push(ctx.allProducts.map(p => `${p.name} ${p.price}`).join(", ")),
     renderCart: () => журнал.корзина++, renderFav() {},
+    // Пустая корзина: сверка с витриной (ROLE-03-R1) здесь не участвует — она
+    // проверяется на настоящей корзине в tests/js/cart_fresh.cjs.
+    cart: {},
   });
   vm.runInContext(код + "\nthis.__свежа = () => витринаСвежа;", ctx);
   return { ctx, сервер, запросы, часы, журнал, узлы, js: (к) => vm.runInContext(к, ctx) };

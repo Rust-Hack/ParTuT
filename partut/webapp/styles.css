@@ -1404,6 +1404,13 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 #pauseChips { flex-wrap: wrap; }
 .pausenote .linkbtn { display: block; margin: 6px auto 0; background: none; border: 0; color: var(--accent); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; min-height: 32px; }
 .dwarn.staleall { margin: 0 0 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Корзина после обновления витрины (ROLE-03-R1): что убрано и подрезано — списком. */
+.dwarn.cartchanged { margin: 0 0 12px; }
+.dwarn.cartchanged ul { margin: 6px 0 8px; padding-left: 18px; }
+.dwarn.cartchanged li + li { margin-top: 3px; }
+.citem.gone { opacity: .75; }
+.citem.gone .ci-price { color: var(--danger); }
+.checkoutbar .dwarn.staleall { margin: 0 0 10px; }
 /* Остатки перечитываются (приёмка UX-48-01): прежние цифры приглушены, пока
    не пришли свежие. Список «Товаров» — так же и без нажатий. */
 #saleView.stockupd .dlvfname small, #saleView.stockupd .dlvvar small { opacity: .45; }
