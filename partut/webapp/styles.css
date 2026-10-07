@@ -216,11 +216,19 @@ html[data-theme="dark"] .ucard { border: 1px solid rgba(95,242,242,.20); box-sha
 .bigbtn { width: 100%; border: none; background: var(--accent); color: var(--on-accent); padding: 16px; border-radius: 16px;
   font-size: 16px; font-weight: 800; display: flex; justify-content: center; gap: 10px; align-items: center; }
 .bigbtn:disabled { opacity: .6; }
+.bigbtn.danger { background: var(--danger); }
 /* Карточка товара (В-2): «Сохранить» всегда на виду — закреплена внизу экрана,
    пока форма длиннее экрана; с несохранёнными правками — с числом и тенью. */
 #edSave { position: sticky; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 3; }
 #edSave.dirty { box-shadow: 0 6px 18px rgba(0, 0, 0, .22); }
 .unsaved { color: var(--warn); font-weight: 700; }
+/* Строка товара (П-1): «5 вкусов ▾» раскрывает остаток по каждому — только посмотреть. */
+.vartap { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.vartap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.varlist { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 2px; font-size: 13.5px; }
+.varitem b { font-weight: 800; }
+.varitem small { color: var(--hint); }
+.varitem.out b { color: var(--danger); }
 /* Второе действие на одном экране (например «проверить» после «открыть») не
    должно спорить весом с первым — заливка остаётся только у одной кнопки. */
 .bigbtn.outline { background: transparent; color: var(--accent); border: 2px solid var(--accent); }
@@ -1391,6 +1399,14 @@ html[data-theme="dark"] .npstep.on { border-color: rgba(95,242,242,.22); }
 .saledays .barbtn:disabled { opacity: .35; }
 .salenum { display: flex; gap: 8px; margin: 10px 0 8px; }
 .salenum .admsearch { flex: 1; min-width: 0; margin: 0; }
+/* Верх «Продажи» (П-2): только что проведённая продажа с «Отменить» и переход к списку дня. */
+#saleLast { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; }
+.salelast { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 12px;
+  background: var(--accent-soft); font-weight: 700; font-size: 14px; }
+.salelast > span { flex: 1; min-width: 0; }
+.salelast small { display: block; font-weight: 500; color: var(--hint); margin-top: 2px; }
+.salelast.off { background: var(--surface); color: var(--hint); }
+.salejump { align-self: flex-start; background: none; border: 0; padding: 4px 0; color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; text-align: left; }
 #salePay { margin-bottom: 8px; }
 
 /* Точка закрыта на время — над каталогом и в корзине. */

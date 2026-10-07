@@ -589,6 +589,11 @@ function нарисоватьСписокТоваров() {
   $("adminList").querySelectorAll("[data-move]").forEach(b => b.onclick = () => openStockMove(+b.dataset.move));
   $("adminList").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openEdit(+b.dataset.edit));
   $("adminList").querySelectorAll("[data-more]").forEach(b => b.onclick = () => открытьЕщё(+b.dataset.more));
+  $("adminList").querySelectorAll("[data-vars]").forEach(b => b.onclick = () => {
+    const id = +b.dataset.vars;
+    if (раскрытыеВарианты.has(id)) раскрытыеВарианты.delete(id); else раскрытыеВарианты.add(id);
+    renderAdminList();
+  });
   $("adminList").querySelectorAll("[data-group]").forEach(b => b.onclick = () => {
     const к = b.dataset.group;
     if (раскрытыеГруппы.has(к)) раскрытыеГруппы.delete(к); else раскрытыеГруппы.add(к);
@@ -764,6 +769,19 @@ function вариантовСтрокой(p) {
   return `${n} ${plural(n, один, два, пять)}`;
 }
 
+// Остаток по каждому варианту — только посмотреть (П-1, проход 6.10). Раньше
+// он был лишь в «📦 Складе» — форме, которая меняет остаток, с уже выбранным
+// «Приходом»: чтобы ответить покупателю «Виноград есть?», открывали приход и
+// листали. Теперь «5 вкусов» в строке раскрывает список прямо под ней.
+const раскрытыеВарианты = new Set();
+function списокВариантов(p) {
+  return `<div class="varlist">${p.variants.map(v => {
+    const есть = +v.stock || 0;
+    return `<span class="varitem${есть ? "" : " out"}">${esc(v.flavor)}&nbsp;<b>${есть}</b>${
+      v.reserved ? `&nbsp;<small>в&nbsp;заказах&nbsp;${v.reserved}</small>` : ""}</span>`;
+  }).join("")}</div>`;
+}
+
 // Строка товара. Сверху — название, под ним остаток; справа — цена-кнопка:
 // за ней в этот список заходят чаще всего. Ниже — второстепенное (точка,
 // варианты, «хит», кто ждёт) и действия с подписями.
@@ -796,7 +814,8 @@ function строкаТовара(p, сТочкой, вГруппе = false) {
     // поэтому первым.
     p.waiting ? `<span class="warnc">${нр(`ждут поступления ${p.waiting}`)}</span>` : "",
     сТочкой ? esc(p.city) : "",
-    hasVariants(p) ? нр(вариантовСтрокой(p)) : "",
+    hasVariants(p) ? `<button type="button" class="vartap" data-vars="${p.id}" aria-expanded="${раскрытыеВарианты.has(p.id)}">${
+      нр(вариантовСтрокой(p))}&nbsp;${раскрытыеВарианты.has(p.id) ? "▴" : "▾"}</button>` : "",
     p.is_hit ? нр("🔥 хит") : "",
     p.favored ? нр(`в избранном ${p.favored}`) : "",
     p.photo_url ? "" : нр("без фото"),
@@ -825,6 +844,7 @@ function строкаТовара(p, сТочкой, вГруппе = false) {
         ${цена}
       </div>
       ${снят || детали ? `<div class="prodmeta">${снят}${снят && детали ? " " : ""}${детали}</div>` : ""}
+      ${hasVariants(p) && раскрытыеВарианты.has(p.id) ? списокВариантов(p) : ""}
       ${действия}
     </div>`;
 }

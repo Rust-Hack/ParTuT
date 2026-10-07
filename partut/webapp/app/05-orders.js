@@ -436,14 +436,25 @@ function renderOrderEdit() {
     oeditQty[i] = Math.max(0, oeditQty[i] + (+b.dataset.oq));
     renderOrderEdit();
   });
+  // Всё убрали до нуля — это уже не правка, а отказ (П-4, проход 6.10).
+  // Раньше «Сохранить состав» оставалась как есть и вела в тупик: «Пустой
+  // заказ — это отмена. Закройте окно и нажмите «Отклонить»». Теперь кнопка
+  // сама ведёт к выбору причины; отменяет заказ только окно отказа.
+  const пусто = oeditПуст();
+  $("oeditSave").textContent = пусто ? "Отклонить заказ…" : "Сохранить состав";
+  $("oeditSave").classList.toggle("danger", пусто);
+  $("oeditEmpty").hidden = !пусто;
 }
+const oeditПуст = () => !Object.values(oeditQty).some(q => q > 0);
 
 $("oeditSave").onclick = async () => {
+  if (oeditПуст()) {
+    $("oeditView").classList.remove("show");
+    openOrderReject(oeditOrder.id);
+    return;
+  }
   const changed = Object.keys(oeditQty).some(i => oeditQty[i] !== +oeditOrder.items[i].qty);
   if (!changed) { alertMsg("Ничего не изменилось."); return; }
-  if (!Object.values(oeditQty).some(q => q > 0)) {
-    alertMsg("Пустой заказ — это отмена. Закройте окно и нажмите «Отклонить»."); return;
-  }
   $("oeditSave").disabled = true;
   try {
     const r = await fetch("/api/admin/order/items", { method: "POST", headers: { "Content-Type": "application/json" },

@@ -828,6 +828,9 @@
     <div class="sect dlvtop">
       <div class="ochips chiprow" id="salePoints"></div>
       <div class="dlvscope" id="saleScope"></div>
+      <!-- Только что проведённая продажа — с «Отменить» прямо здесь, а не под
+           всем списком товаров (П-2), и строка «Сегодня: … — к списку ›». -->
+      <div id="saleLast" hidden></div>
       <!-- Остатки не перечитались — сказано здесь, с «Повторить» (приёмка UX-48-01). -->
       <div id="saleStale" hidden></div>
       <input id="saleFind" class="admsearch" placeholder="🔍 Что продали?" autocomplete="off">
@@ -1035,6 +1038,8 @@
       <p style="color:var(--hint);font-size:13px;margin:4px 0 12px;text-align:left">Убавить можно всегда, прибавить — если товар есть на полке. Остаток и сумма пересчитаются сами, покупателю уйдёт сообщение с новым составом.</p>
       <div id="oeditItems"></div>
       <div class="ototal" style="margin-top:12px"><span>Итого станет</span><span id="oeditTotal">—</span></div>
+      <!-- Всё убрано до нуля — это отказ: кнопка ведёт к выбору причины (П-4). -->
+      <p class="dnote" id="oeditEmpty" hidden style="margin:10px 0 0">Все позиции убраны — это отказ от заказа. Нажмите «Отклонить заказ…» и выберите причину: покупатель её получит, а товар вернётся на полку.</p>
       <button class="bigbtn" id="oeditSave" style="margin-top:14px">Сохранить состав</button>
     </div>
   </div>

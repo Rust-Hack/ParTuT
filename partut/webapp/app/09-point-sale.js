@@ -23,6 +23,10 @@ let сДеньСписок = null;   // его продажи; undefined — г�
 let сНайдено = null;      // продажа, найденная по номеру (показывается вместо дня)
 let сГраницы = null;      // {today, min_day} — по часам магазина, с сервера
 let сИсторияНомер = 0;    // номер запроса истории: опоздавший ответ не перетирает новый
+// Продажа, только что проведённая с этого экрана (П-2): {id, total, точка}.
+// Плашка с ней и «Отменить» висит вверху, пока её не закроют или не проведут
+// следующую, — а не 15 секунд: ошибку замечают и через минуту.
+let сПоследняя = null;
 
 const продажаКлюч = (city) => `${ПРОДАЖА_КЛЮЧ}.${человек()}.${city}`;
 const строкаКлюч = (pid, flavor) => JSON.stringify([pid, flavor || ""]);
@@ -92,6 +96,7 @@ function выбратьТочкуПродажи(точка) {
   сПоиск = ""; $("saleFind").value = "";
   сСегодня = null;
   сДень = null; сДеньСписок = null; сНайдено = null; сИсторияНомер++;
+  if (сПоследняя && сПоследняя.точка !== точка) сПоследняя = null;
   нарисоватьПродажу();
   загрузитьСегодня();
 }
@@ -338,10 +343,13 @@ async function отправитьПродажу(и) {
     загрузитьСегодня();
     return;
   }
+  сПоследняя = { id: d.id, total: d.total, точка };
   забытьЧек(точка);
   toast(d.replay ? `Эта продажа уже была записана · ${деньги(d.total)} Br` : `Продано · ${деньги(d.total)} Br`);
   await Promise.all([refreshProducts(), загрузитьСегодня()]);
   нарисоватьПродажу();
+  // Новый чек начинают сверху — там и плашка «Продано №… · Отменить».
+  $("saleView").scrollTop = 0;
 }
 // Записано — чек этой точки начинается заново.
 function забытьЧек(точка) {
@@ -354,6 +362,7 @@ function забытьЧек(точка) {
 function чекЗаписан(точка, чек) {
   const найдено = чек && чек.token && (сСегодня || []).find(x => x.token === чек.token);
   if (!найдено || сТочка !== точка) return false;
+  сПоследняя = { id: найдено.id, total: найдено.total, точка };
   забытьЧек(точка);
   toast(`Продажа записана · ${деньги(найдено.total)} Br`);
   return true;
@@ -431,7 +440,43 @@ function строкаПродажи(x) {
     <div class="salewhat">${esc(x.items.map(и => `${и.name} × ${и.qty}`).join(", "))}${x.seller ? ` · ${esc(x.seller)}` : ""}${x.city && x.city !== сТочка ? ` · ${esc(x.city)}` : ""}</div>
   </div>`;
 }
+// Верх экрана (П-2): только что проведённая продажа с «Отменить» и строка
+// «Сегодня: 3 продажи на 54.00 Br — к списку ›». Сам список — внизу, под
+// всеми товарами точки и под полосой «Провести»: при длинном ассортименте
+// до «Отменить» надо было долистать.
+const оплатаСловом = (x) => x.payment === "card" ? "картой" : x.payment === "cash" ? "наличными" : "";
+function нарисоватьПоследнюю() {
+  const узел = $("saleLast");
+  if (!сТочка) { узел.hidden = true; узел.innerHTML = ""; return; }
+  const п = сПоследняя && сПоследняя.точка === сТочка
+    ? ((сСегодня || []).find(x => x.id === сПоследняя.id) || { id: сПоследняя.id, total: сПоследняя.total, status: "issued", items: [] })
+    : null;
+  let html = "";
+  if (п) {
+    const состав = (п.items || []).map(и => `${и.name} × ${и.qty}`).join(", ");
+    html += п.status === "canceled"
+      ? `<div class="salelast off"><span>Продажа №${п.id} отменена — штуки вернулись на полку.</span>
+          <button type="button" class="barbtn" id="saleLastClose" aria-label="Скрыть">✕</button></div>`
+      : `<div class="salelast"><span>✅ Продано №${п.id} · ${деньги(п.total)} Br${оплатаСловом(п) ? ` · ${оплатаСловом(п)}` : ""}${
+          состав ? `<small>${esc(состав)}</small>` : ""}</span>
+          <button type="button" class="barbtn" id="saleLastCancel">Отменить</button>
+          <button type="button" class="barbtn" id="saleLastClose" aria-label="Скрыть">✕</button></div>`;
+  }
+  const живые = (сСегодня || []).filter(x => x.status !== "canceled");
+  if (живые.length) {
+    const сумма = живые.reduce((s, x) => s + x.total, 0);
+    html += `<button type="button" class="linkbtn salejump" id="saleTodayJump">🧾 Сегодня: ${живые.length} ${plural(живые.length, "продажа", "продажи", "продаж")} на ${деньги(сумма)} Br — к списку ›</button>`;
+  }
+  узел.innerHTML = html; узел.hidden = !html;
+  if ($("saleLastCancel")) $("saleLastCancel").onclick = () => отменитьПродажу(п.id);
+  if ($("saleLastClose")) $("saleLastClose").onclick = () => { сПоследняя = null; нарисоватьПоследнюю(); };
+  if ($("saleTodayJump")) $("saleTodayJump").onclick = () => {
+    if (сДень || сНайдено) { сИсторияНомер++; сДень = null; сДеньСписок = null; сНайдено = null; нарисоватьСегодня(); }
+    $("saleToday").scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+}
 function нарисоватьСегодня() {
+  нарисоватьПоследнюю();
   const узел = $("saleToday");
   if (!сТочка) { узел.innerHTML = ""; return; }
   const г = сГраницы;
@@ -494,10 +539,13 @@ async function найтиПродажу() {
   нарисоватьСегодня();
 }
 function отменитьПродажу(id) {
-  const x = показанныеПродажи().find(s => s.id === id); if (!x) return;
+  const x = показанныеПродажи().find(s => s.id === id) || (сСегодня || []).find(s => s.id === id)
+    || (сПоследняя && сПоследняя.id === id ? { id, total: сПоследняя.total, created_at: "" } : null);
+  if (!x) return;
   const день = (x.created_at || "").slice(0, 10);
-  const прошлый = сГраницы && день !== сГраницы.today;
-  const когда = прошлый ? `${деньСловами(день, сГраницы.today)}, ${(x.created_at || "").slice(11, 16)}` : (x.created_at || "").slice(11, 16);
+  const прошлый = !!(сГраницы && день && день !== сГраницы.today);
+  // Продажа из плашки, а список ещё не пришёл, — время неизвестно, она «только что».
+  const когда = !день ? "только что" : прошлый ? `${деньСловами(день, сГраницы.today)}, ${(x.created_at || "").slice(11, 16)}` : (x.created_at || "").slice(11, 16);
   confirmMsg(`Отменить продажу №${x.id} на ${деньги(x.total)} Br (${когда})?\n\nШтуки вернутся на полку, из выручки ${прошлый ? "того дня" : "дня"} она уйдёт.`, async () => {
     let d = null;
     try {
