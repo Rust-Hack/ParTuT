@@ -852,13 +852,9 @@ def api_admin_photo():
         return беда
 
     try:
-        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
-                            caption="🖼 Фото товара сохранено", disable_notification=True)
-        file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
-    except Exception as e:
-        print(f"Не смог обработать фото товара: {e}")
-        return jsonify({"ok": False, "error": "send_failed",
-                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
+        file_id, thumb_id = photos.сохранить_фото(int(user["id"]), file.read(), "🖼 Фото товара сохранено")
+    except photos.ФотоНеПринято as e:          # причина словами: связь, «Старт», размер или сам файл (В-4)
+        return jsonify(e.ответ()), e.status
 
     db.update_field(pid, "photo", file_id)
     db.update_field(pid, "photo_thumb", thumb_id)
@@ -881,13 +877,9 @@ def api_admin_photo_draft():
     if беда:
         return беда
     try:
-        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
-                                   caption="🖼 Фото для нового товара", disable_notification=True)
-        file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
-    except Exception as e:
-        print(f"Не смог обработать фото нового товара: {e}")
-        return jsonify({"ok": False, "error": "send_failed",
-                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
+        file_id, thumb_id = photos.сохранить_фото(int(user["id"]), file.read(), "🖼 Фото для нового товара")
+    except photos.ФотоНеПринято as e:          # причина словами: связь, «Старт», размер или сам файл (В-4)
+        return jsonify(e.ответ()), e.status
     db.add_draft_photo(user["id"], file_id, thumb_id)
     g.log_note = "фото для нового товара загружено"
     return jsonify({"ok": True, "file_id": file_id, "thumb_id": thumb_id,
@@ -915,13 +907,9 @@ def api_admin_photo_add():
         # Проверяем ДО отправки в Telegram: иначе картинка уедет впустую.
         return jsonify({"ok": False, "error": "too_many", "max": db.MAX_EXTRA_PHOTOS}), 400
     try:
-        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
-                            caption="🖼 Фото модели сохранено", disable_notification=True)
-        file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
-    except Exception as e:
-        print(f"Не смог обработать фото модели: {e}")
-        return jsonify({"ok": False, "error": "send_failed",
-                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
+        file_id, thumb_id = photos.сохранить_фото(int(user["id"]), file.read(), "🖼 Фото модели сохранено")
+    except photos.ФотоНеПринято as e:          # причина словами: связь, «Старт», размер или сам файл (В-4)
+        return jsonify(e.ответ()), e.status
     photo_id = db.add_model_photo(mid, file_id, thumb_id)
     if not photo_id:
         return jsonify({"ok": False, "error": "too_many", "max": db.MAX_EXTRA_PHOTOS}), 400
@@ -1266,13 +1254,9 @@ def api_admin_model_photo():
     if беда:
         return беда
     try:
-        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
-                            caption="🖼 Фото модели сохранено", disable_notification=True)
-        file_id, thumb_id = photos._pick_photo_sizes(msg.photo)
-    except Exception as e:
-        print(f"Не смог обработать фото модели: {e}")
-        return jsonify({"ok": False, "error": "send_failed",
-                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
+        file_id, thumb_id = photos.сохранить_фото(int(user["id"]), file.read(), "🖼 Фото модели сохранено")
+    except photos.ФотоНеПринято as e:          # причина словами: связь, «Старт», размер или сам файл (В-4)
+        return jsonify(e.ответ()), e.status
     db.set_model_photo(mid, file_id, thumb_id)
     return jsonify({"ok": True})
 

@@ -480,11 +480,15 @@ const REJECT_REASONS = [
   ["out", "Товара не оказалось"], ["receipt", "Чек не подошёл"],
   ["client", "Клиент передумал"], ["duplicate", "Дубль заказа"], ["", "Без причины"],
 ];
-let orejId = null, orejReason = "out";
+// Причина — только та, что продавец выбрал сам (П-3, проход 6.10). Раньше
+// окно открывалось с уже отмеченным «Товара не оказалось»: отклонил не глядя
+// — и покупатель с неподошедшим чеком читал «товар разобрали». Пока причина
+// не выбрана, «Отклонить» выключено; «Без причины» — тоже выбор, осознанный.
+let orejId = null, orejReason = null;
 $("orejClose").onclick = () => $("orejView").classList.remove("show");
 
 function openOrderReject(id) {
-  orejId = id; orejReason = "out";
+  orejId = id; orejReason = null;
   $("orejTitle").textContent = `Заказ #${id}`;
   $("orejNote").value = "";
   renderRejectReasons();
@@ -495,8 +499,12 @@ function renderRejectReasons() {
     `<button class="opt ${orejReason === k ? 'active' : ''}" data-rr="${k}">${n}</button>`).join("");
   $("orejReasons").querySelectorAll("[data-rr]").forEach(b =>
     b.onclick = () => { orejReason = b.dataset.rr; renderRejectReasons(); });
+  const go = $("orejGo");
+  go.disabled = orejReason === null;
+  go.textContent = orejReason === null ? "Сначала выберите причину" : "Отклонить и вернуть товар";
 }
 $("orejGo").onclick = async () => {
+  if (orejReason === null) return;
   const d = await админПост("/api/admin/order/status",
     { id: orejId, action: "reject", reason: orejReason, note: $("orejNote").value }, "отклонить заказ");
   if (!d) return;              // окно оставляем открытым: заказ НЕ отклонён

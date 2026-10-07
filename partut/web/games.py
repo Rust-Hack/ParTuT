@@ -479,13 +479,9 @@ def api_admin_raffle_photo():
         return jsonify({"ok": False, "error": "not_image",
                         "message": "Это не изображение. Нужен файл jpg, png или webp."}), 400
     try:
-        msg = tgsend.tg.send_photo(int(user["id"]), file.read(),
-                            caption=f"🖼 Фото приза за {place} место сохранено", disable_notification=True)
-        file_id, _thumb = photos._pick_photo_sizes(msg.photo)
-    except Exception as e:
-        print(f"Не смог обработать фото приза: {e}")
-        return jsonify({"ok": False, "error": "send_failed",
-                        "message": "Телеграм не принял этот файл. Попробуйте другой снимок — обычный jpg или png из галереи."}), 502
+        file_id, _thumb = photos.сохранить_фото(int(user["id"]), file.read(), f"🖼 Фото приза за {place} место сохранено")
+    except photos.ФотоНеПринято as e:          # причина словами: связь, «Старт», размер или сам файл (В-4)
+        return jsonify(e.ответ()), e.status
     db.update_raffle_field(r["id"], f"photo{place}", file_id)
     return jsonify({"ok": True, "place": place, "photo": file_id})
 

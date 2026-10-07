@@ -1154,34 +1154,56 @@ let editOrigName = null, editOrigCat = null, editOrigCity = null, editOrigDesc =
 // Раньше «Закрыть» и «Открыть модель» уходили молча — набранная цена, вкус
 // или заполненная вторая точка терялись без единого предупреждения, и это
 // не было заметно, пока не открывал карточку заново.
-function формаИзменена() {
-  if (!editId) return false;
+// Что именно изменено и ещё не сохранено — словами (В-2, проход 6.10): выход
+// спрашивает не общее «есть несохранённые изменения», а «новый вариант
+// «Манго» (приход 6 шт), цена 25 → 27», и кнопка «Сохранить» говорит, сколько
+// правок ждёт.
+function чтоНеСохранено() {
+  if (!editId) return [];
   // Раньше брали точкиТовар — а её выставляет только renderEditPoints(), то
   // есть только у товара с моделью. У товара без модели точкиТовар оставалась
   // null (или вообще от ранее открытой чужой карточки), и проверка выходила
   // ещё до сравнения цены: закрытие с несохранённой правкой уходило молча.
   const p = shelf().find(x => x.id === editId);
-  if (!p) return false;
-  if ($("edPrice") && Number(String($("edPrice").value).replace(",", ".")) !== Number(editOrigPrice)) return true;
-  if ($("edCost") && ($("edCost").value || "") !== String(editOrigCost)) return true;
-  if ($("edHit") && $("edHit").checked !== editOrigHit) return true;
-  if (editAdds.length || editRemoves.size) return true;
+  if (!p) return [];
+  const что = [];
+  const цена = $("edPrice") ? String($("edPrice").value).trim() : null;
+  if (цена !== null && Number(цена.replace(",", ".")) !== Number(editOrigPrice)) что.push(`цена ${editOrigPrice} → ${цена || "пусто"}`);
+  if ($("edCost") && ($("edCost").value || "") !== String(editOrigCost)) что.push(`закупка ${editOrigCost || "—"} → ${$("edCost").value || "—"}`);
+  if ($("edHit") && $("edHit").checked !== editOrigHit) что.push($("edHit").checked ? "отметка «Хит»" : "снятие «Хит»");
+  editAdds.forEach(a => что.push(`новый вариант «${a.flavor}»${a.qty ? ` (приход ${a.qty} шт)` : ""}`));
+  editRemoves.forEach(f => что.push(`убрать «${f}»`));
   // Поля, которые есть только в форме товара без модели.
-  if ($("edName") && $("edName").value.trim() !== editOrigName) return true;
-  if ($("edCat") && $("edCat").value !== editOrigCat) return true;
-  if ($("edCity") && $("edCity").value !== editOrigCity) return true;
-  if ($("edDesc") && $("edDesc").value.trim() !== editOrigDesc) return true;
-  if ($("edBrand") && pickerValue("edBrand") !== editOrigBrand) return true;
-  if ($("edFlavor") && pickerValue("edFlavor") !== editOrigFlavor) return true;
-  if (editPhotoFile) return true;
-  if (editOrigPoints !== null && JSON.stringify(снятьЧерновикТочек()) !== editOrigPoints) return true;
-  return false;
+  if ($("edName") && $("edName").value.trim() !== editOrigName) что.push("название");
+  if ($("edCat") && $("edCat").value !== editOrigCat) что.push("категория");
+  if ($("edCity") && $("edCity").value !== editOrigCity) что.push("точка");
+  if ($("edDesc") && $("edDesc").value.trim() !== editOrigDesc) что.push("описание");
+  if ($("edBrand") && pickerValue("edBrand") !== editOrigBrand) что.push("бренд");
+  if ($("edFlavor") && pickerValue("edFlavor") !== editOrigFlavor) что.push("вкус");
+  if (editPhotoFile) что.push("новое фото");
+  if (editOrigPoints !== null && JSON.stringify(снятьЧерновикТочек()) !== editOrigPoints) что.push("точки продаж");
+  return что;
 }
+function формаИзменена() { return чтоНеСохранено().length > 0; }
+// Кнопка «Сохранить» закреплена внизу экрана (styles.css, #edSave) и
+// называет, сколько правок ждёт: вариант, добавленный «＋», лежал только в
+// форме, а кнопка была в самом низу длинной карточки — уходили, не сохранив.
+function отметитьНесохранённое() {
+  const кнопка = $("edSave");
+  if (!кнопка || кнопка.disabled) return;
+  const n = чтоНеСохранено().length;
+  кнопка.textContent = n ? `Сохранить изменения (${n})` : "Сохранить";
+  кнопка.classList.toggle("dirty", n > 0);
+}
+// Любая правка в форме — ввод, переключатель, «＋» варианта, галочка точки —
+// пересчитывает кнопку. Слушаем на самой форме: её содержимое перерисовывается.
+["input", "change", "click"].forEach(событие => $("editBody").addEventListener(событие, () => отметитьНесохранённое()));
 
 // Общее место для любого выхода из редактора: спросить, если есть что терять.
 function закрытьРедактор(закрыть) {
-  if (!формаИзменена()) { закрыть(); return; }
-  confirmMsg("Есть несохранённые изменения. Закрыть без сохранения?", закрыть);
+  const что = чтоНеСохранено();
+  if (!что.length) { закрыть(); return; }
+  confirmMsg(`Не сохранено: ${что.join("; ")}.\n\nЗакрыть без сохранения? Это пропадёт.`, закрыть);
 }
 
 $("editClose").onclick = () => закрытьРедактор(() => $("editView").classList.remove("show"));
@@ -1283,8 +1305,12 @@ function renderEditGallery() {
   const add = $("mdGalAdd");
   if (add) add.onchange = () => addEditPhotos([...add.files]);
 }
+// Сбой загрузки — словами сервера (В-4): «нет связи», «нажмите «Старт»» или
+// «выберите другое фото». Временный сбой не выбрасывает снимки: в конце
+// предлагаем повторить их же, не выбирая заново.
 async function addEditPhotos(files) {
   const box = $("mdGal");
+  const повторить = [], беды = [];
   for (const f of files) {
     if (editPhotos.length >= MAX_EXTRA_PHOTOS) { alertMsg(`Больше ${MAX_EXTRA_PHOTOS} дополнительных фото не нужно.`); break; }
     if (box) box.insertAdjacentHTML("beforeend", `<div class="g" id="gLoading"><img src="${URL.createObjectURL(f)}" alt="" style="opacity:.45"></div>`);
@@ -1292,14 +1318,21 @@ async function addEditPhotos(files) {
       const fd = new FormData();
       fd.append("initData", initData); fd.append("model_id", editingModelId); fd.append("file", f);
       const r = await fetch("/api/admin/photo/add", { method: "POST", body: fd });
-      const d = await r.json();
-      if (d.ok) editPhotos.push({ id: d.photo_id, url: URL.createObjectURL(f) });
-      else alertMsg(d.error === "too_many" ? `Больше ${MAX_EXTRA_PHOTOS} фото не нужно.` : "Фото не загрузилось.");
-    } catch (e) { alertMsg(текстСбоя(e)); }
+      const d = await r.json().catch(() => null);
+      if (d && d.ok) editPhotos.push({ id: d.photo_id, url: URL.createObjectURL(f) });
+      else if (d && d.error === "too_many") беды.push(`Больше ${MAX_EXTRA_PHOTOS} фото не нужно.`);
+      else {
+        беды.push((d && (d.message || ОТКАЗЫ[d.error])) || "ответ сервера не дошёл — фото, возможно, не сохранилось.");
+        if (!d || d.retry) повторить.push(f);
+      }
+    } catch (e) { беды.push(текстСбоя(e)); повторить.push(f); }
     const tmp = $("gLoading"); if (tmp) tmp.remove();
   }
   renderEditGallery();
   refreshProducts();     // витрина должна увидеть новые фото сразу
+  const текст = [...new Set(беды)].join("\n");
+  if (повторить.length) confirmMsg(`${текст}\n\nПовторить загрузку (${повторить.length} фото)?`, () => addEditPhotos(повторить));
+  else if (текст) alertMsg(текст);
 }
 function delEditPhoto(photoId) {
   confirmMsg("Убрать это фото?", async () => {
@@ -1759,10 +1792,10 @@ function renderEditVariants() {
     const уберём = editRemoves.has(v.flavor);
     const есть = `${v.stock} шт` + (v.reserved ? ` · в заказах ${v.reserved}` : "");
     return `<div class="admrow" style="${уберём ? "opacity:.55" : ""}"><div class="an">${esc(v.flavor)}
-        <small>${уберём ? `будет убран${+v.stock > 0 ? ` — остаток ${v.stock} шт спишется` : ""}` : есть}</small></div>
+        <small>${уберём ? `<b class="unsaved">не сохранено</b> · будет убран${+v.stock > 0 ? ` — остаток ${v.stock} шт спишется` : ""}` : есть}</small></div>
       <button class="iconbtn${уберём ? "" : " danger"}" data-vrm="${esc(v.flavor)}" title="${уберём ? "Не убирать" : "Убрать вариант"}">${уберём ? "↩︎" : "✕"}</button></div>`;
   }).concat(editAdds.map((a, i) => `<div class="admrow"><div class="an">${esc(a.flavor)}
-        <small>новый · ${a.qty ? `приход ${a.qty} шт` : "пока без остатка"}</small></div>
+        <small><b class="unsaved">не сохранено</b> · новый · ${a.qty ? `приход ${a.qty} шт` : "пока без остатка"}</small></div>
       <button class="iconbtn danger" data-vadd="${i}" title="Не добавлять">✕</button></div>`));
   $("edVarList").innerHTML = строки.length ? строки.join("")
     : `<p style="color:var(--hint)">Нет значений «${esc(catVariant(editCategory))}» — добавьте ниже.</p>`;
@@ -2032,7 +2065,7 @@ async function saveEdit(p, подтверждено) {
     $("editView").classList.remove("show");
     alertMsg("Сохранено ✅");
   } catch (e) { alertMsg(текстСбоя(e)); }
-  finally { $("edSave").disabled = false; $("edSave").textContent = "Сохранить"; }
+  finally { $("edSave").disabled = false; отметитьНесохранённое(); }
 }
 
 // Снять с витрины / вернуть. Для покупателя товар исчезает, для магазина

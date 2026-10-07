@@ -6,15 +6,23 @@ photos.py — пропуска к картинкам и выбор нужног�
 есть короткий пропуск, который выдаётся только тому, кому этот заказ и так
 показывают.
 
-Листовой модуль: знает config и db, про приложение и ручки — ничего.
+И сохранение картинки: фото товаров, моделей, призов и черновиков хранит
+Телеграм — сервер шлёт снимок в чат человеку и берёт file_id. Почему Телеграм
+не принял снимок, здесь же переводится в слова (сохранить_фото).
+
+Знает config, db и tgsend; про приложение и ручки — ничего.
 """
 
 import hashlib
 import hmac
 import time
 
+import requests
+from telebot import apihelper
+
 from partut import db
 from partut.config import BOT_TOKEN
+from partut.integrations import tgsend
 
 RECEIPT_TOKEN_TTL = 6 * 3600       # ссылка на чек живёт полдня, не вечно
 GRID_PHOTO_MIN_WIDTH = 480     # карточка каталога ~190px, но экраны телефонов 2-3x
@@ -95,3 +103,87 @@ def _pick_photo_sizes(sizes):
     full = ordered[-1]
     grid = next((s for s in ordered if (getattr(s, "width", 0) or 0) >= GRID_PHOTO_MIN_WIDTH), full)
     return full.file_id, grid.file_id
+
+
+# ---------- Почему Телеграм не принял фото (В-4, проход 6.10) ----------
+# Раньше на любой отказ отвечали одно: «Телеграм не принял этот файл.
+# Попробуйте другой снимок». И при обрыве связи, и когда Телеграм просил
+# подождать, и когда бот не мог написать продавцу (тот не нажимал «Старт»).
+# Другой снимок в этих случаях не помогает — помогает повтор или «Старт», и
+# человек ходил по кругу, перебирая годные фотографии.
+ОТКАЗЫ_ФОТО = {
+    # код: (HTTP-статус, что сказать)
+    "tg_unreachable": (503, "Нет связи с Телеграмом — фото не сохранилось. Попробуйте ещё раз."),
+    "tg_down": (503, "Телеграм сейчас не отвечает — фото не сохранилось. Попробуйте ещё раз через минуту."),
+    "tg_busy": (503, "Телеграм просит подождать{пауза} — фото не сохранилось. Попробуйте ещё раз чуть позже."),
+    "bot_blocked": (409, "Бот не может написать вам в Телеграм, а фото сохраняются через него. "
+                         "Откройте чат с ботом, нажмите «Старт» и повторите."),
+    "too_large": (400, "Снимок слишком большой для Телеграма — уменьшите его (до 10 МБ) и повторите."),
+    "bad_photo": (400, "Телеграм не принял этот снимок — так бывает с битым файлом или необычным форматом. "
+                       "Выберите другое фото — обычный jpg или png из галереи."),
+    "send_failed": (502, "Фото не сохранилось: Телеграм ответил непонятно. Попробуйте ещё раз; "
+                         "если повторится — другой снимок."),
+}
+# Временные отказы: тот же снимок пройдёт, если повторить.
+ВРЕМЕННЫЕ = ("tg_unreachable", "tg_down", "tg_busy", "send_failed")
+
+
+class ФотоНеПринято(Exception):
+    """Телеграм не принял снимок: code — для экрана, message — для человека."""
+
+    def __init__(self, code, message, status):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status = status
+
+    def ответ(self):
+        """Тело отказа для ручки: retry — поможет ли повтор с тем же снимком."""
+        return {"ok": False, "error": self.code, "message": self.message, "retry": self.code in ВРЕМЕННЫЕ}
+
+
+def вид_отказа(e):
+    """Исключение отправки в Телеграм → (код из ОТКАЗЫ_ФОТО, пауза в секундах или None)."""
+    if isinstance(e, apihelper.ApiTelegramException):
+        код = int(e.error_code or 0)
+        текст = str(e.description or "").lower()
+        if код == 429:
+            пауза = ((e.result_json or {}).get("parameters") or {}).get("retry_after")
+            return "tg_busy", пауза
+        # 403 — бот заблокирован или человек ни разу не нажимал «Старт»; «chat
+        # not found» приходит с 400, но означает то же самое: писать некуда.
+        if код == 403 or any(x in текст for x in ("blocked", "initiate", "chat not found", "deactivated")):
+            return "bot_blocked", None
+        if код == 413 or "too large" in текст or "too big" in текст:
+            return "too_large", None
+        if код == 400:                  # остальное с 400 — про сам файл: размеры, формат, битые данные
+            return "bad_photo", None
+        if код >= 500:
+            return "tg_down", None
+        return "send_failed", None
+    if isinstance(e, apihelper.ApiHTTPException):     # ответ не JSON: шлюз, балансировщик
+        статус = int(getattr(getattr(e, "result", None), "status_code", 0) or 0)
+        if статус == 413:
+            return "too_large", None
+        if статус == 429:
+            return "tg_busy", None
+        if статус >= 500:
+            return "tg_down", None
+        return "send_failed", None
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return "tg_unreachable", None
+    return "send_failed", None
+
+
+def сохранить_фото(chat_id, данные, подпись):
+    """Отправить снимок в чат человеку ради file_id → (file_id, thumb_id).
+
+    Не принял — ФотоНеПринято с причиной словами (ОТКАЗЫ_ФОТО)."""
+    try:
+        msg = tgsend.tg.send_photo(chat_id, данные, caption=подпись, disable_notification=True)
+    except Exception as e:
+        код, пауза = вид_отказа(e)
+        статус, текст = ОТКАЗЫ_ФОТО[код]
+        print(f"Фото не сохранилось ({код}): {e}", flush=True)
+        raise ФотоНеПринято(код, текст.format(пауза=f" {int(пауза)} с" if пауза else ""), статус) from e
+    return _pick_photo_sizes(msg.photo)
