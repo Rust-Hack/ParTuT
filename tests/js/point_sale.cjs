@@ -332,6 +332,54 @@ const список = (продажи) => ({ ok: true, sales: продажи });
     с.узлы.saleLastClose.onclick();
     проверка("«✕» убирает плашку", с.узлы.saleLast.hidden === true || !/Продажа №501/.test(верх()));
   }
+  // ---- R16-02: итог отмены — в плашку, даже если список дня не перечитался ----
+  {
+    let сломать = false, отменена = false;
+    const строка = () => ({ id: 501, created_at: "2026-10-07 12:30", total: 50, payment: "cash", token: "KEY1",
+      status: отменена ? "canceled" : "issued", can_cancel: !отменена, items: [{ name: "Зарядка", qty: 1 }], city: "Минск" });
+    const с = стенд({
+      "/api/admin/sale": ок,
+      "/api/admin/sales": () => сломать ? "throw" : список([строка()]),
+      "/api/admin/sale/cancel": () => { отменена = true; return { ok: true }; },
+    });
+    с.js("openSale(); добавитьВЧек(2); провестиПродажу()"); await с.ждать();
+    сломать = true;                                          // история дня больше не грузится
+    с.узлы.saleLastCancel.onclick(); await с.ждать();
+    проверка("R16-02: отмена прошла, список не перечитался — плашка «Продажа №501 отменена», без «Отменить»",
+      /Продажа №501 отменена/.test(с.узлы.saleLast.innerHTML) && !/saleLastCancel|Продано №501/.test(с.узлы.saleLast.innerHTML), с.узлы.saleLast.innerHTML);
+  }
+  {
+    // Ответ на отмену потерян и список не подтвердил — «не знаю», а не «Продано».
+    let сломать = false, отменена = false;
+    const строка = () => ({ id: 501, created_at: "2026-10-07 12:30", total: 50, payment: "cash", token: "KEY1",
+      status: отменена ? "canceled" : "issued", can_cancel: !отменена, items: [{ name: "Зарядка", qty: 1 }], city: "Минск" });
+    const с = стенд({
+      "/api/admin/sale": ок,
+      "/api/admin/sales": () => сломать ? "throw" : список([строка()]),
+      "/api/admin/sale/cancel": () => { отменена = true; return "throw"; },      // отменилась, а ответ потерян
+    });
+    с.js("openSale(); добавитьВЧек(2); провестиПродажу()"); await с.ждать();
+    сломать = true;
+    с.узлы.saleLastCancel.onclick(); await с.ждать();
+    const html = с.узлы.saleLast.innerHTML;
+    проверка("ответ на отмену потерян, список не загрузился — плашка «не знаю, отменилась ли» с «Проверить», без «Продано»",
+      /ответ на отмену не дошёл — не знаю, отменилась ли/.test(html) && /id="saleLastCheck"/.test(html) && !/Продано №501|saleLastCancel/.test(html), html);
+    сломать = false;
+    с.узлы.saleLastCheck.onclick(); await с.ждать();
+    проверка("…«Проверить» при живой сети — список сказал «отменена», плашка тоже", /Продажа №501 отменена/.test(с.узлы.saleLast.innerHTML), с.узлы.saleLast.innerHTML);
+  }
+  {
+    // Её уже отменили с другого телефона — отказ «уже отменена» тоже итог.
+    const с = стенд({
+      "/api/admin/sale": ок,
+      "/api/admin/sales": "throw",                              // список дня не грузится вовсе
+      "/api/admin/sale/cancel": { ok: false, error: "already", message: "Эта продажа уже отменена." },
+    });
+    с.js("openSale(); добавитьВЧек(2); провестиПродажу()"); await с.ждать();
+    с.узлы.saleLastCancel.onclick(); await с.ждать();
+    проверка("«Эта продажа уже отменена» — плашка тоже «отменена», а не «Продано»",
+      /Продажа №501 отменена/.test(с.узлы.saleLast.innerHTML) && /уже отменена/.test(с.сказано.at(-1) || ""), [с.узлы.saleLast.innerHTML, с.сказано]);
+  }
   {
     // «К списку ›» возвращает историю на сегодня, если листали прошлые дни.
     const с = стенд(сервер("2026-10-01"));

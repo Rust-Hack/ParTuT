@@ -1328,31 +1328,46 @@ function renderEditGallery() {
 // Сбой загрузки — словами сервера (В-4): «нет связи», «нажмите «Старт»» или
 // «выберите другое фото». Временный сбой не выбрасывает снимки: в конце
 // предлагаем повторить их же, не выбирая заново.
-async function addEditPhotos(files) {
-  const box = $("mdGal");
+//
+// Куда грузим — запоминается ДО первого ожидания и передаётся в повтор
+// (приёмка R16-01): пока снимок летит, окно описания могут закрыть и открыть
+// в нём другой товар. Раньше каждый запрос и повтор брали editingModelId в
+// момент отправки, и снимок товара A уходил в товар B. Пока окно то же —
+// обновляем его галерею; открыто другое — его экран не трогаем, а в словах
+// называем товар, о котором речь.
+let галереяЗагрузок = 0;
+async function addEditPhotos(files, цель = null) {
+  if (!цель) {
+    const модель = ((typeof models !== "undefined" && models) || []).find(m => m.id === editingModelId);
+    цель = { модель: editingModelId, сеанс: описаниеСеанс, имя: (модель && модель.name) || "" };
+  }
+  const своё = () => цель.сеанс === описаниеСеанс && цель.модель === editingModelId;
+  const чьё = (текст) => (своё() || !цель.имя) ? текст : `«${цель.имя}»: ${текст}`;
   const повторить = [], беды = [];
   for (const f of files) {
-    if (editPhotos.length >= MAX_EXTRA_PHOTOS) { alertMsg(`Больше ${MAX_EXTRA_PHOTOS} дополнительных фото не нужно.`); break; }
-    if (box) box.insertAdjacentHTML("beforeend", `<div class="g" id="gLoading"><img src="${URL.createObjectURL(f)}" alt="" style="opacity:.45"></div>`);
+    if (своё() && editPhotos.length >= MAX_EXTRA_PHOTOS) { беды.push(`Больше ${MAX_EXTRA_PHOTOS} дополнительных фото не нужно.`); break; }
+    const метка = `gLoading${++галереяЗагрузок}`;      // своя у каждой загрузки: чужую не уберём
+    const box = своё() ? $("mdGal") : null;
+    if (box) box.insertAdjacentHTML("beforeend", `<div class="g" id="${метка}"><img src="${URL.createObjectURL(f)}" alt="" style="opacity:.45"></div>`);
     try {
       const fd = new FormData();
-      fd.append("initData", initData); fd.append("model_id", editingModelId); fd.append("file", f);
+      fd.append("initData", initData); fd.append("model_id", цель.модель); fd.append("file", f);
       const r = await fetch("/api/admin/photo/add", { method: "POST", body: fd });
       const d = await r.json().catch(() => null);
-      if (d && d.ok) editPhotos.push({ id: d.photo_id, url: URL.createObjectURL(f) });
+      if (d && d.ok) { if (своё()) editPhotos.push({ id: d.photo_id, url: URL.createObjectURL(f) }); }
       else if (d && d.error === "too_many") беды.push(`Больше ${MAX_EXTRA_PHOTOS} фото не нужно.`);
       else {
         беды.push((d && (d.message || ОТКАЗЫ[d.error])) || "ответ сервера не дошёл — фото, возможно, не сохранилось.");
         if (!d || d.retry) повторить.push(f);
       }
     } catch (e) { беды.push(текстСбоя(e)); повторить.push(f); }
-    const tmp = $("gLoading"); if (tmp) tmp.remove();
+    const tmp = $(метка); if (tmp) tmp.remove();
   }
-  renderEditGallery();
+  if (своё()) renderEditGallery();
   refreshProducts();     // витрина должна увидеть новые фото сразу
-  const текст = [...new Set(беды)].join("\n");
-  if (повторить.length) confirmMsg(`${текст}\n\nПовторить загрузку (${повторить.length} фото)?`, () => addEditPhotos(повторить));
-  else if (текст) alertMsg(текст);
+  const текст = чьё([...new Set(беды)].join("\n"));
+  if (повторить.length) confirmMsg(`${текст}\n\nПовторить загрузку (${повторить.length} фото)?`, () => addEditPhotos(повторить, цель));
+  else if (беды.length) alertMsg(текст);
 }
 function delEditPhoto(photoId) {
   confirmMsg("Убрать это фото?", async () => {
