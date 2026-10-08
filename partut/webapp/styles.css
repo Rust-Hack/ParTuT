@@ -694,6 +694,8 @@ html[data-theme="dark"] .statcard, html[data-theme="dark"] .statlist { border: 1
 .ochips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .ochip { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 999px; padding: 7px 14px; font-size: 13px; font-weight: 600; }
 .ochip.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+/* В-5: точка, уже выбранная в другом блоке мастера, — видно, что не выбрать. */
+.ochip:disabled { opacity: .45; cursor: default; }
 .ocard { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 14px; margin-bottom: 12px; }
 .ocard-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ocard-id { font-weight: 800; font-size: 15px; }
@@ -818,6 +820,8 @@ html[data-theme="dark"] .statcard, html[data-theme="dark"] .statlist { border: 1
 .frow.match:not(.on) { border-color: var(--accent); }
 /* R16-03: у товара с двумя характеристиками — группы, где есть совпавшие. */
 .chip.match:not(.active) { border-color: var(--accent); color: var(--accent); }
+/* В-3: «Убрать вкусы…» под списком вариантов карточки — режим, в котором видны «✕». */
+.varrmmode { display: block; margin: 10px 0 4px; font-size: 14px; }
 .fmatch { display: inline-block; font-size: 11.5px; font-weight: 700; color: var(--accent); }
 .cmatch { font-size: 12px; font-weight: 700; color: var(--accent); margin: -4px 0 8px; line-height: 1.3; }
 .fname { font-size: 13px; font-weight: 600; line-height: 1.25; min-height: 2.5em;

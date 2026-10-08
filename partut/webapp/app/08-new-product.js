@@ -333,8 +333,12 @@ function нтШаг3() {
   const формы = формыВарианта({ category: нт.category });
   const блоки = нт.points.map((т, i) => {
     const занятые = нт.points.filter((_, j) => j !== i).map(x => x.city);
+    // Точку, уже выбранную в другом блоке, второй раз не выбрать — и это должно
+    // быть видно, а не выглядеть обычной кнопкой, которая молча не жмётся (В-5).
+    const где = (c) => нт.points.findIndex((x, j) => j !== i && x.city === c) + 1;
     const точки = свои.map(c => `<button type="button" class="ochip ${c === т.city ? "active" : ""}"
-        data-npcity="${i}" data-c="${esc(c)}" ${занятые.includes(c) ? "disabled" : ""}>${esc(c)}</button>`).join("");
+        data-npcity="${i}" data-c="${esc(c)}" ${занятые.includes(c)
+          ? `disabled title="Уже выбрана: точка ${где(c)}" aria-label="${esc(c)} — уже выбрана: точка ${где(c)}"` : ""}>${esc(c)}</button>`).join("");
     const пропала = т.city && !свои.includes(т.city)
       ? `<div class="dwarn">Точки «${esc(т.city)}» больше нет — выберите другую.</div>` : "";
     let количество;

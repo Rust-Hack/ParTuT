@@ -520,7 +520,7 @@ function openStockIn(modelId) {
   // Где модель уже стоит — чтобы не завезти второй раз на ту же точку.
   const where = shelf().filter(p => p.model_id === m.id);
   $("stockInWhere").innerHTML = where.length
-    ? "Уже на точках: " + where.map(p => `${esc(p.city)} — ${p.price} Br, ${p.stock} шт`).join("; ")
+    ? "Уже на точках: " + where.map(p => `${esc(p.city)} — ${Number(p.price).toFixed(2)} Br, ${p.stock} шт`).join("; ")
     : "Пока нет ни на одной точке.";
 }
 $("stockInSave").onclick = async () => {
@@ -2538,7 +2538,7 @@ async function openLog() {
     if ($note) $note.textContent = "Ваши правки цен, остатков и заказов. Владельцу видно всех продавцов, вам — только себя.";
   } else {
     if ($h) $h.textContent = "🧾 Журнал";
-    if ($note) $note.textContent = "Кто и что менял: цену, остаток, товар, настройки. Остаток и раньше писался в журнал движений у каждого товара — здесь всё остальное, что прежде менялось бесследно.";
+    if ($note) $note.textContent = "Кто, когда и что менял в магазине: цены, остатки, товары, заказы, настройки. Продавцы здесь видят только свои действия.";
   }
   $("logList").innerHTML = loaderHtml();
   try {

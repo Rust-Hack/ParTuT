@@ -1161,6 +1161,16 @@ let editId = null, editVariants = [], editPhotoFile = null, editCategory = null;
 // Состав вариантов меняется отдельно от их остатков: новые — с первым
 // приходом, убираемые — отметкой. Сохраняются вместе с карточкой.
 let editAdds = [], editRemoves = new Set();
+// «✕» у заведённых вариантов — только в режиме «Убрать …» (В-3): красная
+// кнопка стояла у каждой строки вплотную к обычным, задеть её было легко.
+let editRemoveMode = false;
+// Деньги в полях карточки — с копейками, как везде в приложении: «18.50 Br»
+// в списке и «18.5» в поле цены были одной ценой в двух видах (В-5).
+// Нечисло возвращается как есть: показать человеку его же ввод честнее.
+function деньгиВПоле(x) {
+  const s = String(x ?? "").trim(), n = Number(s.replace(",", "."));
+  return s === "" || Number.isNaN(n) ? s : n.toFixed(2);
+}
 let editOrigPrice = null, editOrigCost = null, editOrigHit = null, editOrigPoints = null;
 // Номер версии цены при открытии карточки (см. ценаРев в быстрой цене): с ним
 // сервер не пропустит застрявшее сохранение поверх более нового.
@@ -1188,7 +1198,7 @@ function чтоНеСохранено() {
   if (!p) return [];
   const что = [];
   const цена = $("edPrice") ? String($("edPrice").value).trim() : null;
-  if (цена !== null && Number(цена.replace(",", ".")) !== Number(editOrigPrice)) что.push(`цена ${editOrigPrice} → ${цена || "пусто"}`);
+  if (цена !== null && Number(цена.replace(",", ".")) !== Number(editOrigPrice)) что.push(`цена ${деньгиВПоле(editOrigPrice)} → ${цена || "пусто"}`);
   if ($("edCost") && ($("edCost").value || "") !== String(editOrigCost)) что.push(`закупка ${editOrigCost || "—"} → ${$("edCost").value || "—"}`);
   if ($("edHit") && $("edHit").checked !== editOrigHit) что.push($("edHit").checked ? "отметка «Хит»" : "снятие «Хит»");
   editAdds.forEach(a => что.push(`новый вариант «${a.flavor}»${a.qty ? ` (приход ${a.qty} шт)` : ""}`));
@@ -1233,8 +1243,8 @@ function openEdit(id) {
   editId = id;
   editCategory = p.category;
   editVariants = (p.variants || []).map(v => ({ flavor: v.flavor, stock: v.stock, reserved: v.reserved || 0 }));
-  editAdds = []; editRemoves = new Set();
-  editOrigPrice = p.price; editOrigCost = p.cost || ""; editOrigHit = !!p.is_hit;
+  editAdds = []; editRemoves = new Set(); editRemoveMode = false;
+  editOrigPrice = p.price; editOrigCost = p.cost ? деньгиВПоле(p.cost) : ""; editOrigHit = !!p.is_hit;
   editOrigPriceRev = номерВерсии(p.price_rev);
   editOrigName = p.name; editOrigCat = p.category; editOrigCity = p.city;
   editOrigDesc = p.description || ""; editOrigBrand = p.brand || ""; editOrigFlavor = p.flavor || "";
@@ -1420,8 +1430,8 @@ function renderEdit(p) {
         </div>
         <div class="descsum-h" style="margin-top:16px">На точке «${esc(p.city)}»</div>
         <div class="rowf">
-          <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
-          <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
+          <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${деньгиВПоле(p.price)}"></div>
+          <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost ? деньгиВПоле(p.cost) : ""}"></div>
         </div>
         ${isVar ? `<label>${esc(catVariantMany(p.category))} и остаток</label><div id="edVarList"></div>
           ${variantAddRowHtml(p.category, md ? md.flavors : [])}`
@@ -1451,8 +1461,8 @@ function renderEdit(p) {
         <label>Точка (город)</label><select id="edCity">${cityOptions}</select>
         <label>Название</label><input id="edName" value="${esc(p.name)}">
         <div class="rowf">
-          <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}"></div>
-          <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}"></div>
+          <div><label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${деньгиВПоле(p.price)}"></div>
+          <div><label>Закупка (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost ? деньгиВПоле(p.cost) : ""}"></div>
         </div>
         ${остатокВКарточке(p)}
         <label>Бренд</label>${pickerHtml("edBrand", p.brand || "", brandNames(p.category), "+ Новый бренд…")}
@@ -1484,8 +1494,8 @@ function renderEdit(p) {
       <div style="font-weight:800">${esc(p.name)}</div>
       <div class="csub" style="margin-top:4px">${esc(p.brand || '')} · ${esc(catName(p.category))} · ${esc(p.city)}</div>
       <label>Точка (город)</label><select id="edCity">${cityOptions}</select>
-      <label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${p.price}">
-      <label>Закупочная цена (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost || ""}">
+      <label>Цена (Br)</label><input id="edPrice" inputmode="decimal" value="${деньгиВПоле(p.price)}">
+      <label>Закупочная цена (Br)</label><input id="edCost" inputmode="decimal" value="${p.cost ? деньгиВПоле(p.cost) : ""}">
       ${specs}
       <label>${esc(catVariantMany(p.category))} и остаток</label>
       <div id="edVarList"></div>
@@ -1685,8 +1695,8 @@ function renderEditPoints(p, md) {
         <input type="checkbox" class="pchk" style="width:auto"> Есть на точке «${esc(имя)}»</label>
       <div class="pbody" style="display:none">
         <div class="rowf">
-          <div><label>Цена (Br)</label><input class="pprice" inputmode="decimal" value="${p.price}"></div>
-          <div><label>Закупка (Br)</label><input class="pcost" inputmode="decimal" value="${p.cost || ""}"></div>
+          <div><label>Цена (Br)</label><input class="pprice" inputmode="decimal" value="${деньгиВПоле(p.price)}"></div>
+          <div><label>Закупка (Br)</label><input class="pcost" inputmode="decimal" value="${p.cost ? деньгиВПоле(p.cost) : ""}"></div>
         </div>
         ${вкусы.length
           ? `<label>Какие варианты есть на точке «${esc(имя)}»</label><div class="pflavors"></div>`
@@ -1823,17 +1833,30 @@ function bindVariantAdd(category) {
 }
 
 function renderEditVariants() {
+  // Убрать заведённый вариант — осознанный шаг: «✕» появляется только в режиме
+  // «Убрать …». Отмена своего же действия («↩︎» у помеченного, «✕» у только
+  // что добавленного) видна всегда — передумать можно и вне режима.
   const строки = editVariants.map(v => {
     const уберём = editRemoves.has(v.flavor);
     const есть = `${v.stock} шт` + (v.reserved ? ` · в заказах ${v.reserved}` : "");
+    const кнопка = уберём
+      ? `<button class="iconbtn" data-vrm="${esc(v.flavor)}" title="Не убирать" aria-label="Не убирать «${esc(v.flavor)}»">↩︎</button>`
+      : editRemoveMode
+        ? `<button class="iconbtn danger" data-vrm="${esc(v.flavor)}" title="Убрать вариант" aria-label="Убрать «${esc(v.flavor)}»">✕</button>` : "";
     return `<div class="admrow" style="${уберём ? "opacity:.55" : ""}"><div class="an">${esc(v.flavor)}
         <small>${уберём ? `<b class="unsaved">не сохранено</b> · будет убран${+v.stock > 0 ? ` — остаток ${v.stock} шт спишется` : ""}` : есть}</small></div>
-      <button class="iconbtn${уберём ? "" : " danger"}" data-vrm="${esc(v.flavor)}" title="${уберём ? "Не убирать" : "Убрать вариант"}">${уберём ? "↩︎" : "✕"}</button></div>`;
+      ${кнопка}</div>`;
   }).concat(editAdds.map((a, i) => `<div class="admrow"><div class="an">${esc(a.flavor)}
         <small><b class="unsaved">не сохранено</b> · новый · ${a.qty ? `приход ${a.qty} шт` : "пока без остатка"}</small></div>
       <button class="iconbtn danger" data-vadd="${i}" title="Не добавлять">✕</button></div>`));
-  $("edVarList").innerHTML = строки.length ? строки.join("")
+  const режим = editVariants.length
+    ? `<button type="button" class="nplink varrmmode" data-vrmode="1">${editRemoveMode
+        ? "Готово" : `Убрать ${esc(catVariantMany(editCategory).toLowerCase())}…`}</button>` : "";
+  $("edVarList").innerHTML = строки.length ? строки.join("") + режим
     : `<p style="color:var(--hint)">Нет значений «${esc(catVariant(editCategory))}» — добавьте ниже.</p>`;
+  $("edVarList").querySelectorAll("[data-vrmode]").forEach(b => b.onclick = () => {
+    editRemoveMode = !editRemoveMode; renderEditVariants();
+  });
   $("edVarList").querySelectorAll("[data-vrm]").forEach(b => b.onclick = () => {
     const f = b.dataset.vrm;
     const v = editVariants.find(x => x.flavor === f);
@@ -2032,7 +2055,7 @@ async function saveEdit(p, подтверждено) {
     const d = await послать("/api/admin/product/variants/change",
       { initData, id: editId, add: editAdds, remove: [...editRemoves], writeoff: сОстатком.length > 0 },
       catVariantMany(p.category).toLowerCase());
-    if (d.ok) { editAdds = []; editRemoves = new Set(); }
+    if (d.ok) { editAdds = []; editRemoves = new Set(); editRemoveMode = false; }
   };
 
   $("edSave").disabled = true; $("edSave").textContent = "Сохраняю…";
