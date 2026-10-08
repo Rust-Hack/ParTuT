@@ -14,6 +14,8 @@ import os
 import json
 import datetime
 import threading
+import time
+import weakref
 
 from partut import config
 
@@ -48,18 +50,64 @@ GREATEST = "GREATEST" if USE_PG else "max"   # ограничение остат
 BLOB_COL = "BYTEA" if USE_PG else "BLOB"     # колонка для двоичных данных (картинок)
 
 
-# --- Пул соединений к Postgres (Neon): держим их «тёплыми» и переиспользуем ---
+# --- Пул соединений к Postgres: держим их «тёплыми» и переиспользуем ---
+#
+# Сколько свободных соединений пул держит открытыми. psycopg2 оставляет у себя
+# ровно minconn свободных, а всё сверх этого при возврате ЗАКРЫВАЕТ. Раньше
+# minconn был 1 — тёплым оставалось одно соединение на весь сервер. Стоило двум
+# запросам совпасть по времени (приложение при открытии шлёт несколько разом,
+# а вход покупателя ещё и ставит фоновую запись), и каждое следующее
+# соединение открывалось заново — шифрование, пароль, новый процесс на базе
+# с 0,1 CPU — и после запроса закрывалось. Замер на копии 8.10.2026: двести
+# входов подряд — двести новых подключений к базе; под нагрузкой у сервера
+# кончились порты, и пошли пятисотки.
+#
+# Восемь — по числу рабочих потоков сервера (run.py): тёплого соединения
+# хватает каждому одновременному запросу. Открываются они сразу, при старте.
+ТЁПЛЫХ = 8
+# Соединение, пролежавшее без дела дольше этого, перед выдачей проверяем
+# коротким запросом. Пока оно лежит, базу могут перезапустить или сеть может
+# моргнуть, а psycopg2 узнаёт о разрыве только на первом запросе — то есть
+# посреди чьего-то заказа. Проверка дешевле: один короткий поход к базе, и
+# только после простоя — под нагрузкой соединения не успевают залежаться.
+ПРОВЕРЯТЬ_ПОСЛЕ_СЕК = 30
 _POOL = None
+_вернули = weakref.WeakKeyDictionary()       # соединение → когда его вернули в пул
+_вернули_замок = threading.Lock()
 
 
 def _get_pool():
     global _POOL
     if _POOL is None:
-        # keepalives — чтобы ОС замечала «мёртвые» соединения (Neon рвёт простаивающие)
-        _POOL = _pgpool.ThreadedConnectionPool(
-            1, 20, DATABASE_URL, cursor_factory=RealDictCursor,
+        # keepalives — чтобы ОС замечала «мёртвые» соединения
+        пул = _pgpool.ThreadedConnectionPool(
+            ТЁПЛЫХ, 20, DATABASE_URL, cursor_factory=RealDictCursor,
             keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3)
+        # Открытые при старте отмечаем как только что вернувшиеся. Без отметки
+        # они сошли бы за свежие и не проверялись бы вовсе — даже пролежав ночь
+        # до первого покупателя, пока базу перезапускали.
+        открытые = [пул.getconn() for _ in range(ТЁПЛЫХ)]
+        with _вернули_замок:
+            for raw in открытые:
+                _вернули[raw] = time.monotonic()
+        for raw in открытые:
+            пул.putconn(raw)
+        _POOL = пул
     return _POOL
+
+
+def _отвечает(raw):
+    """Живо ли соединение — один короткий запрос. Транзакцию, которую он
+    открыл, закрываем: соединение уходит к запросу чистым, как из пула."""
+    try:
+        cur = raw.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
+        cur.close()
+        raw.rollback()
+        return True
+    except Exception:
+        return False
 
 
 _выданные = threading.local()
@@ -140,6 +188,8 @@ class _Conn:
         except Exception:
             pass
         try:
+            with _вернули_замок:
+                _вернули[self._raw] = time.monotonic()
             _get_pool().putconn(self._raw)
         except Exception:
             try:
@@ -160,14 +210,21 @@ def connect():
     """Открывает соединение с нужной базой. Строки возвращаются как словари."""
     if USE_PG:
         pool = _get_pool()
-        raw = pool.getconn()
-        if getattr(raw, "closed", 0):     # уже закрыто — берём другое
+        # Закрытое или умершее, пока лежало, выбрасываем и берём следующее.
+        # Свободных не больше ТЁПЛЫХ, а когда они кончатся, пул откроет новое —
+        # оно свежее и проверки не требует.
+        for _ in range(ТЁПЛЫХ + 1):
+            raw = pool.getconn()
+            with _вернули_замок:
+                вернули = _вернули.pop(raw, None)
+            if not getattr(raw, "closed", 0) and (
+                    вернули is None or time.monotonic() - вернули < ПРОВЕРЯТЬ_ПОСЛЕ_СЕК or _отвечает(raw)):
+                return _Conn(raw, из_пула=True)
             try:
                 pool.putconn(raw, close=True)
             except Exception:
                 pass
-            raw = pool.getconn()
-        return _Conn(raw, из_пула=True)
+        return _Conn(pool.getconn(), из_пула=True)
     conn = sqlite3.connect(SQLITE_FILE)
     conn.row_factory = sqlite3.Row        # доступ к колонкам по имени: row["name"]
     return _Conn(conn, из_пула=False)
@@ -1112,12 +1169,18 @@ def _ensure_publish_tables():
     conn.close()
 
 
+def имя_для_базы(username="", first_name=""):
+    """Имя из Telegram в том виде, в каком оно лежит в базе: без @, без
+    пробелов по краям, не длиннее 64. По нему же /api/me решает, поменялось
+    ли имя, — сравнивать надо с тем, что и было бы записано."""
+    return (username or "").lstrip("@").strip()[:64], (first_name or "").strip()[:64]
+
+
 def remember_user_name(user_id, username="", first_name=""):
     """Запоминает, как зовут человека. Имя в Telegram меняется, поэтому пишем
-    свежее при каждом заходе, но не затираем его пустым: у части людей @имени
-    нет вовсе, и терять из-за этого имя из профиля незачем."""
-    username = (username or "").lstrip("@").strip()[:64]
-    first_name = (first_name or "").strip()[:64]
+    свежее, но не затираем его пустым: у части людей @имени нет вовсе, и
+    терять из-за этого имя из профиля незачем."""
+    username, first_name = имя_для_базы(username, first_name)
     if not username and not first_name:
         return
     conn = connect()
@@ -1581,7 +1644,7 @@ def get_me_bundle(user_id, limit=20):
                     (user_id, now))
 
     # Одна строка покупателя — одним чтением, а не четырьмя.
-    cur.execute(_q("SELECT age_ok, no_reminders, phone, pickup_point_id, city "
+    cur.execute(_q("SELECT age_ok, no_reminders, phone, pickup_point_id, city, username, first_name "
                    "FROM users WHERE user_id = %s"), (user_id,))
     u = cur.fetchone() or {}
 
@@ -1619,6 +1682,10 @@ def get_me_bundle(user_id, limit=20):
         "reminders_on": not bool(u and u["no_reminders"]),
         "my_point": (int(u["pickup_point_id"]) if u and u["pickup_point_id"] else None),
         "city": (u["city"] or "") if u else "",
+        # Как человек записан сейчас — чтобы не переписывать то же самое имя
+        # при каждом открытии приложения.
+        "username": (u["username"] or "") if u else "",
+        "first_name": (u["first_name"] or "") if u else "",
         "alerts": alerts,
         "favorites": favorites,
         "prefill": {"phone": phone, "addresses": addresses},
@@ -2887,7 +2954,7 @@ from partut.db.catalog import (                                         # noqa: 
     PublishRefused, publish_product, add_draft_photo, purge_draft_photos,   # noqa: F401
     ToModelRefused, product_to_model,                                       # noqa: F401
     ArchiveRefused, archive_product, archived_products, product_history,    # noqa: F401
-    delete_archived_product,                                                # noqa: F401
+    products_with_history, delete_archived_product,                         # noqa: F401
     DRAFT_PHOTO_KEEP_DAYS,                                                  # noqa: F401
     get_variants, get_all_variants, add_variant, delete_variants,           # noqa: F401
     replace_variants_if, change_variants,                                   # noqa: F401

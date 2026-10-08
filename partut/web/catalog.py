@@ -808,15 +808,17 @@ def api_admin_archive_list():
     if not admin:
         return jsonify({"ok": False, "error": "forbidden"}), 403
     владелец = admin.get("role") in ("dev", "owner")       # «удалить насовсем» — только ему
+    архив = db.archived_products(admin.get("city") or None)
+    # История — одним заходом на весь архив, а не походом в базу на товар.
+    с_историей = db.products_with_history(p["id"] for p in архив) if владелец else set()
     out = []
-    for p in db.archived_products(admin.get("city") or None):
+    for p in архив:
         строка = {"id": p["id"], "name": p["name"], "brand": p["brand"] or "", "city": p["city"],
                   "category": p["category"], "model_id": p["model_id"], "price": float(p["price"] or 0),
                   "hidden": bool(p["hidden"]),
                   "thumb": f"/api/photo?file_id={p['photo_thumb'] or p['photo']}" if p["photo"] else ""}
         if владелец:
-            история = db.product_history(p["id"])
-            строка["can_delete"] = not (история["moves"] or история["orders"])
+            строка["can_delete"] = p["id"] not in с_историей
         out.append(строка)
     return jsonify({"ok": True, "items": out})
 

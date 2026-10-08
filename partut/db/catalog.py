@@ -293,16 +293,66 @@ def _история(cur, product_id):
     # Связи «заказ — товар» в базе нет, состав — строка JSON. LIKE отсеивает
     # заказы без этого числа вовсе, разбор отличает 12 от 120.
     cur.execute(db._q("SELECT items FROM orders WHERE items LIKE %s"), (f"%{int(product_id)}%",))
-    заказов = 0
-    for строка in cur.fetchall():
-        try:
-            состав = json.loads(строка["items"] or "[]")
-        except (TypeError, ValueError):
-            continue
-        if any(isinstance(и, dict) and int(и.get("id") or и.get("product_id") or 0) == int(product_id)
-               for и in состав):
-            заказов += 1
+    заказов = sum(1 for строка in cur.fetchall() if int(product_id) in _товары_заказа(строка["items"]))
     return {"moves": движений, "orders": заказов}
+
+
+def _товары_заказа(items):
+    """id товаров в составе заказа. Битый состав — ни одного: не повод
+    ронять список архива или запрет удаления."""
+    try:
+        состав = json.loads(items or "[]")
+    except (TypeError, ValueError):
+        return set()
+    ids = set()
+    for и in состав if isinstance(состав, list) else []:
+        if isinstance(и, dict):
+            try:
+                ids.add(int(и.get("id") or и.get("product_id") or 0))
+            except (TypeError, ValueError):
+                pass
+    return ids
+
+
+def _куски(значения, по=100):
+    """Список частями — у SQLite предел числа параметров в одном запросе."""
+    for i in range(0, len(значения), по):
+        yield значения[i:i + по]
+
+
+def products_with_history(product_ids):
+    """Какие из этих товаров с историей — для «🗄 Архива», одним заходом.
+
+    Раньше список архива спрашивал product_history о каждом товаре: на каждый —
+    подсчёт движений и полный перебор заказов с разбором состава. Шестьдесят
+    товаров в архиве — шестьдесят проходов по всем заказам: на копии с 8 000
+    заказов 94 мс в одиночку и больше секунды под нагрузкой. Здесь движения
+    считаются для всех разом, а заказы перебираются один раз — и только ради
+    тех, у кого движений нет.
+
+    «История» та же, что у product_history: движения склада или заказ, где
+    товар был (сверяет tests/test_archive_history.py)."""
+    ids = sorted({int(x) for x in product_ids})
+    есть = set()
+    if not ids:
+        return есть
+    conn = db.connect()
+    cur = conn.cursor()
+    for кусок in _куски(ids):
+        метки = ",".join(["%s"] * len(кусок))
+        cur.execute(db._q(f"SELECT DISTINCT product_id FROM stock_moves WHERE product_id IN ({метки})"),
+                    tuple(кусок))
+        есть.update(int(r["product_id"]) for r in cur.fetchall())
+    for кусок in _куски([i for i in ids if i not in есть]):
+        # То же грубое сито LIKE, что в _история, только на все товары сразу:
+        # заказ, где нет ни одного из этих чисел, не разбираем вовсе.
+        cur.execute(db._q("SELECT items FROM orders WHERE " + " OR ".join(["items LIKE %s"] * len(кусок))),
+                    tuple(f"%{i}%" for i in кусок))
+        искомые = set(кусок)
+        for строка in cur.fetchall():
+            есть |= _товары_заказа(строка["items"]) & искомые
+    conn.close()
+    return есть
 
 
 def change_stock(product_id, delta):

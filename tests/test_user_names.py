@@ -11,7 +11,7 @@ from _common import db, client, Checker, as_user, as_admin
 
 from partut.integrations import tgsend
 
-from partut import cache
+from partut import cache, errors
 
 
 def _clean():
@@ -88,6 +88,70 @@ def run():
         as_admin()
         _clean()
     return c.fails + c2.fails + c3.fails
+
+
+def run_то_же_имя_не_переписываем():
+    """Имя пишется, только если поменялось. Раньше запись уходила на КАЖДОЕ
+    открытие приложения — фоновой задачей со своим соединением с базой
+    (нагрузка на копии 8.10.2026: двести входов — двести новых подключений)."""
+    c = Checker("Вход: то же имя не переписывается при каждом открытии")
+    _clean()
+    записи = []
+    orig_bg = tgsend.bg
+
+    def фон(fn, *a, **k):
+        записи.append(fn.__name__)
+        return fn(*a, **k)
+
+    tgsend.bg = фон
+    try:
+        as_user(9704, username="anya", first_name="Аня")
+        client.post("/api/me", json={"initData": "x"})
+        c("первый вход — имя записано", записи == ["remember_user_name"])
+        записи.clear()
+        client.post("/api/me", json={"initData": "x"})
+        c("второй вход с тем же именем — записи нет", записи == [])
+        as_user(9704, username="@anya", first_name=" Аня ")
+        client.post("/api/me", json={"initData": "x"})
+        c("@ и пробелы по краям — то же имя, записи нет", записи == [])
+        as_user(9704, username=None, first_name=None)
+        client.post("/api/me", json={"initData": "x"})
+        c("имени не прислали — записи нет", записи == [])
+        as_user(9704, username="anya_2", first_name="Аня")
+        client.post("/api/me", json={"initData": "x"})
+        c("сменили @имя — записано", записи == ["remember_user_name"])
+        as_admin()
+        c("в списке покупателей новое @имя и прежнее имя", (_list()[9704]["username"], _list()[9704]["first_name"]) == ("anya_2", "Аня"))
+    finally:
+        tgsend.bg = orig_bg
+        as_admin()
+        _clean()
+    return c.fails
+
+
+def run_сбой_базы_при_входе():
+    """Запасной ответ на сбой базы врал («18+ не подтверждено, точка не
+    выбрана»), а с 26.09 и вовсе падал на KeyError — в отчёт о поломке уходил
+    KeyError вместо настоящей причины."""
+    c = Checker("Вход: сбой базы — ошибка с настоящей причиной в отчёте")
+    отчёты = []
+    было_собрать, было_отчёт = db.get_me_bundle, errors.report
+
+    def сломано(uid, *a, **k):
+        raise RuntimeError("база не ответила")
+
+    db.get_me_bundle = сломано
+    errors.report = lambda tg, where, exc, extra="": отчёты.append((where, f"{type(exc).__name__}: {exc}"))
+    try:
+        as_user(9705, username="petya", first_name="Петя")
+        r = client.post("/api/me", json={"initData": "x"})
+        c(f"ответ — ошибка, а не выдуманные «18+ нет, точки нет»: {r.status_code}",
+          r.status_code == 500 and r.get_json()["ok"] is False and "age_ok" not in r.get_json())
+        c(f"в отчёт ушла настоящая причина: {отчёты}", отчёты == [("POST /api/me", "RuntimeError: база не ответила")])
+    finally:
+        db.get_me_bundle, errors.report = было_собрать, было_отчёт
+        as_admin()
+    return c.fails
 
 
 if __name__ == "__main__":
