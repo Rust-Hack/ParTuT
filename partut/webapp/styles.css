@@ -169,7 +169,10 @@ html:not([data-theme="dark"]) .pd-img { background: radial-gradient(78% 62% at 5
 .fav.on { color: var(--danger); }
 .cbody { padding: 10px 11px 13px; display: flex; flex-direction: column; flex: 1; }
 .cname { font-size: 14px; font-weight: 700; line-height: 1.25; margin: 0 0 8px; }
-.crow { margin-top: auto; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.crow { margin-top: auto; padding-top: 12px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; }
+/* К-4: цена и кнопка не помещаются в строку (узкий экран, длинная цена) — кнопка
+   уходит под цену и прижимается вправо, а не вылезает за край карточки. */
+.crow > :last-child { margin-left: auto; }
 .cprice { color: var(--accent); font-size: 16px; font-weight: 800; white-space: nowrap; }
 .cur { font-size: .86em; font-weight: 700; margin-left: 2px; }
 .plus { width: 42px; height: 42px; border-radius: 12px; border: none; background: var(--accent); color: var(--on-accent); font-size: 24px; line-height: 1; }
@@ -811,6 +814,10 @@ html[data-theme="dark"] .statcard, html[data-theme="dark"] .statlist { border: 1
   background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 11px; }
 .frow.on { border-color: var(--accent); background: var(--accent-soft); }
 .frow.out { opacity: .5; }
+/* К-3: найдено по вкусу — в карточке выдачи «Нашлось: …», в окне товара совпавшие сверху. */
+.frow.match:not(.on) { border-color: var(--accent); }
+.fmatch { display: inline-block; font-size: 11.5px; font-weight: 700; color: var(--accent); }
+.cmatch { font-size: 12px; font-weight: 700; color: var(--accent); margin: -4px 0 8px; line-height: 1.3; }
 .fname { font-size: 13px; font-weight: 600; line-height: 1.25; min-height: 2.5em;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .fbottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
@@ -1225,6 +1232,14 @@ html:not([data-theme="dark"]) .splash-sub { animation: splashFade .6s ease 1.25s
 .dlvsum { font-size: 14px; font-weight: 700; line-height: 1.4; font-variant-numeric: tabular-nums; }
 .dlvsum.done { color: var(--accent); }
 .dlvbar .bigbtn { margin: 0; }
+/* «Продажа» (П-6): оплата и итог — одной строкой, кнопка под ними. */
+#saleBar { grid-template-columns: auto 1fr; align-items: center; }
+#saleBar #saleSum { text-align: right; }
+#saleBar .bigbtn { grid-column: 1 / -1; }
+@media (max-width: 359px) { #salePay .lbl { display: none; } }
+/* Пока печатают в «Продаже» — без полосы и меню: клавиатура и так съела полэкрана. */
+body.saletyping #saleBar, body.saletyping .nav { display: none; }
+body.saletyping .view.vnav { bottom: 0; }
 html[data-theme="dark"] .dlvbar { border: 1px solid rgba(95,242,242,.22); box-shadow: 0 -2px 18px rgba(0,0,0,.5); }
 
 /* ============================================================

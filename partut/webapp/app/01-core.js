@@ -1340,6 +1340,13 @@ function gridRating(p) {
   if (!r.count) return "";
   return `<div class="cstars"><span class="stars">★</span> ${r.avg.toFixed(1)} <small>· ${r.count} ${plural(r.count, "отзыв", "отзыва", "отзывов")}</small></div>`;
 }
+// Нашли по варианту, а не по названию, — называем его (К-3, проход 6.10):
+// поиск «вишн» находил ANNIMA LOVE, а в карточке о вишне не было ни слова.
+function совпавшиеВарианты(p) {
+  const s = search.trim().toLowerCase();
+  if (!s || !hasVariants(p) || ищетсяВ(`${p.name} ${p.brand || ""}`.toLowerCase(), s)) return [];
+  return p.variants.filter(v => ищетсяВ(String(v.flavor || "").toLowerCase(), s));
+}
 function cardHtml(p) {
   const photo = p.photo_url ? `<img src="${thumbOf(p)}" alt="" loading="lazy" decoding="async" data-open="${p.id}">` : `<div class="ph" data-open="${p.id}">${esc(CAT_EMOJI[p.category] || "🛒")}</div>`;
   const isFav = favs.has(p.id);
@@ -1365,7 +1372,14 @@ function cardHtml(p) {
     <div class="cbody"><p class="cname" data-open="${p.id}">${esc(p.name)}</p>
       ${gridRating(p)}
       ${sub ? `<div class="csub">${esc(sub)}</div>` : ""}
+      ${нашлосьВКарточке(p)}
       <div class="crow"><span class="cprice">${p.price.toFixed(2)} ${CUR}</span>${ctrl}</div></div></div>`;
+}
+function нашлосьВКарточке(p) {
+  const совпали = совпавшиеВарианты(p);
+  if (!совпали.length) return "";
+  return `<div class="cmatch">Нашлось: ${совпали.slice(0, 2).map(v => esc(v.flavor) + (v.stock > 0 ? "" : " (нет)")).join(", ")}${
+    совпали.length > 2 ? ` и ещё ${совпали.length - 2}` : ""}</div>`;
 }
 // Точка закрыта на время (продавца нет на месте) — сведения о паузе или null.
 // Список точек кэшируется сервером на 5 минут, поэтому «закрыта ли сейчас»
@@ -1422,11 +1436,29 @@ function обновитьБаннерПаузы() {
     + `${п.note ? `<span>${esc(п.note)}</span>` : ""}<span>Каталог можно смотреть и собирать корзину — заказать получится после открытия.</span>`;
 }
 
+// Искали внутри категории — пусто, а в других категориях этой точки нашлось
+// (К-1, проход 6.10). Раньше было голое «Другая категория или точка», и
+// догадаться нажать «Все товары» надо было самому. Молча фильтр не меняем:
+// говорим, где нашлось, и кнопка делает то же, что нажатие на «Все товары».
+function найденоВДругихКатегориях() {
+  const s = search.trim().toLowerCase();
+  if (!s || !cat) return [];
+  return allProducts.filter(p => p.city === city && p.category !== cat && ищетсяВ(searchText(p), s));
+}
 function renderGrid() {
   обновитьБаннерПаузы();
   const list = sortProducts(visibleProducts());
   $("grid").innerHTML = list.map(cardHtml).join("");
-  $("catEmpty").innerHTML = list.length ? "" : `<div class="empty"><div class="circ">🔎</div><h3>Ничего не найдено</h3><p>Другая категория или точка.</p></div>`;
+  const вДругих = list.length ? [] : найденоВДругихКатегориях();
+  $("catEmpty").innerHTML = list.length ? "" : вДругих.length
+    ? `<div class="empty"><div class="circ">🔎</div><h3>В «${esc(CATS[cat] || cat)}» не нашлось</h3>
+        <p>Есть в других категориях: ${вДругих.slice(0, 3).map(p => esc(p.name)).join(", ")}${вДругих.length > 3 ? ` и ещё ${вДругих.length - 3}` : ""}.</p>
+        <button type="button" class="bigbtn" id="searchAllCats">Искать во всех категориях · ${вДругих.length}</button></div>`
+    : `<div class="empty"><div class="circ">🔎</div><h3>Ничего не найдено</h3><p>Другая категория или точка.</p></div>`;
+  if ($("searchAllCats")) $("searchAllCats").onclick = () => {
+    cat = ""; brandFilters = []; flavorFilters = [];      // как нажатие на «Все товары»: фильтры у категории свои
+    renderChips(); updateFilterBtn(); renderGrid();
+  };
   bindCardButtons($("grid"));
 }
 function bindCardButtons(root) {

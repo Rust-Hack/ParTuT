@@ -823,7 +823,7 @@
        черновиком в телефоне вместе с ключом попытки: свернул приложение,
        пропала связь — чек на месте и дважды не запишется (09-point-sale.js). -->
   <div class="view ontop" id="saleView">
-    <div class="viewhead"><h2>🧾 Продажа на точке</h2>
+    <div class="viewhead"><h2>🧾 Продажа</h2>
       <button class="closebtn" style="width:auto;padding:8px 12px" id="saleClose">‹ Назад</button></div>
     <div class="sect dlvtop">
       <div class="ochips chiprow" id="salePoints"></div>
@@ -848,9 +848,12 @@
       </form>
     </div>
     <div class="dlvbar" id="saleBar">
+      <!-- Оплата и итог — одной строкой над кнопкой (П-6): на узком телефоне
+           полоса в три строки закрывала поля количества. Подписи оплаты на
+           совсем узком экране прячутся, остаются значки (aria-label — словами). -->
       <div class="ochips" id="salePay">
-        <button class="ochip" data-spay="cash">💵 Наличные</button>
-        <button class="ochip" data-spay="card">💳 Карта</button>
+        <button class="ochip" data-spay="cash" aria-label="Наличные">💵<span class="lbl"> Наличные</span></button>
+        <button class="ochip" data-spay="card" aria-label="Карта">💳<span class="lbl"> Карта</span></button>
       </div>
       <div class="dlvsum" id="saleSum"></div>
       <button class="bigbtn" id="salePost">Провести продажу</button>

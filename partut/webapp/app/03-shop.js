@@ -472,8 +472,15 @@ $("doneBtn").onclick = () => { showTab("catalog"); $("doneView").classList.remov
 let currentProductId = null;
 let selectedFlavor = null;
 let selAxis1 = null;   // выбранное первое измерение (например крепость снюса) на карточке
+// Варианты, совпавшие с поиском, — запоминаются при открытии окна (К-3): они
+// идут первыми с пометкой «совпало», и порядок не меняется, пока окно открыто,
+// — строки не прыгают под пальцем после «+».
+let совпалиВОкне = new Set();
 function openProduct(id, focusFlavors = false) {
-  currentProductId = id; selectedFlavor = null; selAxis1 = null; renderProduct();
+  currentProductId = id; selectedFlavor = null; selAxis1 = null;
+  const товар = allProducts.find(x => x.id === id);
+  совпалиВОкне = new Set(товар ? совпавшиеВарианты(товар).map(v => v.flavor) : []);
+  renderProduct();
   $("productView").classList.add("show");
   $("prodBody").scrollTop = 0;   // новая карточка — с начала
   if (focusFlavors) {
@@ -527,6 +534,7 @@ function renderProduct() {
           `<button class="chip ${a === selAxis1 ? 'active' : ''}" data-axis1="${esc(a)}">${esc(a)}</button>`).join("")}</div>`;
       список = p.variants.filter(v => String(v.flavor || "").split(AXIS_SEP)[0] === selAxis1);
     }
+    if (совпалиВОкне.size) список = [...список.filter(v => совпалиВОкне.has(v.flavor)), ...список.filter(v => !совпалиВОкне.has(v.flavor))];
     // Вкусы — строками на всю ширину, чтобы список не «прыгал» при добавлении.
     flavorHtml = `${axisHtml}<div style="font-weight:700;margin:16px 0 8px">${esc(catVariantMany(p.category))}:</div><div class="fsel-list">` +
       список.map(v => {
@@ -544,8 +552,9 @@ function renderProduct() {
         // плитка, а не только «+» (приёмка ROLE-06). Уже в корзине — плитка не
         // добавляет: количество меняют «−»/«+», случайный тап лишнего не положит.
         const плитка = !out && qty === 0 ? ` data-fltile="${f}" role="button" tabindex="0" aria-label="Добавить: ${label}"` : "";
-        return `<div class="frow ${qty>0?'on':''} ${out?'out':''}"${плитка}>
-            <div class="fname">${label}</div>
+        const совпал = совпалиВОкне.has(v.flavor);
+        return `<div class="frow ${qty>0?'on':''} ${out?'out':''}${совпал ? " match" : ""}"${плитка}>
+            <div class="fname">${label}${совпал ? ` <small class="fmatch">совпало с поиском</small>` : ""}</div>
             <div class="fbottom"><span class="fbn">${left}</span>${right}</div></div>`;
       }).join("") + `</div>`;
   }
@@ -620,7 +629,9 @@ function renderProdActions(p) {
     let items = 0;
     Object.values(cart).forEach(it => { if (it.product_id === p.id) items += it.qty; });
     if (items > 0) {
-      $("prodActions").innerHTML = `<button class="bigbtn" id="pdGoCart">В корзину · ${items} шт · ${(items*p.price).toFixed(2)} ${CUR}</button>`;
+      // «Перейти», а не «В корзину» (К-5): после «+» у вкуса «В корзину · 1 шт»
+      // читалось как «добавить ещё», а кнопка открывает корзину.
+      $("prodActions").innerHTML = `<button class="bigbtn" id="pdGoCart">Перейти в корзину · ${items} шт · ${(items*p.price).toFixed(2)} ${CUR}</button>`;
       $("pdGoCart").onclick = () => { $("productView").classList.remove("show"); renderGrid(); showTab("cart"); };
     } else if (p.stock <= 0) {
       // Все вкусы разобраны разом — «нажмите на вкус» тут тупик: нажимать
@@ -653,7 +664,7 @@ function renderProdActions(p) {
   const qty = cart[cartKey(p.id)] ? cart[cartKey(p.id)].qty : 0;
   if (qty > 0) {
     $("prodActions").innerHTML = `<div class="pd-step"><button id="pdDec">−</button><span>${qty}</span><button id="pdInc">+</button></div>
-      <button class="bigbtn" id="pdGoCart">В корзину · ${(p.price*qty).toFixed(2)} ${CUR}</button>`;
+      <button class="bigbtn" id="pdGoCart">Перейти в корзину · ${(p.price*qty).toFixed(2)} ${CUR}</button>`;
     $("pdDec").onclick = () => prodQty(-1);
     $("pdInc").onclick = () => prodQty(+1);
     $("pdGoCart").onclick = () => { $("productView").classList.remove("show"); renderGrid(); showTab("cart"); };

@@ -24,12 +24,16 @@ function проверка(что, ок, подробно) {
 
 // сеть: { "/api/admin/sale": ответ | "throw" | (тело) => ответ, "/api/admin/sales": ... }
 function стенд(сеть, настройки = {}) {
-  const узлы = {};
+  const узлы = {}, слушатели = {};
+  const тело = { классы: new Set() };
   const $ = (id) => узлы[id] || (узлы[id] = (() => {
     const к = new Set();
     return { id, value: "", textContent: "", innerHTML: "", disabled: false, hidden: false, классы: к,
       classList: { add: (x) => к.add(x), remove: (x) => к.delete(x), toggle: (x, да) => (да ? к.add(x) : к.delete(x)), contains: (x) => к.has(x) },
-      querySelectorAll: () => [], querySelector: () => null };
+      querySelectorAll: () => [], прокручено: null,
+      // Карточка товара в чеке — чтобы проверить прокрутку к ней после выбора (П-6).
+      querySelector: (sel) => /^\[data-sp="\d+"\]$/.test(sel) ? { scrollIntoView: (o) => { узлы[id].прокручено = { sel, ...o }; } } : null,
+      addEventListener: (событие, f) => { (слушатели[id] = слушатели[id] || {})[событие] = f; } };
   })());
   const хранилище = new Map(Object.entries(настройки.хранилище || {}));
   const сказано = [], тосты = [], запросы = [];
@@ -39,7 +43,9 @@ function стенд(сеть, настройки = {}) {
   ];
   const ctx = vm.createContext({
     $, console, JSON, Math, Promise, Object, Array, String, Number, initData: "qa",
-    document: { querySelectorAll: () => [], createElement: () => ({}) },
+    document: { querySelectorAll: () => [], createElement: () => ({}), activeElement: null,
+                body: { classList: { add: (x) => тело.классы.add(x), remove: (x) => тело.классы.delete(x), contains: (x) => тело.классы.has(x) } } },
+    setTimeout: (f) => f(),
     localStorage: { getItem: (k) => (хранилище.has(k) ? хранилище.get(k) : null), setItem: (k, v) => хранилище.set(k, String(v)),
                     removeItem: (k) => хранилище.delete(k) },
     shelf: () => полка, myScope: () => "Минск", locations: [{ name: "Минск" }], admLocFilter: "all",
@@ -62,7 +68,7 @@ function стенд(сеть, настройки = {}) {
   });
   vm.runInContext(require("./_search.cjs") + "\n" + код, ctx);      // поиск — настоящий (ROLE-04/05)
   const js = (к) => vm.runInContext(к, ctx);
-  return { ctx, js, сказано, тосты, запросы, хранилище, узлы,
+  return { ctx, js, сказано, тосты, запросы, хранилище, узлы, слушатели, тело,
            ждать: async () => { for (let i = 0; i < 5; i++) { await (ctx.__да || null); await new Promise(r => setImmediate(r)); } },
            чек: () => JSON.parse(хранилище.get("partut_sale_v1.7.Минск") || "null") };
 }
@@ -401,6 +407,25 @@ const список = (продажи) => ({ ok: true, sales: продажи });
     await с.ждать();
     проверка("потерянный ответ, продажа нашлась по ключу — плашка «Продано №7 · 15.00 Br · картой»",
       /✅ Продано №7 · 15\.00 Br · картой/.test(с.узлы.saleLast.innerHTML), с.узлы.saleLast.innerHTML);
+  }
+
+  // ---- П-6: узкий экран — карточка на виду, при вводе полоса и меню прячутся ----
+  {
+    const с = стенд({ "/api/admin/sales": список([]) });
+    с.js("openSale()"); await с.ждать();
+    с.js("добавитьВЧек(1)");
+    проверка("после выбора товара экран прокручен к его карточке, с начала",
+      с.узлы.saleDoc.прокручено && с.узлы.saleDoc.прокручено.sel === '[data-sp="1"]' && с.узлы.saleDoc.прокручено.block === "start", с.узлы.saleDoc.прокручено);
+    const поле = { tagName: "INPUT" };
+    с.слушатели.saleView.focusin({ target: поле });
+    проверка("фокус в поле — полоса и меню прячутся (body.saletyping)", с.тело.классы.has("saletyping"));
+    с.ctx.document.activeElement = null;
+    с.слушатели.saleView.focusout({});
+    проверка("ушли из поля — полоса с «Провести» на месте", !с.тело.классы.has("saletyping"));
+    с.слушатели.saleView.focusin({ target: { tagName: "BUTTON" } });
+    проверка("нажатие кнопки — не ввод, полоса не прячется", !с.тело.классы.has("saletyping"));
+    с.js("сЧек.rows[строкаКлюч(1, 'Мята')] = { pid: 1, flavor: 'Мята', qty: '' }; нарисоватьИтогПродажи()");
+    проверка("итог короче: «Впишите количество» в строке с оплатой", с.узлы.saleSum.textContent === "Впишите количество", с.узлы.saleSum.textContent);
   }
 
   дошлиДоКонца = true;
