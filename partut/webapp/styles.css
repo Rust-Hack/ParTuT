@@ -816,6 +816,8 @@ html[data-theme="dark"] .statcard, html[data-theme="dark"] .statlist { border: 1
 .frow.out { opacity: .5; }
 /* К-3: найдено по вкусу — в карточке выдачи «Нашлось: …», в окне товара совпавшие сверху. */
 .frow.match:not(.on) { border-color: var(--accent); }
+/* R16-03: у товара с двумя характеристиками — группы, где есть совпавшие. */
+.chip.match:not(.active) { border-color: var(--accent); color: var(--accent); }
 .fmatch { display: inline-block; font-size: 11.5px; font-weight: 700; color: var(--accent); }
 .cmatch { font-size: 12px; font-weight: 700; color: var(--accent); margin: -4px 0 8px; line-height: 1.3; }
 .fname { font-size: 13px; font-weight: 600; line-height: 1.25; min-height: 2.5em;

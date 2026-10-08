@@ -479,7 +479,17 @@ let совпалиВОкне = new Set();
 function openProduct(id, focusFlavors = false) {
   currentProductId = id; selectedFlavor = null; selAxis1 = null;
   const товар = allProducts.find(x => x.id === id);
-  совпалиВОкне = new Set(товар ? совпавшиеВарианты(товар).map(v => v.flavor) : []);
+  const совпали = товар ? совпавшиеВарианты(товар) : [];
+  совпалиВОкне = new Set(совпали.map(v => v.flavor));
+  // У товара с двумя характеристиками (крепость и вкус, размер и цвет) окно
+  // открывалось на первой группе — а найденный вариант мог лежать в другой,
+  // и его не было видно, пока не переключишь руками (приёмка R16-03).
+  // Открываем группу совпавшего — того, что есть в наличии, если такой есть.
+  // Дальше группу выбирает покупатель, сама она больше не меняется.
+  if (совпали.length && catTwoAxis(товар.category)) {
+    const первый = совпали.find(v => v.stock > 0) || совпали[0];
+    selAxis1 = String(первый.flavor || "").split(AXIS_SEP)[0];
+  }
   renderProduct();
   $("productView").classList.add("show");
   $("prodBody").scrollTop = 0;   // новая карточка — с начала
@@ -529,9 +539,15 @@ function renderProduct() {
       // крепость — ниже остались только её вкусы, а не все сразу одним полотном.
       const axes1 = [...new Set(p.variants.map(v => String(v.flavor || "").split(AXIS_SEP)[0]))];
       if (!axes1.includes(selAxis1)) selAxis1 = axes1[0] || null;
+      // Совпало с поиском в нескольких группах — открыта одна, остальные
+      // помечены, чтобы найденное не пряталось за соседней кнопкой.
+      const группыСовпавших = new Set([...совпалиВОкне].map(f => String(f || "").split(AXIS_SEP)[0]));
       axisHtml = `<div style="font-weight:700;margin:16px 0 8px">${esc(catVariant2(p.category))}:</div>
-        <div class="fltchips">${axes1.map(a =>
-          `<button class="chip ${a === selAxis1 ? 'active' : ''}" data-axis1="${esc(a)}">${esc(a)}</button>`).join("")}</div>`;
+        <div class="fltchips">${axes1.map(a => {
+          const есть = группыСовпавших.has(a);
+          return `<button class="chip ${a === selAxis1 ? 'active' : ''}${есть ? ' match' : ''}" data-axis1="${esc(a)}"${
+            есть ? ` aria-label="${esc(a)}, совпало с поиском"` : ""}>${esc(a)}</button>`;
+        }).join("")}</div>`;
       список = p.variants.filter(v => String(v.flavor || "").split(AXIS_SEP)[0] === selAxis1);
     }
     if (совпалиВОкне.size) список = [...список.filter(v => совпалиВОкне.has(v.flavor)), ...список.filter(v => !совпалиВОкне.has(v.flavor))];

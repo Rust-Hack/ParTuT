@@ -9,6 +9,10 @@
 // карточке, а в окне совпавшие — сверху, с пометкой, и не прыгают после «+».
 // К-5: «В корзину · 1 шт» после «+» читалось как «добавить ещё», а кнопка
 // открывает корзину. Теперь «Перейти в корзину · 1 шт · …».
+// R16-03 (приёмка 4ffed7e): у товара с двумя характеристиками окно
+// открывалось на первой группе, а найденный «L · Синий» лежал во второй —
+// не видно, пока не переключишь. Раньше эти товары здесь не проверялись
+// вовсе: catTwoAxis в песочнице всегда отвечал «нет».
 //
 // Запуск: node tests/js/storefront_search.cjs — печатает ✅/❌, код выхода 1 при ❌.
 // Из pytest его зовёт tests/test_js_handlers.py.
@@ -51,6 +55,11 @@ const ANNIMA = { id: 1, name: "ANNIMA LOVE", brand: "ANNIMA", city: "Минск"
 const PILOW = { id: 2, name: "PILOW TALK IC40000", brand: "PILOW TALK", city: "Минск", category: "disposable", price: 40, stock: 5, specs: {}, variants: [] };
 const ЧУЖОЙ = { id: 3, name: "PILOW TALK ULTRA", brand: "PILOW TALK", city: "Туров", category: "disposable", price: 42, stock: 5, specs: {}, variants: [] };
 const КАБЕЛЬ = { id: 4, name: "QA Кабель", brand: "", city: "Минск", category: "liquid", price: 17, stock: 5, specs: {}, variants: [] };
+// Две характеристики: размер — группа (кнопки над списком), цвет — строки.
+const ЧЕХОЛ = { id: 5, name: "QA Чехол", brand: "", city: "Минск", category: "accessories", price: 25, stock: 5, specs: {},
+  variants: [{ flavor: "S · Красный", stock: 3 }, { flavor: "L · Синий", stock: 2 }] };
+const ЧЕХОЛ_2 = { id: 6, name: "QA Чехол два", brand: "", city: "Минск", category: "accessories", price: 25, stock: 5, specs: {},
+  variants: [{ flavor: "S · Синий", stock: 0 }, { flavor: "M · Белый", stock: 4 }, { flavor: "L · Синий", stock: 1 }] };
 
 function стенд() {
   const узлы = {}, события = { чипы: 0 };
@@ -58,16 +67,16 @@ function стенд() {
     classList: { add() {}, remove() {}, contains: () => false }, querySelectorAll: () => [], querySelector: () => null });
   const ctx = vm.createContext({
     $, console, JSON, Math, String, Set, Object, Array, setTimeout,
-    allProducts: [ANNIMA, PILOW, ЧУЖОЙ, КАБЕЛЬ].map(p => JSON.parse(JSON.stringify(p))),
+    allProducts: [ANNIMA, PILOW, ЧУЖОЙ, КАБЕЛЬ, ЧЕХОЛ, ЧЕХОЛ_2].map(p => JSON.parse(JSON.stringify(p))),
     city: "Минск", cat: "liquid", search: "", brandFilters: [], flavorFilters: [],
-    CATS: { "": "Все товары", liquid: "Жидкости", disposable: "Одноразки" }, CAT_EMOJI: {}, CUR: "Br",
+    CATS: { "": "Все товары", liquid: "Жидкости", disposable: "Одноразки", accessories: "Аксессуары" }, CAT_EMOJI: {}, CUR: "Br",
     esc: (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
     вкусыДляФильтра: (p) => (p.variants || []).map(v => v.flavor), sortProducts: (l) => l,
     паузаТочки: () => null, перечитатьТочки: async () => true, clearTimeout() {},
     bindCardButtons() {}, renderChips: () => события.чипы++, updateFilterBtn() {},
     favs: new Set(), subtitleFor: () => "", waitingFor: () => false, productBadges: () => "",
     thumbOf: (p) => p.photo_url, cart: {}, cartKey: (id, f) => f ? `${id}::${f}` : `${id}`,
-    hasVariants: (p) => !!(p.variants && p.variants.length), catTwoAxis: () => false, catVariant2: () => "",
+    hasVariants: (p) => !!(p.variants && p.variants.length), catTwoAxis: (c) => c === "accessories", catVariant2: () => "Размер",
     catVariantMany: () => "Вкусы", catVariant: () => "Вкус", AXIS_SEP: " · ", specsOf: () => [], withUnit: (v) => v, starsHtml: () => "",
     plural: (n, a, b, c) => (n % 10 === 1 && n % 100 !== 11 ? a : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? b : c),
     loaderHtml: () => "", loadProductReviews() {}, notifyMe() {}, renderGrid: null, showTab() {},
@@ -136,6 +145,38 @@ function стенд() {
     проверка(`…у товара без вкусов — «${текст(с.узлы.prodActions.innerHTML)}»`, /Перейти в корзину · 34\.00 Br/.test(текст(с.узлы.prodActions.innerHTML)));
     с.js(`delete cart[cartKey(4)]; openProduct(4)`);
     проверка("…а «+ В корзину» (добавить) — как было", /\+ В корзину/.test(с.узлы.prodActions.innerHTML));
+  }
+
+  // ---- R16-03: найденный вариант — в другой группе товара с двумя характеристиками ----
+  {
+    const с = стенд();
+    const окно = () => с.узлы.prodBody.innerHTML;
+    const открыта = () => (окно().match(/class="chip active[^"]*" data-axis1="([^"]*)"/) || [])[1];
+    const помечены = () => [...окно().matchAll(/class="chip [^"]*match" data-axis1="([^"]*)"/g)].map(m => m[1]).sort().join();
+    const строки = () => [...окно().matchAll(/<div class="fname">([^<]*)/g)].map(m => m[1].trim()).join("|");
+    // Сценарий ревьюера: «S · Красный» и «L · Синий», ищут «синий» во всех категориях.
+    с.искать("синий", "");
+    проверка("выдача: у QA Чехол «Нашлось: L · Синий»", /QA Чехол Нашлось: L · Синий/.test(текст(с.сетка())), текст(с.сетка()));
+    с.js("openProduct(5)");
+    проверка(`R16-03: окно открылось на группе найденного — «${открыта()}», а не на первой (S)`, открыта() === "L");
+    проверка(`…найденный Синий на виду, с пометкой «совпало с поиском» (${строки()})`,
+      строки() === "Синий" && /совпало с поиском/.test(окно()));
+    с.js(`cart[cartKey(5, "L · Синий")] = { product_id: 5, flavor: "L · Синий", qty: 1 }; renderProduct()`);
+    проверка("после «+» группа та же — L", открыта() === "L");
+    // Покупатель сам переключил группу (так делает кнопка группы в 03-shop.js).
+    с.js(`selAxis1 = "S"; renderProduct()`);
+    проверка("покупатель переключил на S — открыта S, в ней Красный", открыта() === "S" && строки() === "Красный");
+    с.js(`cart[cartKey(5, "S · Красный")] = { product_id: 5, flavor: "S · Красный", qty: 1 }; renderProduct()`);
+    проверка("…после «+» у Красного группа сама не возвращается к найденной", открыта() === "S");
+    проверка("…а группа с найденным помечена: L", помечены() === "L");
+    // Совпало в двух группах: открыта та, где есть в наличии, вторая помечена.
+    с.js("openProduct(6)");
+    проверка(`Синий в S (нет в наличии) и в L (есть) — открыта L: «${открыта()}»`, открыта() === "L");
+    проверка(`…помечены обе группы с Синим, M — нет: ${помечены()}`, помечены() === "L,S");
+    // Без поиска — как раньше: первая группа, без пометок.
+    с.искать("", "");
+    с.js("openProduct(5)");
+    проверка("без поиска — первая группа S, без пометок", открыта() === "S" && помечены() === "" && !/совпало с поиском/.test(окно()));
   }
 
   // ---- К-4: на узком экране кнопка карточки уходит под цену, а не за край ----
